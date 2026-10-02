@@ -33,15 +33,16 @@ for _ in range(100):
 s = socket.create_connection(("127.0.0.1", 6451))
 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 val = b"v" * 100
+BATCH = 20  # small, so no turn of the server is long just because it was handed a lot: its longest turn (INFO max_turn_ms) is then the bound
 records = int(ARENA) * (1 << 20) // 128
 # fill to the brim in pipelined batches
 n = 0
 while n < records * 12 // 10:
-    s.sendall(b"".join(cmd("SET", "f:%d" % i, val) for i in range(n, n + 2000)))
+    s.sendall(b"".join(cmd("SET", "f:%d" % i, val) for i in range(n, n + BATCH)))
     got = 0
-    while got < 2000 * 5:
+    while got < BATCH * 5:
         got += len(s.recv(1 << 16))
-    n += 2000
+    n += BATCH
 times = []
 for i in range(200000):
     t = time.perf_counter()
@@ -50,4 +51,8 @@ for i in range(200000):
     times.append((time.perf_counter() - t) * 1000)
 times.sort()
 print("arena %s MiB, %d records filled then 200,000 more SETs: median %.3f ms   p99.9 %.3f ms   max %.1f ms   (SETs over 2 ms: %d)" % (ARENA, n, times[len(times) // 2], times[int(len(times) * 0.999)], times[-1], sum(1 for t in times if t > 2)))
+s.sendall(cmd("INFO", "STATS"))
+time.sleep(0.2)
+info = s.recv(1 << 16).decode(errors="replace")
+print("   " + " ".join(l.strip() for l in info.split("\n") if l.startswith(("compactions", "evicted_keys", "max_turn_ms"))))
 p.terminate()

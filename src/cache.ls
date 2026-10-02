@@ -347,10 +347,16 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                     if store.keys_with_expiry(cw.store) > 0 {
                         wait_ms = 100;
                     }
+                    // A compaction part way through is finished while the cache is idle, a slice a turn.
+                    if store.compacting(cw.store) {
+                        wait_ms = 0;
+                    }
                     ready = poller_wait(cw.poller, contents(cw.events), wait_ms);
                     // The time, once for this turn: every use of a key in it is stamped with it.
                     store.tick(cw.store, clock_ms(clock));
                 }
+                // The turn's own time, not the wait before it: the longest one is what `INFO` reports as `max_turn_ms`.
+                let turn_start = clock_ms(clock);
                 var j = 0;
                 while j < ready {
                     var token = 0 - 1;
@@ -378,9 +384,15 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                     borrow tab as &tr in {
                         contents(cw.info)[0] = conns.live(tr);
                     }
+                    // Work the arena's reclaiming ahead of need, a slice at a time (the sets do some themselves).
+                    store.reclaim(cw.store, 1024);
                     // Take the keys whose time has passed that nobody asked for again: at most a hundred times a second,
                     // 256 keys at a look, and again while more than a quarter of what it looked at had run out (Redis's
                     // rule), at most sixteen looks.
+                    let took = clock_ms(clock) - turn_start;
+                    if took > contents(cw.info)[6] {
+                        contents(cw.info)[6] = took;
+                    }
                     if store.now_of(cw.store) - cw.swept >= 10 {
                         cw.swept = store.now_of(cw.store);
                         var looks = 0;

@@ -271,6 +271,8 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
         o = kv(sc, o, "expired_keys", store.expired(st));
         o = kv(sc, o, "evicted_keys", store.evicted(st));
         o = kv(sc, o, "compactions", store.compactions(st));
+        o = kv(sc, o, "compactions_forced", store.forced(st));
+        o = kv(sc, o, "max_turn_ms", world[6]);
         o = reply.put(sc, o, "\r\n");
     }
     if wants(view, table, "KEYSPACE") {

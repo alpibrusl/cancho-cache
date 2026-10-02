@@ -76,7 +76,9 @@ fn test_empty_arguments_and_empty_arrays() -> [] int {
 fn test_each_way_of_not_being_the_protocol() -> [] int {
     test.assert_eq(parsed("PING\r\n"), resp.error_expected_array());
     test.assert_eq(parsed("*x\r\n"), resp.error_array_length());
-    test.assert_eq(parsed("*-1\r\n"), resp.error_array_length());
+    test.assert_eq(parsed("*-1\r\n"), 5);
+    test.assert_eq(parsed("*-x\r\n"), resp.error_array_length());
+    test.assert_eq(parsed("*-\r\n"), resp.error_array_length());
     test.assert_eq(parsed("*\r\n"), resp.error_array_length());
     test.assert_eq(parsed("*1\r\nx"), resp.error_expected_bulk());
     test.assert_eq(parsed("*1\r\n$x\r\n"), resp.error_bulk_length());

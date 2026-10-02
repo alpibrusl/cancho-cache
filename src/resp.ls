@@ -103,13 +103,29 @@ pub fn parse[&d, &t](data: &d [byte], table: &!t [int]) -> [] int {
     if int_of(data[0]) != '*' {
         return error_expected_array();
     }
-    let (argc, first) = number(data, 1);
-    if argc == 0 - 1 {
+    // `*-1\r\n` and `*0\r\n` are arrays of nothing, which Redis ignores: a command of no arguments.
+    var argc = 0;
+    var first = 0;
+    if len(data) > 1 && int_of(data[1]) == '-' {
+        let (magnitude, after) = number(data, 2);
+        if magnitude == 0 - 1 {
+            return 0;
+        }
+        if magnitude == 0 - 2 {
+            return error_array_length();
+        }
+        table[0] = 0;
+        return after;
+    }
+    let (count, after) = number(data, 1);
+    if count == 0 - 1 {
         return 0;
     }
-    if argc == 0 - 2 {
+    if count == 0 - 2 {
         return error_array_length();
     }
+    argc = count;
+    first = after;
     if argc > max_args() {
         return error_too_many_arguments();
     }
@@ -121,6 +137,8 @@ pub fn parse[&d, &t](data: &d [byte], table: &!t [int]) -> [] int {
             return 0;
         }
         if int_of(data[at]) != '$' {
+            // The byte that was there, for the message (`error_text`).
+            table[0] = int_of(data[at]);
             return error_expected_bulk();
         }
         let (size, start) = number(data, at + 1);
@@ -144,7 +162,9 @@ pub fn parse[&d, &t](data: &d [byte], table: &!t [int]) -> [] int {
     return at;
 }
 
-// The text Redis puts after `-ERR ` for each of these (and closes the connection after).
+// The text Redis puts after `-ERR ` for each of these (and closes the connection after). `expected '$'`
+// names the byte it found instead, which `parse` left in `table[0]`: that is the one message that is not a
+// constant, so it is written by the caller (`expected_bulk_byte`).
 pub fn error_text(code: int) -> [] &static [byte] {
     if code == error_expected_array() {
         return "Protocol error: expected '*', got inline command (not supported)";
@@ -153,7 +173,7 @@ pub fn error_text(code: int) -> [] &static [byte] {
         return "Protocol error: invalid multibulk length";
     }
     if code == error_expected_bulk() {
-        return "Protocol error: expected '$'";
+        return "Protocol error: expected '$', got '";
     }
     if code == error_bulk_length() {
         return "Protocol error: invalid bulk length";

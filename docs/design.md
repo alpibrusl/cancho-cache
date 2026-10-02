@@ -1,6 +1,6 @@
 # lexsys-cache: a Redis-compatible cache in lex-sys
 
-Status: **design, nothing built.** Every number below is a measurement of Redis, not of this project.
+Status: **C0 built** (section 8); GET/SET not yet. The numbers in section 2 are measurements of Redis; section 8's are of this project.
 
 ## 1. What this is for, and the claim it must survive
 
@@ -60,8 +60,8 @@ persistence and replication are **non-goals** for this project.
 **Protocol: sans-io, like `http.server`.** A RESP2 parser that is a pure function from `(buffer, position)` to
 `(command, bytes consumed)`, `need more`, or `error`, with no allocation on the parse of a well-formed array of bulk strings
 (it returns offsets into the connection's input buffer). The server loop is `http.server`'s: `wait`, `next`, `respond`, with
-the HTTP parser replaced. Whether `http.server`'s connection table can be reused as it is, or only its pieces
-(`std.conns`), is the first thing step C0 finds out; the package is HTTP-shaped in its names and may need a small split.
+the HTTP parser replaced. **Found in C0:** `http.server` itself is not reused (its `Server` and `produce` are HTTP all the way
+down); `std.conns` is, as it is, and is generic enough that the loop is about 350 lines of its own. See section 8.
 
 **Storage: a log, not a heap of values.** `std.map` holds `val` values (copyable), and a value here is a byte string of any
 length. So the map is an **index** from key to `{offset, length, expires_at}` into a **value log**, one large `Box[[byte]]`
@@ -95,3 +95,47 @@ non-goals for the first slice and would be judged against a hit-rate measurement
 * The parser needing an allocation per command to be correct.
 
 Any of these is written up here, in place, as the result.
+
+## 8. C0, built and measured
+
+`src/resp.ls` is the parser, `src/cache.ls` the loop (`PING`, `ECHO`, and the errors Redis gives for everything else),
+over `std.conns` and the poller. One read per wakeup, every whole command in it answered into one scratch buffer, one
+write; a client that does not read is no longer read from (its answers queue per connection, and input already buffered is
+answered when the queue drains).
+
+**Correctness gates, as met**
+
+1. **Differential**: `tests/differential.py`, 31 cases in four framings each (whole, byte by byte, random splits, twenty
+   pipelined copies), replies byte-identical to Redis 7.0.15. **The harness was mutation-tested**: four deliberately wrong
+   cache variants (`+PONK`, the 128-byte cut off by one, the byte in `expected '$', got 'x'` replaced, `ECHO` taking more
+   arguments) were each caught. Three divergences are *deliberate* and are asserted as divergent so the list cannot go
+   stale: inline commands (`PING\r\n` typed into telnet) are refused; a bulk string not followed by CRLF is refused (Redis
+   skips two bytes without looking, which is the shape of a request-smuggling ambiguity); and a command has at most 16
+   arguments (Redis: a million). One more is known and **not** tested: Redis's unknown-command text stops at a NUL byte inside
+   an argument (C `%s`), the cache's does not.
+2. **No input reaches a trap**: `tests/resp_test.ls` runs the parser over **every byte string of 0 to 6 bytes over eight
+   symbols (299,593 of them)** and checks it never traps, never claims more than it was given, and that whatever it accepts
+   is self-contained (no shorter prefix is a whole command). `tests/fuzz_server.py` sends 3,000 hostile connections
+   (random bytes, flipped bytes in valid commands, valid commands cut and continued) at the running server: it stays up and
+   still answers `PING`.
+3. **Memory**: nothing is allocated after start (all slabs are sized at start); `maxmemory` has no meaning until there is a
+   store (C2).
+4. **Authority** (`lex-sys authority`): `args`, `conn_accept`, `conn_read`, `conn_write`, `err_write`, `heap`, `net_in("")`,
+   `poll`; **never touches the filesystem or foreign code**. CI checks the last line.
+
+**Throughput of the loop, against Redis** (`bench/vs_redis.sh`, `PING` as an array of bulk strings, server on core 0, client on
+cores 2-3, 50 clients, five rounds interleaved; this is the loop and the parser with no storage, not the gate):
+
+| | Redis 7.0.15 (median) | cache (median) | ratio |
+|---|---|---|---|
+| pipeline 1 | 152,847 | 190,440 | 1.25 |
+| pipeline 16 | 1,332,445 | 1,996,008 | 1.50 |
+
+**What this does and does not say.** It says the loop, the parser and `std.conns` do not cost more than Redis's per-command path
+on a command that does nothing. It does **not** say the cache is faster than Redis: `PING` touches no table, and Redis's cost
+on `GET`/`SET` is dominated by exactly what `PING` skips. A client that is the limit would make this a statement about
+`redis-benchmark`, so the script checks it: the faster server is also run with a wider client (cores 1-3, three threads),
+and a cell more than 5% faster that way is reported CLIENT-BOUND with no ratio. None was. (An earlier check, the client's CPU
+use, over-reported saturation and was replaced by this.) At pipeline 16 the cache's ceiling on this machine is about 2.4
+million `PING` a second with a 3-million-request run, so about 0.4 microseconds a command.
+

@@ -4,6 +4,7 @@ import std.buffer;
 import std.conns;
 import std.io;
 import commands;
+import reply;
 import resp;
 import store;
 
@@ -36,15 +37,19 @@ fn output_size() -> [] int {
     return 65536;
 }
 
-// Per connection `k`, `state[8k..8k+8]` is:
+// Per connection `k`, `state[10k..10k+10]` is:
 //
 //     0  bytes of input buffered
 //     1  1 if the slot is in use
 //     2  bytes of output waiting (-1: the queue could not hold it)
 //     3  1 if the connection closes once that output has gone
 //     4  what it is watched for (1 to read, 2 to write)
+//     5  the length of its client name (`CLIENT SETNAME`)
+//     6  its client id
+//     7  1 if a command asked for the connection to be closed after its answers (`QUIT`)
+//     8  the protocol it speaks: 2, or 3 after `HELLO 3`
 fn stride() -> [] int {
-    return 8;
+    return 10;
 }
 
 res struct Core {
@@ -60,6 +65,10 @@ res struct Core {
     scratch: Box[[byte]],
     // A few bytes for a command to build a value in (`INCR`).
     tmp: Box[[byte]],
+    // Each connection's client name, 64 bytes a slot; and counters about the whole server (`src/session.ls`: connections, start time,
+    // commands answered, connections accepted, port, the next client id).
+    names: Box[[byte]],
+    info: Box[[int]],
     store: store.Store,
     // When the sweep for expired keys last ran, in the store's milliseconds.
     swept: int,
@@ -148,22 +157,27 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
             let n = resp.parse(view, tb);
             if n == 0 {
                 if used == 0 && st[p] >= size {
-                    at = commands.put(sc, at, "-ERR Protocol error: command too large\r\n");
+                    at = reply.put(sc, at, "-ERR Protocol error: command too large\r\n");
                     st[p + 3] = 1;
                 }
                 going = false;
             } else if n < 0 {
-                at = commands.put(sc, at, "-ERR ");
-                at = commands.put(sc, at, resp.error_text(n));
+                at = reply.put(sc, at, "-ERR ");
+                at = reply.put(sc, at, resp.error_text(n));
                 if n == resp.error_expected_bulk() {
-                    at = commands.put_byte(sc, at, tb[0]);
-                    at = commands.put(sc, at, "'");
+                    at = reply.put_byte(sc, at, tb[0]);
+                    at = reply.put(sc, at, "'");
                 }
-                at = commands.put(sc, at, "\r\n");
+                at = reply.put(sc, at, "\r\n");
                 st[p + 3] = 1;
                 going = false;
             } else {
-                at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp));
+                at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 9], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                contents(core.info)[2] = contents(core.info)[2] + 1;
+                if st[p + 7] == 1 {
+                    st[p + 3] = 1;
+                    going = false;
+                }
                 used = used + n;
                 // Room for the biggest answer one command can make.
                 if at + commands.reserve() > len(sc) {
@@ -280,6 +294,13 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 2] = 0;
                         st[p + 3] = 0;
                         st[p + 4] = 1;
+                        st[p + 5] = 0;
+                        // Client ids count from 1, as Redis's do; `info[5]` is the next.
+                        contents(core.info)[5] = contents(core.info)[5] + 1;
+                        st[p + 6] = contents(core.info)[5];
+                        st[p + 7] = 0;
+                        st[p + 8] = 2;
+                        contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {
                             if conns.nonblocking(ct, slot) != 0 || conns.watch(ct, core.poller, slot, slot + 1, 1) != 0 {
                                 shut(ct, core, slot);
@@ -303,7 +324,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, memory: int, max_keys: int, policy: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port: int, memory: int, max_keys: int, policy: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -311,8 +332,13 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, memo
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), store: store.open(heap, memory, max_keys, 0, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), store: store.open(heap, memory, max_keys, 0, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
+            borrow mut core as &!cw in {
+                store.tick(cw.store, clock_ms(clock));
+                contents(cw.info)[1] = store.now_of(cw.store);
+                contents(cw.info)[4] = port;
+            }
             while true {
                 var ready = 0 - 1;
                 borrow mut core as &!cw in {
@@ -349,6 +375,9 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, memo
                     j = j + 1;
                 }
                 borrow mut core as &!cw in {
+                    borrow tab as &tr in {
+                        contents(cw.info)[0] = conns.live(tr);
+                    }
                     // Take the keys whose time has passed that nobody asked for again: at most a hundred times a second,
                     // 256 keys at a look, and again while more than a quarter of what it looked at had run out (Redis's
                     // rule), at most sixteen looks.
@@ -364,7 +393,7 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, memo
                 }
             }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, table, scratch, tmp, store, swept } = core;
+            let Core { poller, events, state, bufs, pends, table, scratch, tmp, names, info, store, swept } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
@@ -373,6 +402,8 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, memo
             unbox_slice(heap, table);
             unbox_slice(heap, scratch);
             unbox_slice(heap, tmp);
+            unbox_slice(heap, names);
+            unbox_slice(heap, info);
             store.close(heap, store);
             return 0;
         }
@@ -445,7 +476,7 @@ fn main(world: World) -> [] int {
                                 buffer.drop(h, line);
                             }
                             borrow clock as &c in {
-                                status = run(h, lh, c, megabytes * 1048576, max_keys, policy);
+                                status = run(h, lh, c, port, megabytes * 1048576, max_keys, policy);
                             }
                         }
                     }

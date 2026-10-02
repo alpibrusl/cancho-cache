@@ -1,0 +1,220 @@
+edition 5;
+
+module reply;
+
+// `reply` -- writing answers into the scratch buffer, and reading arguments out of the command, for `commands` and `session`.
+// Every function here writes at most what its arguments say and never traps on any input.
+
+// ---------------------------------------------------------------------
+// Writing answers
+// ---------------------------------------------------------------------
+
+pub fn put[&b, &d](sc: &!b [byte], at: int, data: &d [byte]) -> [] int {
+    var i = 0;
+    while i < len(data) {
+        sc[at + i] = data[i];
+        i = i + 1;
+    }
+    return at + len(data);
+}
+
+pub fn put_byte[&b](sc: &!b [byte], at: int, c: int) -> [] int {
+    sc[at] = byte_of(c);
+    return at + 1;
+}
+
+// Decimal digits of `n >= 0`.
+pub fn put_nat[&b](sc: &!b [byte], at: int, n: int) -> [] int {
+    var digits = 1;
+    var rest = n / 10;
+    while rest > 0 {
+        digits = digits + 1;
+        rest = rest / 10;
+    }
+    var value = n;
+    var i = digits;
+    while i > 0 {
+        i = i - 1;
+        sc[at + i] = byte_of('0' + value % 10);
+        value = value / 10;
+    }
+    return at + digits;
+}
+
+pub fn min_int() -> [] int {
+    return 0 - 9223372036854775807 - 1;
+}
+
+pub fn max_int() -> [] int {
+    return 9223372036854775807;
+}
+
+// Decimal digits of any `n`, with the sign.
+pub fn put_int[&b](sc: &!b [byte], at: int, n: int) -> [] int {
+    if n >= 0 {
+        return put_nat(sc, at, n);
+    }
+    if n == min_int() {
+        return put(sc, at, "-9223372036854775808");
+    }
+    return put_nat(sc, put_byte(sc, at, '-'), 0 - n);
+}
+
+// `$<length>\r\n<data>\r\n`
+pub fn put_bulk[&b, &d](sc: &!b [byte], at: int, data: &d [byte]) -> [] int {
+    var o = put(sc, at, "$");
+    o = put_nat(sc, o, len(data));
+    o = put(sc, o, "\r\n");
+    o = put(sc, o, data);
+    return put(sc, o, "\r\n");
+}
+
+// `:<n>\r\n`
+pub fn put_integer[&b](sc: &!b [byte], at: int, n: int) -> [] int {
+    return put(sc, put_int(sc, put(sc, at, ":"), n), "\r\n");
+}
+
+// The answer to a write that was refused: the arena is full, or there is no room for another key. (Redis's text for
+// the same thing under its default `noeviction` policy.)
+pub fn refused[&b](sc: &!b [byte], at: int) -> [] int {
+    return put(sc, at, "-OOM command not allowed when used memory > 'maxmemory'.\r\n");
+}
+
+pub fn not_an_integer[&b](sc: &!b [byte], at: int) -> [] int {
+    return put(sc, at, "-ERR value is not an integer or out of range\r\n");
+}
+
+pub fn syntax_error[&b](sc: &!b [byte], at: int) -> [] int {
+    return put(sc, at, "-ERR syntax error\r\n");
+}
+
+// An ASCII letter in upper case, anything else as it is.
+pub fn upper(c: int) -> [] int {
+    if c >= 'a' && c <= 'z' {
+        return c - 32;
+    }
+    return c;
+}
+
+pub fn lower(c: int) -> [] int {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32;
+    }
+    return c;
+}
+
+// Is `word` the command or option `name` (written in upper case), whatever case it came in?
+pub fn is_word[&w](word: &w [byte], name: &static [byte]) -> [] bool {
+    if len(word) != len(name) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if upper(int_of(word[i])) != int_of(name[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+pub fn wrong_arguments[&b, &w](sc: &!b [byte], at: int, name: &w [byte]) -> [] int {
+    var o = put(sc, at, "-ERR wrong number of arguments for '");
+    var i = 0;
+    while i < len(name) {
+        o = put_byte(sc, o, lower(int_of(name[i])));
+        i = i + 1;
+    }
+    return put(sc, o, "' command\r\n");
+}
+
+// ---------------------------------------------------------------------
+// Reading arguments
+// ---------------------------------------------------------------------
+
+// Argument `i` of the command `table` describes in `view`.
+pub fn arg_of[&v, &t](view: &v [byte], table: &t [int], i: int) -> [] &v [byte] {
+    return view[table[1 + 2 * i]..table[1 + 2 * i] + table[2 + 2 * i]];
+}
+
+// `(0, n)` if `text` is a whole decimal integer that fits 64 bits, `(1, 0)` if it is not: an optional minus sign, then digits
+// with no leading zero, and nothing else (no plus sign, no spaces). What Redis's `string2ll` takes.
+pub fn parse_int[&t](text: &t [byte]) -> [] (int, int) {
+    let n = len(text);
+    if n == 0 || n > 20 {
+        return (1, 0);
+    }
+    var i = 0;
+    var negative = false;
+    if int_of(text[0]) == '-' {
+        negative = true;
+        i = 1;
+        if n == 1 {
+            return (1, 0);
+        }
+    }
+    if int_of(text[i]) == '0' && (n - i > 1 || negative) {
+        return (1, 0);
+    }
+    // The magnitude is built as a negative number, because -2^63 fits and 2^63 does not.
+    var v = 0;
+    while i < n {
+        let c = int_of(text[i]);
+        if c < '0' || c > '9' {
+            return (1, 0);
+        }
+        let d = c - '0';
+        // v * 10 - d must not go below -2^63: v must be at least -922337203685477580, and if it is exactly that, d at most 8.
+        if v < 0 - 922337203685477580 || v == 0 - 922337203685477580 && d == 9 {
+            return (1, 0);
+        }
+        v = v * 10 - d;
+        i = i + 1;
+    }
+    if negative {
+        return (0, v);
+    }
+    if v == min_int() {
+        return (1, 0);
+    }
+    return (0, 0 - v);
+}
+
+// Is `word` exactly `name`, byte for byte (a user name is case-sensitive)?
+pub fn is_word_exact[&w](word: &w [byte], name: &static [byte]) -> [] bool {
+    if len(word) != len(name) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if word[i] != name[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Does `name` start with `prefix`, whatever the case? (`name` is written in upper case, as for `is_word`; here it is lower case, and
+// both are folded.)
+pub fn is_prefix_word[&p](prefix: &p [byte], name: &static [byte]) -> [] bool {
+    if len(prefix) > len(name) {
+        return false;
+    }
+    var i = 0;
+    while i < len(prefix) {
+        if lower(int_of(prefix[i])) != lower(int_of(name[i])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The answer for "no such value": `$-1` in RESP2, `_` in RESP3 (`proto` is the connection's protocol, 2 or 3).
+pub fn put_null[&b](sc: &!b [byte], at: int, proto: int) -> [] int {
+    if proto == 3 {
+        return put(sc, at, "_\r\n");
+    }
+    return put(sc, at, "$-1\r\n");
+}

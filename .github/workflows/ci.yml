@@ -7,8 +7,9 @@ on:
 
 env:
   # The compiler these sources are built and tested with: part of the contract, since a source file does not
-  # record which `std` it was written against.
-  LEX_SYS_REV: 215e19d7361dc56d0a78644aebfad67ab935c46e
+  # record which `std` it was written against. This is the commit of lex-sys #186 (`copy_within`); it moves to
+  # lex-sys's main once that is merged.
+  LEX_SYS_REV: 93e4fff677ae447652cc1ccc05f99588b4c08f44
 
 jobs:
   test:
@@ -53,12 +54,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../lex-sys/target/release/lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls -o build/cache
+        run: mkdir -p build && ../lex-sys/target/release/lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls -o build/cache
 
       - name: Authority has no ffi and no filesystem
         working-directory: cache
         run: |
-          ../lex-sys/target/release/lex-sys authority src/cache.ls src/resp.ls src/store.ls src/commands.ls --std > /tmp/authority.txt
+          ../lex-sys/target/release/lex-sys authority src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "foreign code"
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "the filesystem"
@@ -71,6 +72,16 @@ jobs:
       - name: A full arena and a full key table refuse in Redis's words
         working-directory: cache
         run: python3 tests/limits.py build/cache
+
+      - name: Client libraries for the session test (redis-py, ioredis)
+        working-directory: cache
+        run: |
+          pip install redis
+          (cd tests/clients && npm install --no-audit --no-fund)
+
+      - name: The connection and server commands, and real clients connecting
+        working-directory: cache
+        run: python3 tests/session.py build/cache
 
       - name: Expiry, the sweep, PTTL, and eviction under allkeys-lru
         working-directory: cache

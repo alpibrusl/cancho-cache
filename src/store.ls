@@ -323,11 +323,9 @@ fn compact[&s](st: &!s Store) -> [] int {
         let m = stride() * e;
         if meta[m + 6] == 0 - 2 && meta[m] == from + header() {
             if to != from {
-                var i = 0;
-                while i < total {
-                    data[to + i] = data[from + i];
-                    i = i + 1;
-                }
+                // A block move, not a loop: the ranges can overlap (a record moving down by less than its own size), and
+                // a byte loop was the whole of the compaction pause (`docs/design.md` section 10).
+                copy_within(data, to, from, total);
                 meta[m] = to + header();
             }
             to = to + total;
@@ -577,4 +575,9 @@ pub fn clear[&s](st: &!s Store) -> [] int {
 // The time `tick` last set.
 pub fn now_of[&s](st: &s Store) -> [] int {
     return st.now;
+}
+
+// Which eviction policy it was opened with.
+pub fn policy_of[&s](st: &s Store) -> [] int {
+    return st.policy;
 }

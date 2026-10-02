@@ -3,14 +3,14 @@
 A Redis-compatible cache written in [lex-sys](https://github.com/alpibrusl/lex-sys): no `Ffi`, no `unsafe`, and a
 checkable authority report.
 
-**Status: step C2.** Thirty commands of Redis 7.0's 240 (`GET`/`SET` with `NX XX GET EX PX KEEPTTL`, `INCR`/`DECR`/`INCRBY`/`DECRBY`, `EXPIRE`/`PEXPIRE` with
-`NX XX GT LT`, `TTL`/`PTTL`/`PERSIST`, `MGET`/`MSET`, `SETNX`/`SETEX`/`GETSET`/`GETDEL`, `DEL`/`EXISTS`/`TYPE`/`STRLEN`, `DBSIZE`/`FLUSHALL`, ...), expiry, and an eviction
-policy (`allkeys-lru`). On one core against Redis 7.0.15 it is at 1.07-2.00 times Redis's throughput and the same hit rate at the same resident memory, doing much less
+**Status: step C2, and real clients connect.** Thirty-eight commands of Redis 7.0's 240 (`GET`/`SET` with `NX XX GET EX PX KEEPTTL`, `INCR`/`DECR`/`INCRBY`/`DECRBY`, `EXPIRE`/`PEXPIRE` with
+`NX XX GT LT`, `TTL`/`PTTL`/`PERSIST`, `MGET`/`MSET`, `SETNX`/`SETEX`/`GETSET`/`GETDEL`, `DEL`/`EXISTS`/`TYPE`/`STRLEN`, `DBSIZE`/`FLUSHALL`, and the ones a client library says on connect: `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT`, `INFO`, `CONFIG GET`, `QUIT`), expiry, and an eviction
+policy (`allkeys-lru`). redis-py (default, RESP2 and RESP3) and ioredis connect and work; **a `pipeline()` that is a transaction (redis-py's default) does not: no `MULTI`/`EXEC`**. On one core against Redis 7.0.15 it is at 1.07-2.00 times Redis's throughput and the same hit rate at the same resident memory, doing much less
 than Redis does; its worst case is a compaction pause (about 115 ms on a 64 MiB arena). It is **not** a Redis replacement: no data structures, persistence, replication or
-TLS, one database, and some clients' handshakes will not work. `docs/design.md` has the plan, the pre-registered gate, and every measurement with its caveats.
+TLS, one database, no transactions. `docs/design.md` has the plan, the pre-registered gate, and every measurement with its caveats.
 
 ```sh
-lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls -o build/cache
+lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls -o build/cache
 build/cache 6379
 redis-cli -p 6379 PING                                   # PONG
 
@@ -19,6 +19,7 @@ lex-sys test tests/store_test.ls src/store.ls --std       # the store: collision
 python3 tests/differential.py build/cache                # byte-for-byte against redis-server
 python3 tests/limits.py build/cache                      # a full arena and a full key table
 python3 tests/expiry.py build/cache                      # expiry, the sweep, eviction under allkeys-lru
+python3 tests/session.py build/cache                     # INFO/HELLO/CLIENT/CONFIG/QUIT, and redis-py and ioredis connecting
 python3 bench/memory.py build/cache                      # bytes per key against Redis
 python3 bench/hitrate.py build/cache                     # hit rate on a Zipf workload at equal resident memory
 python3 bench/stall.py build/cache 64                    # the worst-case compaction pause

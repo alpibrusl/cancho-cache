@@ -19,7 +19,7 @@ trap 'kill $rpid $cpid 2>/dev/null' EXIT
 sleep 1
 rflag=(); [ "$keyspace" -gt 0 ] && rflag=(-r $keyspace)
 bench() { # port test depth cores threads -> requests per second
-  taskset -c "$4" redis-benchmark -p $1 -c 50 -n $n -P $3 -d $size ${rflag[@]} -t $2 -q --threads "$5" 2>&1 | tr '\r' '\n' | grep 'requests per second' | tail -1 | sed -E 's/^[^:]*: ([0-9.]+) requests.*/\1/'
+  timeout 120 taskset -c "$4" redis-benchmark -p $1 -c 50 -n $n -P $3 -d $size ${rflag[@]} -t $2 -q --threads "$5" 2>&1 | tr '\r' '\n' | grep 'requests per second' | tail -1 | sed -E 's/^[^:]*: ([0-9.]+) requests.*/\1/'
 }
 median() { sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 for t in ${tests//,/ }; do for P in $depths; do

@@ -34,13 +34,35 @@ def serve(port, *extra):
 
 
 def ask(s, *args):
+    """Send one command and read exactly one RESP reply (simple string, error, integer, or bulk)."""
     s.sendall(cmd(*args))
     s.settimeout(2)
     got = b""
-    while True:
-        got += s.recv(65536)
-        if got.endswith(b"\r\n") and (got[0:1] in b"+-:" or got.count(b"\r\n") >= 2):
-            return got
+
+    def need(n):
+        nonlocal got
+        while len(got) < n:
+            d = s.recv(65536)
+            if not d:
+                raise SystemExit("connection closed")
+            got += d
+
+    def line_end(start=0):
+        nonlocal got
+        while True:
+            i = got.find(b"\r\n", start)
+            if i >= 0:
+                return i
+            need(len(got) + 1)
+
+    first = line_end()
+    if got[0:1] == b"$":
+        n = int(got[1:first])
+        if n < 0:
+            return got[: first + 2]
+        need(first + 2 + n + 2)
+        return got[: first + 2 + n + 2]
+    return got[: first + 2]
 
 
 failures = []

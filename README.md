@@ -8,7 +8,7 @@ storage yet (`GET`/`SET` is C1). `docs/design.md` has the plan, the pre-register
 measured Redis baseline, and what C0 found.
 
 ```sh
-lex-sys build --std src/cache.ls src/resp.ls -o build/cache
+lex-sys build --std src/cache.ls src/resp.ls src/store.ls -o build/cache
 build/cache 6379
 redis-cli -p 6379 PING                                   # PONG
 

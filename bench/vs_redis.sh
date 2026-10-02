@@ -1,22 +1,25 @@
 #!/bin/bash
 # The gate of docs/design.md section 2: the cache against Redis on one core, interleaved in the same session.
 #
-#   bench/vs_redis.sh [-t set,get] [-P "1 16"] [-d 3] [-r 5] [-n 1000000] [path/to/cache]
+#   bench/vs_redis.sh [-t set,get] [-P "1 16"] [-d 3] [-r 5] [-n 1000000] [-k 100000] [path/to/cache]
+#
+# `-k` is redis-benchmark's `-r`: the keyspace size. Without it (the gate's setting) every command uses the one key, `key:000000000000`.
 #
 # Server pinned to core 0, redis-benchmark (2 threads, 50 clients) to cores 2-3. For every test and pipeline depth,
 # `r` rounds, each round one run of Redis then one of the cache; prints every run, the medians and the ratio.
 # Client headroom: once per cell the faster of the two servers is also run with a wider client (cores 1-3, 3 threads); if that
 # is more than 5% faster the cell is reported CLIENT-BOUND and no ratio is to be quoted for it.
-tests=set,get; depths="1 16"; size=3; rounds=5; n=1000000
-while getopts t:P:d:r:n: o; do case $o in t) tests=$OPTARG;; P) depths=$OPTARG;; d) size=$OPTARG;; r) rounds=$OPTARG;; n) n=$OPTARG;; esac; done
+tests=set,get; depths="1 16"; size=3; rounds=5; n=1000000; keyspace=0
+while getopts t:P:d:r:n:k: o; do case $o in t) tests=$OPTARG;; P) depths=$OPTARG;; d) size=$OPTARG;; r) rounds=$OPTARG;; n) n=$OPTARG;; k) keyspace=$OPTARG;; esac; done
 shift $((OPTIND - 1)); cache=${1:-$(dirname "$0")/../build/cache}
 rp=6395; cp=6396
 taskset -c 0 redis-server --port $rp --save "" --appendonly no --protected-mode no > /dev/null 2>&1 & rpid=$!
 taskset -c 0 "$cache" $cp > /dev/null 2>&1 & cpid=$!
 trap 'kill $rpid $cpid 2>/dev/null' EXIT
 sleep 1
+rflag=(); [ "$keyspace" -gt 0 ] && rflag=(-r $keyspace)
 bench() { # port test depth cores threads -> requests per second
-  taskset -c "$4" redis-benchmark -p $1 -c 50 -n $n -P $3 -d $size -t $2 -q --threads "$5" 2>&1 | tr '\r' '\n' | grep 'requests per second' | tail -1 | sed -E 's/^[^:]*: ([0-9.]+) requests.*/\1/'
+  taskset -c "$4" redis-benchmark -p $1 -c 50 -n $n -P $3 -d $size ${rflag[@]} -t $2 -q --threads "$5" 2>&1 | tr '\r' '\n' | grep 'requests per second' | tail -1 | sed -E 's/^[^:]*: ([0-9.]+) requests.*/\1/'
 }
 median() { sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 for t in ${tests//,/ }; do for P in $depths; do

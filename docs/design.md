@@ -251,3 +251,19 @@ that moves a bounded amount per turn (a design change).
 `HELLO`/`CLIENT`/`INFO`/`CONFIG` (so a client library that insists on a handshake may not connect); no `EXAT`-style absolute times; one database; at most 64 arguments and a value
 that fits a 16 KiB input buffer; a constant hash seed; one core. Compaction pauses of up to ~115 ms at 64 MiB.
 
+## 11. The compaction pause, after `copy_within`
+
+Section 10 measured the weakness: a worst-case pause of 114.7 ms on a 64 MiB arena, from a byte-at-a-time copy (lex-sys had no block move). lex-sys now has
+`copy_within(buf, dst, src, n)`, a bounds-checked `memmove` inside one slice (`lex-sys/docs/memory-moves.md`, lex-sys #186), and compaction uses it.
+
+| arena | before | after | SETs over 2 ms, of 200,000 (before / after) |
+|---|---|---|---|
+| 64 MiB | max **114.7 ms** | max **42.4 ms** | 18 / 25 |
+| 16 MiB | max 54.2 ms | max 32.2 ms | 32 / 40 |
+
+The median (0.035 ms) and 99.9th percentile (0.23-0.40 ms) did not change; the count over 2 ms moved the wrong way by amounts within the run-to-run noise of this
+loopback, one-at-a-time measurement. **The maximum fell by 2.7x and is still tens of milliseconds**, because the copy was never all of it: the compaction walks every record, reads its header,
+and looks its entry up in `meta`, in an order (the arena's) that is unrelated to the entries' numbers, so each of about 630,000 records is a cache miss. What would fix that is not a faster copy:
+compaction that does a bounded amount per turn (a window of the arena at a time), or eviction that frees whole segments so that nothing needs to move. Neither is built; the pause stays
+in the list of things this cache is not good at.
+

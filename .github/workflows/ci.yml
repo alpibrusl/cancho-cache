@@ -7,8 +7,9 @@ on:
 
 env:
   # The compiler these sources are built and tested with: part of the contract, since a source file does not
-  # record which `std` it was written against.
-  LEX_SYS_REV: 215e19d7361dc56d0a78644aebfad67ab935c46e
+  # record which `std` it was written against. This is the commit of lex-sys #186 (`copy_within`); it moves to
+  # lex-sys's main once that is merged.
+  LEX_SYS_REV: 0789e52d381d51474654050c578ddc029e45713d
 
 jobs:
   test:

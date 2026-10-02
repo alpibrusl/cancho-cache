@@ -26,7 +26,10 @@ def cmd(*args):
 valid = [cmd("PING"), cmd("PING", "x"), cmd("ECHO", "hello"), cmd("ECHO", bytes(range(256))), cmd("FOO", "a", "b"), b"*0\r\n", b"*-1\r\n",
          cmd("SET", "k", "v", "EX", "10", "NX", "GET"), cmd("SET", "k", "9223372036854775807"), cmd("INCR", "k"), cmd("INCRBY", "k", "-9223372036854775808"),
          cmd("EXPIRE", "k", "9223372036854775807", "GT"), cmd("PEXPIRE", "k", "-9223372036854775808"), cmd("TTL", "k"), cmd("MSET", "a", "1", "b", "2"),
-         cmd("MGET", "a", "b", "c"), cmd("GETSET", "k", "v"), cmd("SETEX", "k", "1", "v"), cmd("DEL", "a", "b"), cmd("FLUSHALL")]
+         cmd("MGET", "a", "b", "c"), cmd("GETSET", "k", "v"), cmd("SETEX", "k", "1", "v"), cmd("DEL", "a", "b"), cmd("FLUSHALL"),
+         cmd("HELLO", "3", "AUTH", "default", "x", "SETNAME", "n"), cmd("HELLO", "2"), cmd("HELLO", "9999999999999999999"), cmd("AUTH", "a", "b"), cmd("CLIENT", "SETNAME", "x" * 200),
+         cmd("CLIENT", "GETNAME"), cmd("CLIENT", "ID"), cmd("INFO"), cmd("INFO", "memory"), cmd("CONFIG", "GET", "*"), cmd("CONFIG", "GET", "a", "b", "c", "max*", "[", "?"),
+         cmd("COMMAND"), cmd("COMMAND", "LIST"), cmd("COMMAND", "COUNT"), cmd("RESET"), cmd("QUIT")]
 
 
 def sample():

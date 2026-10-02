@@ -12,7 +12,7 @@ KNOWN divergences are listed with the reason, and are compared the other way rou
 diverging the test says so, so the list cannot go stale. Exit status 0 only if every case agrees and
 every known divergence still diverges.
 """
-import os, random, socket, subprocess, sys, time
+import os, random, re, socket, subprocess, sys, time
 
 CACHE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "build", "cache")
 REDIS_PORT, CACHE_PORT, SMALL_PORT = 6392, 6393, 6396
@@ -63,6 +63,11 @@ def talk(port, chunks, quiet=0.25):
     finally:
         s.close()
     return got
+
+
+def norm(reply):
+    """HELLO's answer carries the connection's id, which no two servers share: compare everything else."""
+    return re.sub(rb"(\$2\r\nid\r\n:)[0-9]+", rb"\1N", reply)
 
 
 def framings(data, rnd):
@@ -181,6 +186,28 @@ cases = [
     ("UNLINK and TOUCH", cmd("SET", "r:n", "1") + cmd("SET", "r:o", "2") + cmd("TOUCH", "r:n", "r:o", "r:none") + cmd("UNLINK", "r:n", "r:o", "r:none") + cmd("EXISTS", "r:n")),
     ("SELECT", cmd("SELECT", "0") + cmd("SELECT", "16") + cmd("SELECT", "abc") + cmd("SELECT", "-1") + cmd("SELECT")),
     ("arity of the rest", cmd("SETNX", "a") + cmd("SETEX", "a", "1") + cmd("GETSET", "a") + cmd("GETDEL") + cmd("STRLEN") + cmd("TYPE") + cmd("DBSIZE", "x") + cmd("TOUCH") + cmd("UNLINK")),
+    # AUTH, HELLO, CLIENT, CONFIG, QUIT, RESET: what a client says when it connects
+    ("AUTH forms", cmd("AUTH", "secret") + cmd("AUTH", "default", "secret") + cmd("AUTH", "bob", "secret") + cmd("AUTH") + cmd("AUTH", "a", "b", "c")),
+    ("HELLO argument errors", cmd("HELLO", "abc") + cmd("HELLO", "1") + cmd("HELLO", "0") + cmd("HELLO", "4") + cmd("HELLO", "-1") + cmd("HELLO", "2", "FOO") + cmd("HELLO", "2", "AUTH") + cmd("HELLO", "2", "AUTH", "u") + cmd("HELLO", "2", "SETNAME")),
+    ("HELLO auth and setname errors", cmd("HELLO", "2", "AUTH", "bob", "x") + cmd("HELLO", "2", "SETNAME", "a b") + cmd("HELLO", "2", "AUTH", "bob", "x", "SETNAME", "a b")),
+    ("CLIENT SETNAME and GETNAME", cmd("CLIENT", "GETNAME") + cmd("CLIENT", "SETNAME", "worker-1") + cmd("CLIENT", "GETNAME") + cmd("CLIENT", "SETNAME", "") + cmd("CLIENT", "GETNAME") + cmd("client", "setname", "x") + cmd("client", "getname")),
+    ("CLIENT SETNAME rejects", cmd("CLIENT", "SETNAME", "a b") + cmd("CLIENT", "SETNAME", "a\nb") + cmd("CLIENT", "SETNAME", b"caf\xc3\xa9") + cmd("CLIENT", "GETNAME")),
+    ("HELLO SETNAME sets the name", cmd("CLIENT", "SETNAME", "before") + cmd("HELLO", "2", "SETNAME", "after") [:0] + cmd("CLIENT", "GETNAME")),
+    ("CLIENT arity", cmd("CLIENT") + cmd("CLIENT", "ID", "x") + cmd("CLIENT", "GETNAME", "x") + cmd("CLIENT", "SETNAME") + cmd("CLIENT", "SETNAME", "a", "b")),
+    ("CLIENT unknown subcommand", cmd("CLIENT", "FOO") + cmd("CLIENT", "SETINFO", "LIB-NAME", "x") + cmd("CLIENT", "SETINFO", "LIB-VER", "1") + cmd("CLIENT", "foo", "bar")),
+    ("CONFIG GET of settings both agree on", cmd("CONFIG", "GET", "save") + cmd("CONFIG", "GET", "appendonly") + cmd("config", "get", "SAVE")),
+    ("CONFIG GET with overlapping patterns answers each setting once", cmd("CONFIG", "GET", "save", "save") + cmd("CONFIG", "GET", "sav*", "save") + cmd("CONFIG", "GET", "save", "sav*") + cmd("CONFIG", "GET", "s*", "save", "s*")[:0] + cmd("CONFIG", "GET", "appendonl*", "appendonly", "appendonl*")),
+    ("CONFIG GET of nothing", cmd("CONFIG", "GET", "no-such-setting") + cmd("CONFIG", "GET", "zzz*")),
+    ("CONFIG arity and unknown", cmd("CONFIG") + cmd("CONFIG", "GET") + cmd("CONFIG", "FOO") + cmd("CONFIG", "RESETSTAT")),
+    ("QUIT answers and closes", cmd("PING") + cmd("QUIT") + cmd("PING")),
+    ("RESET", cmd("CLIENT", "SETNAME", "x") + cmd("RESET") + cmd("CLIENT", "GETNAME") + cmd("RESET", "x")),
+    # RESP3: the replies that differ between the protocols are the null, and a map
+    ("HELLO 2 and HELLO with no version", cmd("HELLO", "2") + cmd("HELLO") + cmd("HELLO", "2", "SETNAME", "n") + cmd("CLIENT", "GETNAME")),
+    ("RESP3 nulls", cmd("HELLO", "3") + cmd("GET", "r3:none") + cmd("MGET", "r3:none", "r3:none") + cmd("SET", "r3:a", "1") + cmd("MGET", "r3:a", "r3:none") + cmd("SET", "r3:a", "2", "GET") + cmd("SET", "r3:b", "x", "GET") + cmd("GETSET", "r3:c", "1") + cmd("GETDEL", "r3:none") + cmd("CLIENT", "GETNAME") + cmd("SET", "r3:a", "3", "XX", "NX")[:0] + cmd("SET", "r3:a", "3", "NX")),
+    ("RESP3 and back to RESP2", cmd("HELLO", "3") + cmd("GET", "r3:none") + cmd("HELLO", "2") + cmd("GET", "r3:none") + cmd("HELLO", "3") + cmd("RESET") + cmd("GET", "r3:none")),
+    ("RESP3 config map", cmd("HELLO", "3") + cmd("CONFIG", "GET", "save") + cmd("CONFIG", "GET", "appendonly") + cmd("CONFIG", "GET", "nothing")),
+    ("RESP3 leaves integers, errors and strings alone", cmd("HELLO", "3") + cmd("SET", "r3:i", "5") + cmd("INCR", "r3:i") + cmd("TTL", "r3:i") + cmd("EXISTS", "r3:i") + cmd("INCR", "r3:none-a") + cmd("FOO") + cmd("GET") + cmd("TYPE", "r3:i") + cmd("PING") + cmd("PING", "x") + cmd("ECHO", "y")),
+    ("HELLO 3 with options", cmd("HELLO", "3", "SETNAME", "r3") + cmd("CLIENT", "GETNAME") + cmd("HELLO", "3", "AUTH", "default", "x") + cmd("HELLO", "3", "AUTH", "bob", "x")),
     ("protocol: bad array length", b"*x\r\n"),
     ("protocol: expected $", b"*1\r\nx\r\n"),
     ("protocol: expected $ got digit", b"*1\r\n7\r\n"),
@@ -198,6 +225,10 @@ known = [
     ("SET with EXAT", cmd("SET", "k:exat", "1", "EXAT", "99999999999"), "EXAT, PXAT, EXPIREAT and PEXPIREAT name a time of day, and the cache has a monotonic clock and no calendar"),
     ("EXPIREAT", cmd("EXPIREAT", "k:exat", "99999999999"), "the same"),
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
+    ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
+    ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
+    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "38 commands, not 240"),
+    ("COMMAND", cmd("COMMAND"), "the command table (flags, arity, key positions) is not kept"),
 ]
 
 
@@ -242,13 +273,13 @@ def main():
         rnd = random.Random(20261002)
         for name, data in cases:
             for fname, chunks in framings(data, rnd):
-                want, got = talk(REDIS_PORT, chunks), talk(CACHE_PORT, chunks)
+                want, got = norm(talk(REDIS_PORT, chunks)), norm(talk(CACHE_PORT, chunks))
                 if want != got:
                     bad += 1
                     print("DIFFERS  %s [%s]\n   redis: %r\n   cache: %r" % (name, fname, want[:200], got[:200]))
         for name, data in small_cases:
             for fname, chunks in framings(data, rnd):
-                want, got = talk(REDIS_PORT, chunks), talk(SMALL_PORT, chunks)
+                want, got = norm(talk(REDIS_PORT, chunks)), norm(talk(SMALL_PORT, chunks))
                 if want != got:
                     bad += 1
                     print("DIFFERS  %s [%s]\n   redis: %r\n   cache: %r" % (name, fname, want[:200], got[:200]))

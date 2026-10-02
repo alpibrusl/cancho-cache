@@ -576,3 +576,8 @@ pub fn clear[&s](st: &!s Store) -> [] int {
 pub fn now_of[&s](st: &s Store) -> [] int {
     return st.now;
 }
+
+// Which eviction policy it was opened with.
+pub fn policy_of[&s](st: &s Store) -> [] int {
+    return st.policy;
+}

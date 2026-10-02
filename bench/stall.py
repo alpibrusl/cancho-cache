@@ -33,15 +33,16 @@ for _ in range(100):
 s = socket.create_connection(("127.0.0.1", 6451))
 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 val = b"v" * 100
+BATCH = 20  # small, so no turn of the server is long just because it was handed a lot: its longest turn (INFO max_turn_ms) is then the bound
 records = int(ARENA) * (1 << 20) // 128
 # fill to the brim in pipelined batches
 n = 0
 while n < records * 12 // 10:
-    s.sendall(b"".join(cmd("SET", "f:%d" % i, val) for i in range(n, n + 2000)))
+    s.sendall(b"".join(cmd("SET", "f:%d" % i, val) for i in range(n, n + BATCH)))
     got = 0
-    while got < 2000 * 5:
+    while got < BATCH * 5:
         got += len(s.recv(1 << 16))
-    n += 2000
+    n += BATCH
 times = []
 for i in range(200000):
     t = time.perf_counter()

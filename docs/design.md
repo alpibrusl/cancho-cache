@@ -1,6 +1,6 @@
 # lexsys-cache: a Redis-compatible cache in lex-sys
 
-Status: **C0 built** (section 8); GET/SET not yet. The numbers in section 2 are measurements of Redis; section 8's are of this project.
+Status: **C0 and C1 built** (sections 8 and 9); expiry, `INCR` and eviction not yet. The numbers in section 2 are measurements of Redis; section 8's are of this project.
 
 ## 1. What this is for, and the claim it must survive
 
@@ -138,4 +138,58 @@ on `GET`/`SET` is dominated by exactly what `PING` skips. A client that is the l
 and a cell more than 5% faster that way is reported CLIENT-BOUND with no ratio. None was. (An earlier check, the client's CPU
 use, over-reported saturation and was replaced by this.) At pipeline 16 the cache's ceiling on this machine is about 2.4
 million `PING` a second with a 3-million-request run, so about 0.4 microseconds a command.
+
+## 9. C1, built and measured: the gate
+
+`src/store.ls` is the memory: one arena of keys and values and one open-addressing index with backward-shift deletion (no
+tombstones), all sized at start, nothing allocated afterwards. `GET`, `SET` (plain: no options yet), `DEL` and `EXISTS` use it. An
+overwrite that fits the room a value already has is done in place; one that does not is appended and the old room counted as
+garbage, which compaction (C2) will take back. A refusal is `-OOM command not allowed when used memory > 'maxmemory'.` (Redis's
+words under `noeviction`), changes nothing, and the server carries on.
+
+**Correctness.** `tests/store_test.ls`: six tests, including 3,000 keys deleted in three orders and 200,000 random operations
+against a model in plain arrays, and a pair of keys (`c80067`, `c99133`) found by search that collide in length, 31-bit tag *and* home
+slot, so that only the byte comparison tells them apart. Mutation-checked: six deliberately broken stores are each caught (the
+byte comparison was *not* caught until that pinned pair was added: random keys never collide this way). `tests/differential.py`
+now has 56 cases, including seeded random mixes of `SET`/`GET`/`DEL`/`EXISTS` that make values fit, grow past their room and shrink, and
+a second cache with a 32-slot index (`cache <port> 64 16`) so that probe runs form and deletion has to shift entries: with the
+default million-key index twenty keys never touch each other, and the backward-shift mutant survived the first version of this
+harness for exactly that reason. All agree with Redis byte for byte in four framings; five mutants of the storage path are caught.
+`tests/limits.py`: a full arena and a full key table refuse in Redis's words, leave old values, and `DEL`/overwrite/`GET`/`PING` still work (three
+mutants caught, two of them by the cache trapping and closing the connection).
+
+**The pre-registered gate** (section 2): at least 0.9 times Redis in each of four cells. `bench/vs_redis.sh`, Redis 7.0.15 and the cache
+each on core 0, `redis-benchmark` 2 threads and 50 clients on cores 2-3, 3-byte values, five interleaved rounds, medians:
+
+| | Redis | cache | ratio |
+|---|---|---|---|
+| SET, pipeline 1 | 153,799 | 190,440 | **1.24** |
+| SET, pipeline 16 | 998,004 | 1,992,032 | **2.00** |
+| GET, pipeline 1 | 153,633 | 181,785 | **1.18** |
+| GET, pipeline 16 | 1,329,787 | 1,996,008 | **1.50** |
+
+**All four cells meet the criterion**, and none was flagged client-bound (the faster side was re-run with a wider client, three threads
+on cores 1-3, and was not more than 5% faster).
+
+Reported, not gated (the same script; keyspace of 100,000 keys with `-r`, which `redis-benchmark` does not use by default):
+
+| | pipeline 1 | pipeline 16 |
+|---|---|---|
+| SET, 3-byte values | 1.08 (137,703 vs 148,104) | 1.25 (798,085 vs 999,001) |
+| GET, 3-byte values | 1.07 (137,798 vs 148,126) | 1.25 (798,722 vs 999,001) |
+| SET, 256-byte values | 1.03 (128,916 vs 133,156) | 1.17 (570,451 vs 665,779) |
+| GET, 256-byte values | 1.03 (128,816 vs 133,316) | 1.00 (665,336 vs 665,779) |
+
+**What this does not say.** It does not say the cache is faster than Redis. It says the cache is not slower *while doing much less*:
+no expiry, no `SET` options, no memory accounting, no statistics, no keyspace events, no replication or persistence hooks, one
+database. Adding expiry and eviction (C2) costs something, and the same criterion will be measured again then. The default benchmark
+uses one key, so the table is cache-resident; the 100,000-key runs are the honest ones, and they are 1.00-1.25, not 2.00. At pipeline 16
+the cache and `PING` give the same 1.99 million a second, and at 256-byte values several cells read 665,779 on both servers:
+**the machine, not either server, is the limit there** (the wider-client check catches the load generator, not the loopback path and the
+kernel). Redis was one build on one machine.
+
+**Limits of C1, stated.** A value may be at most what one command fits in the 16 KiB input buffer (a larger one closes the connection
+with a protocol error); a command has at most 16 arguments; `SET` has no options; **the arena is never reclaimed** (dead room only grows
+until C2's compaction, so an overwrite-heavy workload that grows values eventually answers `-OOM`); the hash seed is a constant, so a hostile
+client that can pick keys can make them collide (a per-process seed needs entropy from `Fs`, which the cache does not hold).
 

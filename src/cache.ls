@@ -4,12 +4,12 @@ import std.buffer;
 import std.conns;
 import std.io;
 import resp;
+import store;
 
-// `cache` -- a Redis-compatible cache (`docs/design.md`). This is step C0: the loop and the protocol, answering
-// `PING` and `ECHO` and refusing everything else the way Redis does, so that the loop can be held against Redis
-// before any storage exists.
+// `cache` -- a Redis-compatible cache (`docs/design.md`). Step C1: `PING`, `ECHO`, `GET`, `SET`, `DEL` and `EXISTS` over
+// the store of `src/store.ls`, and everything else refused the way Redis refuses it.
 //
-//     cache <port>
+//     cache <port> [<arena MiB> [<most keys>]]          (64 MiB and 1,000,000 keys if not given)
 //
 // One thread, one poller. A readable connection is read once into its own slot of one slab, every whole command
 // in it is parsed and answered into one scratch buffer, and the scratch goes out in a single write: so a client
@@ -57,6 +57,7 @@ res struct Core {
     table: Box[[int]],
     // Every answer to one read, before it is written.
     scratch: Box[[byte]],
+    store: store.Store,
 }
 
 // ---------------------------------------------------------------------
@@ -143,8 +144,19 @@ fn lower(c: int) -> [] int {
     return c;
 }
 
+// `:<n>\r\n`
+fn put_integer[&b](sc: &!b [byte], at: int, n: int) -> [] int {
+    return put(sc, put_nat(sc, put(sc, at, ":"), n), "\r\n");
+}
+
+// The answer to a `set` that was refused: the arena is full, or there is no room for another key. (Redis's text for
+// the same thing under its default `noeviction` policy.)
+fn refused[&b](sc: &!b [byte], at: int) -> [] int {
+    return put(sc, at, "-OOM command not allowed when used memory > 'maxmemory'.\r\n");
+}
+
 // Answer the command `table` describes in `view`, into `sc` from `at`. Answers where the answer ends.
-fn execute[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int) -> [] int {
+fn execute[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
     let argc = table[0];
     if argc == 0 {
         return at;
@@ -164,6 +176,59 @@ fn execute[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int
             return put_bulk(sc, at, view[table[3]..table[3] + table[4]]);
         }
         return wrong_arguments(sc, at, name);
+    }
+    if is_command(name, "GET") {
+        if argc != 2 {
+            return wrong_arguments(sc, at, name);
+        }
+        let key = view[table[3]..table[3] + table[4]];
+        let e = store.find(st, key, store.hash_of(st, key));
+        if e < 0 {
+            return put(sc, at, "$-1\r\n");
+        }
+        return put_bulk(sc, at, store.value(st, e));
+    }
+    if is_command(name, "SET") {
+        if argc < 3 {
+            return wrong_arguments(sc, at, name);
+        }
+        // Options (`EX`, `NX`, ...) come with expiry, step C2.
+        if argc > 3 {
+            return put(sc, at, "-ERR syntax error\r\n");
+        }
+        let key = view[table[3]..table[3] + table[4]];
+        if store.set(st, key, store.hash_of(st, key), view[table[5]..table[5] + table[6]]) != 0 {
+            return refused(sc, at);
+        }
+        return put(sc, at, "+OK\r\n");
+    }
+    if is_command(name, "DEL") {
+        if argc < 2 {
+            return wrong_arguments(sc, at, name);
+        }
+        var removed = 0;
+        var k = 1;
+        while k < argc {
+            let key = view[table[1 + 2 * k]..table[1 + 2 * k] + table[2 + 2 * k]];
+            removed = removed + store.delete(st, key, store.hash_of(st, key));
+            k = k + 1;
+        }
+        return put_integer(sc, at, removed);
+    }
+    if is_command(name, "EXISTS") {
+        if argc < 2 {
+            return wrong_arguments(sc, at, name);
+        }
+        var found = 0;
+        var k = 1;
+        while k < argc {
+            let key = view[table[1 + 2 * k]..table[1 + 2 * k] + table[2 + 2 * k]];
+            if store.find(st, key, store.hash_of(st, key)) >= 0 {
+                found = found + 1;
+            }
+            k = k + 1;
+        }
+        return put_integer(sc, at, found);
     }
     // Redis names the command (at most 128 bytes of it) and then the arguments, as `'arg' ` each, until the
     // text so far is 128 bytes: the quotes and spaces count, and the last argument is cut to what is left.
@@ -288,7 +353,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                 st[p + 3] = 1;
                 going = false;
             } else {
-                at = execute(view, tb, sc, at);
+                at = execute(view, tb, sc, at, core.store);
                 used = used + n;
                 // Room for the biggest answer one command can make.
                 if at + size + 256 > len(sc) {
@@ -428,7 +493,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l](heap: &!h Heap, listener: &!l Listener) -> [heap, conn_accept, conn_read, conn_write, poll] int {
+fn run[&h, &l](heap: &!h Heap, listener: &!l Listener, memory: int, max_keys: int) -> [heap, conn_accept, conn_read, conn_write, poll] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -436,7 +501,7 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener) -> [heap, conn_accept, co
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 4 * input_size(), byte_of(0)) };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 4 * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, 0) };
             var tab = conns.empty(heap, 64);
             while true {
                 var ready = 0 - 1;
@@ -468,7 +533,7 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener) -> [heap, conn_accept, co
                 }
             }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, table, scratch } = core;
+            let Core { poller, events, state, bufs, pends, table, scratch, store } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
@@ -476,6 +541,7 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener) -> [heap, conn_accept, co
             unbox_slice(heap, pends);
             unbox_slice(heap, table);
             unbox_slice(heap, scratch);
+            store.close(heap, store);
             return 0;
         }
         Polling::Failed(e) => {
@@ -485,7 +551,7 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener) -> [heap, conn_accept, co
 }
 
 fn number_of[&t](text: &t [byte]) -> [] int {
-    if len(text) == 0 || len(text) > 5 {
+    if len(text) == 0 || len(text) > 9 {
         return 0 - 1;
     }
     var n = 0;
@@ -512,8 +578,18 @@ fn main(world: World) -> [] int {
             port = number_of(arg(g, 1));
         }
     }
+    var megabytes = 64;
+    var max_keys = 1000000;
+    borrow args as &g in {
+        if arg_count(g) > 2 {
+            megabytes = number_of(arg(g, 2));
+        }
+        if arg_count(g) > 3 {
+            max_keys = number_of(arg(g, 3));
+        }
+    }
     var status = 2;
-    if port > 0 && port < 65536 {
+    if port > 0 && port < 65536 && megabytes > 0 && megabytes <= 4096 && max_keys > 0 && max_keys <= 100000000 {
         status = 3;
         borrow net as &nn in {
             match tcp_listen(nn, port, 1024, 0) {
@@ -531,7 +607,7 @@ fn main(world: World) -> [] int {
                                 }
                                 buffer.drop(h, line);
                             }
-                            status = run(h, lh);
+                            status = run(h, lh, megabytes * 1048576, max_keys);
                         }
                     }
                     listener_close(listener);

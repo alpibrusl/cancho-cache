@@ -228,6 +228,12 @@ cases += [("random mix, two keys, many collisions", random_mix(99, 600, keys=2))
 
 
 def main():
+    # DIFF_ONLY=substring runs only the cases whose name contains it (to check one thing quickly).
+    only = os.environ.get("DIFF_ONLY")
+    global cases, small_cases
+    if only:
+        cases = [c for c in cases if only in c[0]]
+        small_cases = [c for c in small_cases if only in c[0]]
     redis = start(["redis-server", "--port", str(REDIS_PORT), "--save", "", "--appendonly", "no", "--protected-mode", "no"], REDIS_PORT)
     cache = start([CACHE, str(CACHE_PORT)], CACHE_PORT)
     small = start([CACHE, str(SMALL_PORT), "64", "16"], SMALL_PORT)

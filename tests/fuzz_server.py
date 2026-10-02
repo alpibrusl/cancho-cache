@@ -23,7 +23,10 @@ def cmd(*args):
     return out
 
 
-valid = [cmd("PING"), cmd("PING", "x"), cmd("ECHO", "hello"), cmd("ECHO", bytes(range(256))), cmd("FOO", "a", "b"), b"*0\r\n", b"*-1\r\n"]
+valid = [cmd("PING"), cmd("PING", "x"), cmd("ECHO", "hello"), cmd("ECHO", bytes(range(256))), cmd("FOO", "a", "b"), b"*0\r\n", b"*-1\r\n",
+         cmd("SET", "k", "v", "EX", "10", "NX", "GET"), cmd("SET", "k", "9223372036854775807"), cmd("INCR", "k"), cmd("INCRBY", "k", "-9223372036854775808"),
+         cmd("EXPIRE", "k", "9223372036854775807", "GT"), cmd("PEXPIRE", "k", "-9223372036854775808"), cmd("TTL", "k"), cmd("MSET", "a", "1", "b", "2"),
+         cmd("MGET", "a", "b", "c"), cmd("GETSET", "k", "v"), cmd("SETEX", "k", "1", "v"), cmd("DEL", "a", "b"), cmd("FLUSHALL")]
 
 
 def sample():

@@ -9,7 +9,7 @@ Redis refuses it. At 3-byte values on one core it is at 1.18-2.00 times Redis 7.
 measured Redis baseline, and what C0 found.
 
 ```sh
-lex-sys build --std src/cache.ls src/resp.ls src/store.ls -o build/cache
+lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls -o build/cache
 build/cache 6379
 redis-cli -p 6379 PING                                   # PONG
 

@@ -23,9 +23,10 @@ module resp;
 //
 // and `slots()` is how big the table has to be.
 
-// The most arguments one command may have. `SET key value EX 10 NX` has six.
+// The most arguments one command may have: `MGET` and `MSET` are the ones that want many. Redis takes a million; the
+// table here is on the stack of the loop, so it is fixed.
 fn max_args() -> [] int {
-    return 16;
+    return 64;
 }
 
 pub fn slots() -> [] int {

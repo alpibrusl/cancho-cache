@@ -1,6 +1,6 @@
 # lexsys-cache: a Redis-compatible cache in lex-sys
 
-Status: **C0 and C1 built** (sections 8 and 9); expiry, `INCR` and eviction not yet. The numbers in section 2 are measurements of Redis; section 8's are of this project.
+Status: **C0, C1 and C2 built** (sections 8, 9, 10). The numbers in section 2 are measurements of Redis; section 8's are of this project.
 
 ## 1. What this is for, and the claim it must survive
 
@@ -192,4 +192,62 @@ kernel). Redis was one build on one machine.
 with a protocol error); a command has at most 16 arguments; `SET` has no options; **the arena is never reclaimed** (dead room only grows
 until C2's compaction, so an overwrite-heavy workload that grows values eventually answers `-OOM`); the hash seed is a constant, so a hostile
 client that can pick keys can make them collide (a per-process seed needs entropy from `Fs`, which the cache does not hold).
+
+## 10. C2, built and measured: expiry, eviction, and thirty commands
+
+**What exists.** `src/store.ls` now writes records with an 8-byte header (entry number and size), which lets the arena be walked from the
+front: **compaction** slides the live records down in place, and **eviction** under `allkeys-lru` samples five keys and removes the one used
+longest ago, reclaiming a sixteenth of the arena at a time so that a compaction is paid for once per sixteenth written. Expiry is lazy (a key
+whose time has passed is gone when asked for) and swept (up to a hundred times a second, 256 keys a look, repeating while more than a quarter of
+what it looks at has run out: Redis's rule). `src/commands.ls` is the commands: `PING ECHO GET SET` (with `NX XX GET EX PX KEEPTTL`)
+`SETNX SETEX PSETEX GETSET GETDEL MGET MSET DEL UNLINK EXISTS TOUCH STRLEN TYPE INCR DECR INCRBY DECRBY EXPIRE PEXPIRE` (with `NX XX GT LT`)
+`TTL PTTL PERSIST DBSIZE FLUSHALL FLUSHDB SELECT`: **30 of Redis 7.0's 240**, with Redis's argument checks and error texts, including every
+overflow case of 64-bit integers.
+
+**Correctness.**
+* `tests/differential.py`: **111 cases + 8 small-index cases**, four framings each, byte-identical to Redis. Five divergences are deliberate and asserted
+  as divergent (inline commands, a bulk not followed by CRLF, more than 64 arguments, `EXAT`/`PXAT`/`EXPIREAT`, and `SELECT 1`: one database).
+* Mutation: **nine broken command layers** were each caught (a `TTL` that rounds down, an overflow check off by one, `INCR` accepting `+7`, `GT` on a key
+  with no expiry, `NX` ignored, `SET ... GET` replying before the write, `KEEPTTL` ignored, `MSET` with an odd argument count, `PERSIST` that does not
+  persist); **twelve broken stores** (compaction without the offset check, without re-pointing, never compacting, evicting the newest, the expiry boundary
+  off by one, no use stamp, and others) were each caught by `tests/store_test.ls` (12 tests, including a model that knows exactly when a `SET` must be
+  refused and a randomised run that checks every value after every compaction).
+* `tests/expiry.py`: lazy and swept expiry against Redis in real time, `PTTL` ranges, and a 1 MiB cache under `allkeys-lru` written to 20 times its size
+  that never refuses a write, stays about a MiB, keeps a key that is used all the time, and drops the oldest. `tests/fuzz_server.py` now sends 6,000 hostile
+  connections including every new command with hostile arguments.
+
+**What the tests found in the code** (kept here because it is why they exist): the sweep, as first written, scanned 64 keys a turn and took **about 40% of
+2,000 expired keys in 1.5 seconds** (the timed test said so; it is now time-based and adaptive and takes them all); and growing the *only* key in a full
+arena is refused rather than evicting itself (a test pins it, and the mutant without the guard is caught).
+
+**Throughput, the gate again with all of it in** (`bench/vs_redis.sh`, one core each, five interleaved rounds, medians, default one hot key):
+
+| | Redis | cache | ratio |
+|---|---|---|---|
+| SET, pipeline 1 | 153,610 | 181,719 | **1.18** |
+| SET, pipeline 16 | 999,001 | 1,992,032 | **1.99** |
+| GET, pipeline 1 | 147,951 | 181,752 | **1.23** |
+| GET, pipeline 16 | 998,004 | 1,996,008 | **2.00** |
+
+With a 100,000-key keyspace: SET 1.07 (pipeline 1) and 1.25 (16), GET 1.07 and 1.25. **One cell of that run was discarded**: the first `SET` pipeline-1 cell ran at half speed
+for both servers (75k against 72k) because something else was loading the machine, and the script's own headroom check flagged it; rerun alone it is 133,156
+against 142,796, 1.07. Expiry, the clock read each turn and eviction cost nothing visible against Redis; the cache still does much less (no persistence,
+replication, statistics).
+
+**Memory** (`bench/memory.py`, 500,000 keys of 16+100 bytes, sizes configured to the data): Redis `used_memory` 200.5 bytes a key, resident 111.6 MiB loaded
+and 12 MiB idle; the cache **103.1 MiB loaded** (216 bytes a key at this size) and **between 69 and 96 MiB idle**: the arena is committed when it starts, Redis
+grows as it is filled. At full utilisation the cache is about 8% smaller; at half full it is larger.
+
+**Hit rate** (`bench/hitrate.py`, Zipf 0.99 over 2,000,000 keys, 100-byte values, cache-aside, three million requests counted): Redis `maxmemory 128mb allkeys-lru`
+**0.8583** at 138.4 MiB resident; the cache with a 76 MiB arena **0.8577** at 136.3 MiB. At equal resident memory they are indistinguishable. Their eviction is not the same algorithm
+(both sample five; Redis keeps a candidate pool and a coarser clock) and the comparison is at equal resident size precisely because the two count memory differently.
+
+**The weakness, measured** (`bench/stall.py`): compaction is a pass over the whole arena. On a 64 MiB arena, 200,000 `SET`s past full give a median of 0.035 ms and a 99.9th
+percentile of 0.231 ms, **but a maximum of 114.7 ms**, and 18 commands over 2 ms; on 16 MiB the maximum is 54.2 ms. Redis has no such pause. It is dominated by a byte-at-a-time
+copy (about 0.5 GB/s) because lex-sys has no memmove primitive; two ways out, neither built: a `copy_within` builtin (a language change, one small, and measurable), or compaction
+that moves a bounded amount per turn (a design change).
+
+**Still not Redis, stated.** 30 commands of 240; no lists, hashes, sets, sorted sets, streams, pub/sub, scripting, transactions; no persistence, replication, cluster, `AUTH`, TLS, RESP3 or
+`HELLO`/`CLIENT`/`INFO`/`CONFIG` (so a client library that insists on a handshake may not connect); no `EXAT`-style absolute times; one database; at most 64 arguments and a value
+that fits a 16 KiB input buffer; a constant hash seed; one core. Compaction pauses of up to ~115 ms at 64 MiB.
 

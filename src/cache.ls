@@ -3,13 +3,14 @@ edition 5;
 import std.buffer;
 import std.conns;
 import std.io;
+import commands;
 import resp;
 import store;
 
-// `cache` -- a Redis-compatible cache (`docs/design.md`). Step C1: `PING`, `ECHO`, `GET`, `SET`, `DEL` and `EXISTS` over
-// the store of `src/store.ls`, and everything else refused the way Redis refuses it.
+// `cache` -- a Redis-compatible cache (`docs/design.md`): the loop. The commands are `src/commands.ls`, the memory is
+// `src/store.ls`, the protocol `src/resp.ls`.
 //
-//     cache <port> [<arena MiB> [<most keys>]]          (64 MiB and 1,000,000 keys if not given)
+//     cache <port> [<arena MiB> [<most keys> [noeviction | allkeys-lru]]]     (64 MiB, 1,000,000 keys, noeviction)
 //
 // One thread, one poller. A readable connection is read once into its own slot of one slab, every whole command
 // in it is parsed and answered into one scratch buffer, and the scratch goes out in a single write: so a client
@@ -57,202 +58,11 @@ res struct Core {
     table: Box[[int]],
     // Every answer to one read, before it is written.
     scratch: Box[[byte]],
+    // A few bytes for a command to build a value in (`INCR`).
+    tmp: Box[[byte]],
     store: store.Store,
-}
-
-// ---------------------------------------------------------------------
-// Answers, written into the scratch buffer
-// ---------------------------------------------------------------------
-
-fn put[&b, &d](sc: &!b [byte], at: int, data: &d [byte]) -> [] int {
-    var i = 0;
-    while i < len(data) {
-        sc[at + i] = data[i];
-        i = i + 1;
-    }
-    return at + len(data);
-}
-
-fn put_nat[&b](sc: &!b [byte], at: int, n: int) -> [] int {
-    var digits = 1;
-    var rest = n / 10;
-    while rest > 0 {
-        digits = digits + 1;
-        rest = rest / 10;
-    }
-    var value = n;
-    var i = digits;
-    while i > 0 {
-        i = i - 1;
-        sc[at + i] = byte_of('0' + value % 10);
-        value = value / 10;
-    }
-    return at + digits;
-}
-
-// `$<length>\r\n<data>\r\n`
-fn put_bulk[&b, &d](sc: &!b [byte], at: int, data: &d [byte]) -> [] int {
-    var o = put(sc, at, "$");
-    o = put_nat(sc, o, len(data));
-    o = put(sc, o, "\r\n");
-    o = put(sc, o, data);
-    return put(sc, o, "\r\n");
-}
-
-// An ASCII letter in upper case, anything else as it is.
-fn upper(c: int) -> [] int {
-    if c >= 'a' && c <= 'z' {
-        return c - 32;
-    }
-    return c;
-}
-
-// Is `word` the command `name` (which is written in upper case), whatever case it came in?
-fn is_command[&w](word: &w [byte], name: &static [byte]) -> [] bool {
-    if len(word) != len(name) {
-        return false;
-    }
-    var i = 0;
-    while i < len(word) {
-        if upper(int_of(word[i])) != int_of(name[i]) {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
-fn wrong_arguments[&b, &w](sc: &!b [byte], at: int, name: &w [byte]) -> [] int {
-    var o = put(sc, at, "-ERR wrong number of arguments for '");
-    var i = 0;
-    while i < len(name) {
-        o = put_byte(sc, o, lower(int_of(name[i])));
-        i = i + 1;
-    }
-    return put(sc, o, "' command\r\n");
-}
-
-fn put_byte[&b](sc: &!b [byte], at: int, c: int) -> [] int {
-    sc[at] = byte_of(c);
-    return at + 1;
-}
-
-fn lower(c: int) -> [] int {
-    if c >= 'A' && c <= 'Z' {
-        return c + 32;
-    }
-    return c;
-}
-
-// `:<n>\r\n`
-fn put_integer[&b](sc: &!b [byte], at: int, n: int) -> [] int {
-    return put(sc, put_nat(sc, put(sc, at, ":"), n), "\r\n");
-}
-
-// The answer to a `set` that was refused: the arena is full, or there is no room for another key. (Redis's text for
-// the same thing under its default `noeviction` policy.)
-fn refused[&b](sc: &!b [byte], at: int) -> [] int {
-    return put(sc, at, "-OOM command not allowed when used memory > 'maxmemory'.\r\n");
-}
-
-// Answer the command `table` describes in `view`, into `sc` from `at`. Answers where the answer ends.
-fn execute[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
-    let argc = table[0];
-    if argc == 0 {
-        return at;
-    }
-    let name = view[table[1]..table[1] + table[2]];
-    if is_command(name, "PING") {
-        if argc == 1 {
-            return put(sc, at, "+PONG\r\n");
-        }
-        if argc == 2 {
-            return put_bulk(sc, at, view[table[3]..table[3] + table[4]]);
-        }
-        return wrong_arguments(sc, at, name);
-    }
-    if is_command(name, "ECHO") {
-        if argc == 2 {
-            return put_bulk(sc, at, view[table[3]..table[3] + table[4]]);
-        }
-        return wrong_arguments(sc, at, name);
-    }
-    if is_command(name, "GET") {
-        if argc != 2 {
-            return wrong_arguments(sc, at, name);
-        }
-        let key = view[table[3]..table[3] + table[4]];
-        let e = store.find(st, key, store.hash_of(st, key));
-        if e < 0 {
-            return put(sc, at, "$-1\r\n");
-        }
-        return put_bulk(sc, at, store.value(st, e));
-    }
-    if is_command(name, "SET") {
-        if argc < 3 {
-            return wrong_arguments(sc, at, name);
-        }
-        // Options (`EX`, `NX`, ...) come with expiry, step C2.
-        if argc > 3 {
-            return put(sc, at, "-ERR syntax error\r\n");
-        }
-        let key = view[table[3]..table[3] + table[4]];
-        if store.set(st, key, store.hash_of(st, key), view[table[5]..table[5] + table[6]]) != 0 {
-            return refused(sc, at);
-        }
-        return put(sc, at, "+OK\r\n");
-    }
-    if is_command(name, "DEL") {
-        if argc < 2 {
-            return wrong_arguments(sc, at, name);
-        }
-        var removed = 0;
-        var k = 1;
-        while k < argc {
-            let key = view[table[1 + 2 * k]..table[1 + 2 * k] + table[2 + 2 * k]];
-            removed = removed + store.delete(st, key, store.hash_of(st, key));
-            k = k + 1;
-        }
-        return put_integer(sc, at, removed);
-    }
-    if is_command(name, "EXISTS") {
-        if argc < 2 {
-            return wrong_arguments(sc, at, name);
-        }
-        var found = 0;
-        var k = 1;
-        while k < argc {
-            let key = view[table[1 + 2 * k]..table[1 + 2 * k] + table[2 + 2 * k]];
-            if store.find(st, key, store.hash_of(st, key)) >= 0 {
-                found = found + 1;
-            }
-            k = k + 1;
-        }
-        return put_integer(sc, at, found);
-    }
-    // Redis names the command (at most 128 bytes of it) and then the arguments, as `'arg' ` each, until the
-    // text so far is 128 bytes: the quotes and spaces count, and the last argument is cut to what is left.
-    var shown = len(name);
-    if shown > 128 {
-        shown = 128;
-    }
-    var o = put(sc, at, "-ERR unknown command '");
-    o = put(sc, o, name[0..shown]);
-    o = put(sc, o, "', with args beginning with: ");
-    var spent = 0;
-    var k = 1;
-    while k < argc && spent < 128 {
-        var take = table[2 + 2 * k];
-        if take > 128 - spent {
-            take = 128 - spent;
-        }
-        o = put(sc, o, "'");
-        o = put(sc, o, view[table[1 + 2 * k]..table[1 + 2 * k] + take]);
-        o = put(sc, o, "' ");
-        spent = spent + take + 3;
-        k = k + 1;
-    }
-    return put(sc, o, "\r\n");
+    // When the sweep for expired keys last ran, in the store's milliseconds.
+    swept: int,
 }
 
 // ---------------------------------------------------------------------
@@ -338,25 +148,25 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
             let n = resp.parse(view, tb);
             if n == 0 {
                 if used == 0 && st[p] >= size {
-                    at = put(sc, at, "-ERR Protocol error: command too large\r\n");
+                    at = commands.put(sc, at, "-ERR Protocol error: command too large\r\n");
                     st[p + 3] = 1;
                 }
                 going = false;
             } else if n < 0 {
-                at = put(sc, at, "-ERR ");
-                at = put(sc, at, resp.error_text(n));
+                at = commands.put(sc, at, "-ERR ");
+                at = commands.put(sc, at, resp.error_text(n));
                 if n == resp.error_expected_bulk() {
-                    at = put_byte(sc, at, tb[0]);
-                    at = put(sc, at, "'");
+                    at = commands.put_byte(sc, at, tb[0]);
+                    at = commands.put(sc, at, "'");
                 }
-                at = put(sc, at, "\r\n");
+                at = commands.put(sc, at, "\r\n");
                 st[p + 3] = 1;
                 going = false;
             } else {
-                at = execute(view, tb, sc, at, core.store);
+                at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp));
                 used = used + n;
                 // Room for the biggest answer one command can make.
-                if at + size + 256 > len(sc) {
+                if at + commands.reserve() > len(sc) {
                     st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
                     at = 0;
                 }
@@ -493,7 +303,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l](heap: &!h Heap, listener: &!l Listener, memory: int, max_keys: int) -> [heap, conn_accept, conn_read, conn_write, poll] int {
+fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, memory: int, max_keys: int, policy: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -501,12 +311,19 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener, memory: int, max_keys: in
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 4 * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, 0) };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), store: store.open(heap, memory, max_keys, 0, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
             while true {
                 var ready = 0 - 1;
                 borrow mut core as &!cw in {
-                    ready = poller_wait(cw.poller, contents(cw.events), 1000);
+                    // Wake often enough to take keys whose time has come, but only if there are any.
+                    var wait_ms = 1000;
+                    if store.keys_with_expiry(cw.store) > 0 {
+                        wait_ms = 100;
+                    }
+                    ready = poller_wait(cw.poller, contents(cw.events), wait_ms);
+                    // The time, once for this turn: every use of a key in it is stamped with it.
+                    store.tick(cw.store, clock_ms(clock));
                 }
                 var j = 0;
                 while j < ready {
@@ -531,9 +348,23 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener, memory: int, max_keys: in
                     }
                     j = j + 1;
                 }
+                borrow mut core as &!cw in {
+                    // Take the keys whose time has passed that nobody asked for again: at most a hundred times a second,
+                    // 256 keys at a look, and again while more than a quarter of what it looked at had run out (Redis's
+                    // rule), at most sixteen looks.
+                    if store.now_of(cw.store) - cw.swept >= 10 {
+                        cw.swept = store.now_of(cw.store);
+                        var looks = 0;
+                        var more = true;
+                        while more && looks < 16 {
+                            more = store.sweep(cw.store, 256) * 4 > 256;
+                            looks = looks + 1;
+                        }
+                    }
+                }
             }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, table, scratch, store } = core;
+            let Core { poller, events, state, bufs, pends, table, scratch, tmp, store, swept } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
@@ -541,6 +372,7 @@ fn run[&h, &l](heap: &!h Heap, listener: &!l Listener, memory: int, max_keys: in
             unbox_slice(heap, pends);
             unbox_slice(heap, table);
             unbox_slice(heap, scratch);
+            unbox_slice(heap, tmp);
             store.close(heap, store);
             return 0;
         }
@@ -571,7 +403,6 @@ fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, net, clock } = split(world);
     release(fs);
     release(ffi);
-    release(clock);
     var port = 0 - 1;
     borrow args as &g in {
         if arg_count(g) > 1 {
@@ -580,7 +411,13 @@ fn main(world: World) -> [] int {
     }
     var megabytes = 64;
     var max_keys = 1000000;
+    var policy = store.evict_none();
     borrow args as &g in {
+        if arg_count(g) > 4 {
+            if arg(g, 4)[0] == byte_of('a') {
+                policy = store.evict_lru();
+            }
+        }
         if arg_count(g) > 2 {
             megabytes = number_of(arg(g, 2));
         }
@@ -607,7 +444,9 @@ fn main(world: World) -> [] int {
                                 }
                                 buffer.drop(h, line);
                             }
-                            status = run(h, lh, megabytes * 1048576, max_keys);
+                            borrow clock as &c in {
+                                status = run(h, lh, c, megabytes * 1048576, max_keys, policy);
+                            }
                         }
                     }
                     listener_close(listener);
@@ -618,6 +457,7 @@ fn main(world: World) -> [] int {
         }
     }
     release(net);
+    release(clock);
     release(args);
     release(io);
     release(heap);

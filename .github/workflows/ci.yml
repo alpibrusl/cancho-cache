@@ -53,12 +53,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../lex-sys/target/release/lex-sys build --std src/cache.ls src/resp.ls src/store.ls -o build/cache
+        run: mkdir -p build && ../lex-sys/target/release/lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls -o build/cache
 
       - name: Authority has no ffi and no filesystem
         working-directory: cache
         run: |
-          ../lex-sys/target/release/lex-sys authority src/cache.ls src/resp.ls src/store.ls --std > /tmp/authority.txt
+          ../lex-sys/target/release/lex-sys authority src/cache.ls src/resp.ls src/store.ls src/commands.ls --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "foreign code"
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "the filesystem"
@@ -71,6 +71,10 @@ jobs:
       - name: A full arena and a full key table refuse in Redis's words
         working-directory: cache
         run: python3 tests/limits.py build/cache
+
+      - name: Expiry, the sweep, PTTL, and eviction under allkeys-lru
+        working-directory: cache
+        run: python3 tests/expiry.py build/cache
 
       - name: Hostile bytes do not stop it
         working-directory: cache

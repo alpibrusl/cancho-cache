@@ -516,6 +516,54 @@ fn test_lru_with_compaction_in_small_steps_keeps_its_books[&h](heap: &!h Heap) -
     return 0;
 }
 
+// The set that fills the arena must not give up the key it just stored to make the free room the arena is now short of.
+fn test_a_set_does_not_reclaim_its_own_key[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 100, 10, 0, store.evict_lru());
+    borrow mut st as &!w in {
+        // 8 + 2 + 80 = 90 bytes of 100: less than an eighth is left, and the only key is the one just written.
+        test.assert_eq(put(w, 1, 'a', 80), 0);
+        test.assert_eq(look(w, 1), 80 * 1000 + 'a');
+        test.assert_eq(store.live(w), 1);
+        test.assert_eq(store.evicted(w), 0);
+        test.assert_eq(store.audit(w), 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+// `clear` while a compaction is part way through leaves nothing of it behind: the next sets and compactions start fresh.
+fn test_clear_in_the_middle_of_a_compaction[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 3000, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        var i = 0;
+        while i < 40 {
+            test.assert_eq(put_paid(w, i, 'a', 40, 1), 0);
+            i = i + 1;
+        }
+        // Overwrite them with longer values: the old records are garbage, and a compaction begins and is left part way.
+        i = 0;
+        while i < 40 && !store.compacting(w) {
+            test.assert_eq(put_paid(w, i, 'b', 56, 1), 0);
+            i = i + 1;
+        }
+        test.assert(store.compacting(w));
+        store.clear(w);
+        test.assert(!store.compacting(w));
+        test.assert_eq(store.gap_of(w), 0);
+        test.assert_eq(store.audit(w), 0);
+        test.assert_eq(store.used(w), 0);
+        i = 0;
+        while i < 40 {
+            test.assert_eq(put_paid(w, i, 'c', 40, 1), 0);
+            test.assert_eq(store.audit(w), 0);
+            i = i + 1;
+        }
+        test.assert_eq(look(w, 7), 40 * 1000 + 'c');
+    }
+    store.close(heap, st);
+    return 0;
+}
+
 fn test_a_key_table_that_is_full_evicts_under_lru_and_refuses_otherwise[&h](heap: &!h Heap) -> [heap] int {
     var st = store.open(heap, 100000, 8, 0, store.evict_lru());
     borrow mut st as &!w in {

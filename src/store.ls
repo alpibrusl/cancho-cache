@@ -73,6 +73,13 @@ pub res struct Store {
     evicted: int,
     expired: int,
     compactions: int,
+    // How many times `make_room` had to finish a compaction itself, because the arena filled before the steps got there.
+    forced: int,
+    // A compaction in progress: where the next record to look at starts and where the next live one lands (`cfrom` is
+    // -1 when there is none), and the entry the last `set` stored.
+    cfrom: int,
+    cto: int,
+    last: int,
 }
 
 // A store with an arena of `memory` bytes and room for `max_keys` keys. `seed` is mixed into every hash; it is a
@@ -83,11 +90,11 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, meta);
     unbox_slice(heap, data);
@@ -137,6 +144,10 @@ pub fn expired[&s](st: &s Store) -> [] int {
 
 pub fn compactions[&s](st: &s Store) -> [] int {
     return st.compactions;
+}
+
+pub fn forced[&s](st: &s Store) -> [] int {
+    return st.forced;
 }
 
 fn tag_of(h: int) -> [] int {
@@ -311,12 +322,24 @@ pub fn set_expiry[&s](st: &!s Store, e: int, at: int) -> [] int {
 // Walk the records from the front and slide the live ones down over the garbage. A record is live if its entry is in
 // use and still points at it; anything else (a value that grew and moved, a deleted key, an evicted one) is dropped.
 // In place: a record only ever moves to a lower address, copied front to back, so it never overwrites one not yet moved.
-fn compact[&s](st: &!s Store) -> [] int {
+//
+// It can stop part way and resume (`cfrom`, `cto`): the records below `cto` are the compacted ones, `cto..cfrom` is a gap
+// nothing points into, and from `cfrom` on are the ones not yet looked at. A command that runs in between sees every
+// key where its entry says it is, and appends still go at `top`, which the walk reaches in the end. `dead` is the
+// garbage in the compacted part and in the part not yet looked at, so a record dropped is taken off it as it is passed.
+//
+// Looks at no more than `budget` records; true when it has reached the end and finished.
+fn compact_step[&s](st: &!s Store, budget: int) -> [] bool {
+    if st.cfrom < 0 {
+        st.cfrom = 0;
+        st.cto = 0;
+    }
     let meta = contents(st.meta);
     let data = contents(st.data);
-    var from = 0;
-    var to = 0;
-    while from < st.top {
+    var from = st.cfrom;
+    var to = st.cto;
+    var looked = 0;
+    while from < st.top && looked < budget {
         let e = get32(data, from);
         let size = get32(data, from + 4);
         let total = header() + size;
@@ -329,12 +352,28 @@ fn compact[&s](st: &!s Store) -> [] int {
                 meta[m] = to + header();
             }
             to = to + total;
+        } else {
+            st.dead = st.dead - total;
         }
         from = from + total;
+        looked = looked + 1;
     }
-    st.top = to;
-    st.dead = 0;
-    st.compactions = st.compactions + 1;
+    if from >= st.top {
+        st.top = to;
+        st.cfrom = 0 - 1;
+        st.cto = 0;
+        st.compactions = st.compactions + 1;
+        return true;
+    }
+    st.cfrom = from;
+    st.cto = to;
+    return false;
+}
+
+// All of it now: finish the one in progress, or do one from the start.
+fn compact[&s](st: &!s Store) -> [] int {
+    while !compact_step(st, 1 << 62) {
+    }
     return 0;
 }
 
@@ -407,7 +446,8 @@ fn make_room[&s](st: &!s Store, need: int) -> [] bool {
     if st.top + need <= cap {
         return true;
     }
-    if st.dead > 0 {
+    if st.dead > 0 || st.cfrom >= 0 {
+        st.forced = st.forced + 1;
         compact(st);
     }
     if st.top + need <= cap {
@@ -425,6 +465,7 @@ fn make_room[&s](st: &!s Store, need: int) -> [] bool {
     while more && cap - st.top + st.dead < want {
         more = evict_one(st) == 1;
     }
+    st.forced = st.forced + 1;
     compact(st);
     return st.top + need <= cap;
 }
@@ -446,12 +487,8 @@ fn append[&s, &k, &v](st: &!s Store, e: int, key: &k [byte], value: &v [byte]) -
     return at + header();
 }
 
-// Store `value` under `key` (`h` is `hash_of`). `expiry` is when it ends, in `tick`'s milliseconds; 0 for never, and
-// -1 to leave an existing key's expiry as it is (a new key then has none).
-//
-// 0: stored. 1: the arena has no room for it, even after compacting and whatever the policy lets it evict (and
-// nothing was changed). 2: no room for another key.
-pub fn set[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], expiry: int) -> [] int {
+// `set` without the reclaiming after it; the entry stored is left in `last`.
+fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], expiry: int) -> [] int {
     let e0 = find(st, key, h);
     if e0 >= 0 {
         let meta = contents(st.meta);
@@ -476,6 +513,7 @@ pub fn set[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
         if expiry >= 0 {
             put_expiry(st, m, expiry);
         }
+        st.last = e0;
         return 0;
     }
     if st.live >= st.max_keys {
@@ -513,6 +551,110 @@ pub fn set[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
     }
     index[i] = tag_of(h) << 32 | e + 1;
     st.live = st.live + 1;
+    st.last = e;
+    return 0;
+}
+
+// Records of a compaction one `set` pays for, and keys it may evict ahead of need.
+fn set_records() -> [] int {
+    return 64;
+}
+
+fn set_evictions() -> [] int {
+    return 32;
+}
+
+// Work done ahead of need, a little at a time, so that the compaction `make_room` would otherwise do all at once, when
+// the arena is full, is mostly done by then. At most `budget` records of a compaction and (under `allkeys-lru`) a bounded
+// number of evictions, never the entry in `protect`.
+//
+//   - a compaction in progress carries on;
+//   - when the arena is three quarters used and a sixteenth of it is garbage, one starts;
+//   - under `allkeys-lru`, when less than an eighth of the arena is left and there is not yet a sixteenth of garbage to
+//     make a compaction worth it, some of the least recently used keys go.
+//
+// When writes outrun this the arena fills anyway, and `make_room` finishes whatever is left synchronously.
+pub fn reclaim[&s](st: &!s Store, budget: int) -> [] int {
+    if st.cfrom >= 0 {
+        compact_step(st, budget);
+        return 0;
+    }
+    let cap = len(contents(st.data));
+    if st.policy == evict_lru() && cap - st.top < cap / 8 && st.dead < cap / 16 {
+        var k = 0;
+        while k < set_evictions() && st.dead < cap / 16 && evict_one(st) == 1 {
+            k = k + 1;
+        }
+    }
+    if st.top * 4 >= cap * 3 && st.dead * 16 >= cap {
+        compact_step(st, budget);
+    }
+    return 0;
+}
+
+// Store `value` under `key` (`h` is `hash_of`). `expiry` is when it ends, in `tick`'s milliseconds; 0 for never, and
+// -1 to leave an existing key's expiry as it is (a new key then has none).
+//
+// 0: stored. 1: the arena has no room for it, even after compacting and whatever the policy lets it evict (and
+// nothing was changed). 2: no room for another key.
+pub fn set[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], expiry: int) -> [] int {
+    return set_paid(st, key, h, value, expiry, set_records());
+}
+
+// `set` that pays `records` records of compaction instead of the usual number: the tests use a few, to have commands land
+// between the steps of one.
+pub fn set_paid[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], expiry: int, records: int) -> [] int {
+    let code = put_key(st, key, h, value, expiry);
+    if code == 0 {
+        st.protect = st.last;
+        reclaim(st, records);
+        st.protect = 0 - 1;
+    }
+    return code;
+}
+
+// Whether a compaction is part way through.
+pub fn compacting[&s](st: &s Store) -> [] bool {
+    return st.cfrom >= 0;
+}
+
+// The bytes between the compacted records and the ones not yet looked at; 0 when no compaction is in progress.
+pub fn gap_of[&s](st: &s Store) -> [] int {
+    if st.cfrom < 0 {
+        return 0;
+    }
+    return st.cfrom - st.cto;
+}
+
+// Check the arena's books, for the tests: 0 if they are right. Every byte below `top` is a live record, a dead one, or the
+// gap of a compaction in progress; every live entry's record lies inside the arena and not in the gap; the number of
+// entries in use is `live`.
+pub fn audit[&s](st: &s Store) -> [] int {
+    let meta = contents(st.meta);
+    var bytes = 0;
+    var keys = 0;
+    var e = 0;
+    while e < st.fresh {
+        let m = stride() * e;
+        if meta[m + 6] == 0 - 2 {
+            keys = keys + 1;
+            bytes = bytes + header() + meta[m + 1] + meta[m + 3];
+            let at = meta[m] - header();
+            if at < 0 || at + header() + meta[m + 1] + meta[m + 3] > st.top {
+                return 2;
+            }
+            if st.cfrom >= 0 && at + header() + meta[m + 1] + meta[m + 3] > st.cto && at < st.cfrom {
+                return 2;
+            }
+        }
+        e = e + 1;
+    }
+    if keys != st.live {
+        return 3;
+    }
+    if st.top - st.dead - bytes != gap_of(st) {
+        return 1;
+    }
     return 0;
 }
 
@@ -568,6 +710,8 @@ pub fn clear[&s](st: &!s Store) -> [] int {
     st.free_head = 0 - 1;
     st.top = 0;
     st.dead = 0;
+    st.cfrom = 0 - 1;
+    st.cto = 0;
     st.ttl_keys = 0;
     return 0;
 }

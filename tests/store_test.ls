@@ -35,6 +35,11 @@ fn fill_with[&b](buf: &!b [byte], c: int, length: int) -> [] int {
 }
 
 fn put[&b](st: &!b store.Store, n: int, c: int, length: int) -> [] int {
+    return put_paid(st, n, c, length, 64);
+}
+
+// `put` paying `records` records of compaction (`store.set_paid`).
+fn put_paid[&b](st: &!b store.Store, n: int, c: int, length: int, records: int) -> [] int {
     var answer = 0;
     region a {
         let kb = alloc_slice[a](24, byte_of(0));
@@ -42,7 +47,7 @@ fn put[&b](st: &!b store.Store, n: int, c: int, length: int) -> [] int {
         let k = key_into(kb, n);
         fill_with(vb, c, length);
         let key = kb[0..k];
-        answer = store.set(st, key, store.hash_of(st, key), vb[0..length], 0);
+        answer = store.set_paid(st, key, store.hash_of(st, key), vb[0..length], 0, records);
     }
     return answer;
 }
@@ -325,11 +330,17 @@ fn key_length(n: int) -> [] int {
 // keeps it until the new one is written) plus the new one do not fit -- and checks every value it reads back. This is
 // what compaction has to get exactly right: a value that moved must still be the value.
 fn test_compaction_keeps_every_value_and_refuses_only_when_it_must[&h](heap: &!h Heap) -> [heap] int {
+    // A whole compaction in one set, a few records at a time, and one record at a time (so commands land between steps).
+    return run_compaction_model(heap, 64) + run_compaction_model(heap, 3) + run_compaction_model(heap, 1);
+}
+
+fn run_compaction_model[&h](heap: &!h Heap, records: int) -> [heap] int {
     let cap = 1500;
     var st = store.open(heap, cap, 40, 0, store.evict_none());
     var seed = 777;
     var round = 0;
     var refused = 0;
+    var stepping = 0;
     borrow mut st as &!w in {
         region a {
             let model = alloc_slice[a](40, 0 - 1);
@@ -362,7 +373,7 @@ fn test_compaction_keeps_every_value_and_refuses_only_when_it_must[&h](heap: &!h
                     } else if live_bytes + record(key_length(key), length) > cap {
                         fits = false;
                     }
-                    let answer = put(w, key, letter, length);
+                    let answer = put_paid(w, key, letter, length, records);
                     if fits {
                         test.assert_eq(answer, 0);
                         if !in_place {
@@ -386,6 +397,10 @@ fn test_compaction_keeps_every_value_and_refuses_only_when_it_must[&h](heap: &!h
                     test.assert_eq(drop_key(w, key), existed);
                     model[key] = 0 - 1;
                 }
+                test.assert_eq(store.audit(w), 0);
+                if store.gap_of(w) > 0 {
+                    stepping = stepping + 1;
+                }
                 round = round + 1;
             }
             var k = 0;
@@ -397,6 +412,10 @@ fn test_compaction_keeps_every_value_and_refuses_only_when_it_must[&h](heap: &!h
         // It really was full, and really did compact.
         test.assert(refused > 100);
         test.assert(store.compactions(w) > 100);
+        // And with small steps it really was part way through one a good part of the time.
+        if records == 1 {
+            test.assert(stepping > 100);
+        }
     }
     store.close(heap, st);
     return 0;
@@ -445,6 +464,53 @@ fn test_lru_eviction_never_refuses_and_keeps_what_is_used[&h](heap: &!h Heap) ->
         test.assert_eq(found + 5, store.live(w));
         // The most recent writes are the likeliest to be there.
         test.assert(look(w, 999) >= 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+// Eviction and compaction spread over many sets: with one record of compaction paid per set, a long run under `allkeys-lru`
+// keeps the arena's books right after every set, never loses the key it just wrote, and never takes the keys that are used
+// all the time; and the arena is not refused once (`make_room` finishes what the steps did not).
+fn test_lru_with_compaction_in_small_steps_keeps_its_books[&h](heap: &!h Heap) -> [heap] int {
+    let cap = 6000;
+    var st = store.open(heap, cap, 1000, 0, store.evict_lru());
+    var stepped = 0;
+    borrow mut st as &!w in {
+        var i = 0;
+        while i < 6000 {
+            store.tick(w, 1000 + i);
+            var length = 4;
+            if i % 3 == 0 {
+                length = 40;
+            }
+            if i >= 5 {
+                test.assert_eq(put_paid(w, i, 'x', length, 1), 0);
+                // What was just written is there.
+                test.assert_eq(look(w, i), length * 1000 + 'x');
+            } else {
+                test.assert_eq(put_paid(w, i, 'h', 16, 1), 0);
+            }
+            var hot = 0;
+            while hot < 5 && i >= 5 {
+                test.assert(look(w, hot) >= 0);
+                hot = hot + 1;
+            }
+            test.assert_eq(store.audit(w), 0);
+            if store.gap_of(w) > 0 {
+                stepped = stepped + 1;
+            }
+            i = i + 1;
+        }
+        test.assert(store.evicted(w) > 5000);
+        test.assert(store.compactions(w) > 20);
+        // It spent a good part of the run part way through one.
+        test.assert(stepped > 500);
+        var hot = 0;
+        while hot < 5 {
+            test.assert_eq(look(w, hot), 16 * 1000 + 'h');
+            hot = hot + 1;
+        }
     }
     store.close(heap, st);
     return 0;
@@ -567,10 +633,12 @@ fn test_growing_the_only_key_is_refused_not_self_evicted[&h](heap: &!h Heap) -> 
         test.assert_eq(look(w, 1), 10 * 1000 + 'a');
         test.assert_eq(store.live(w), 1);
         test.assert_eq(store.evicted(w), 0);
-        // 8 + 2 + 40 = 50 more: 76 <= 100, so it fits beside the old record, which is garbage from then on.
+        // 8 + 2 + 40 = 50 more: 76 <= 100, so it fits beside the old record, which is garbage from then on (and, the arena
+        // being three quarters used with a quarter of it garbage, the set starts compacting it: the arena ends as one record).
         test.assert_eq(put(w, 1, 'c', 40), 0);
         test.assert_eq(look(w, 1), 40 * 1000 + 'c');
-        test.assert_eq(store.dead(w), 26);
+        test.assert_eq(store.dead(w), 0);
+        test.assert_eq(store.used(w), 50);
     }
     store.close(heap, st);
     return 0;

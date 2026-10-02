@@ -50,4 +50,8 @@ for i in range(200000):
     times.append((time.perf_counter() - t) * 1000)
 times.sort()
 print("arena %s MiB, %d records filled then 200,000 more SETs: median %.3f ms   p99.9 %.3f ms   max %.1f ms   (SETs over 2 ms: %d)" % (ARENA, n, times[len(times) // 2], times[int(len(times) * 0.999)], times[-1], sum(1 for t in times if t > 2)))
+s.sendall(cmd("INFO", "STATS"))
+time.sleep(0.2)
+info = s.recv(1 << 16).decode(errors="replace")
+print("   " + " ".join(l.strip() for l in info.split("\n") if l.startswith(("compactions", "evicted_keys", "max_turn_ms"))))
 p.terminate()

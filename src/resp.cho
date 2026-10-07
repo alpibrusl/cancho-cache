@@ -7,7 +7,7 @@ module resp;
 //
 // Sans-io, like `std.http`: `parse` is a pure function from the bytes in front of it to "this
 // command, this many bytes long", "not all here yet", or "this is not the protocol". It allocates
-// nothing and **never traps**, whatever the bytes (`tests/resp_test.ls` runs it over every string up to
+// nothing and **never traps**, whatever the bytes (`tests/resp_test.cho` runs it over every string up to
 // a length, to say so). A command comes back as offsets into the caller's buffer, in a table the
 // caller owns, so a well-formed command costs no copy.
 //

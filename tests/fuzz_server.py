@@ -5,7 +5,7 @@
 
 Three sources, all seeded: pure random bytes, valid commands with a few bytes flipped, and valid commands cut at a
 random point and followed by more. A trap would show as the process ending (SIGILL); a hang as a PING that does not
-come back. The parser itself is also swept over every short string by `tests/resp_test.ls`; this is the loop around it.
+come back. The parser itself is also swept over every short string by `tests/resp_test.cho`; this is the loop around it.
 """
 import os, random, socket, subprocess, sys, time
 

@@ -121,7 +121,7 @@ try:
     f = info_fields(text)
     for section in ("Server", "Clients", "Memory", "Stats", "Keyspace"):
         check("INFO has a # %s section" % section, ("# " + section).encode() in text)
-    check("INFO says what it is", f.get(("Server", "server_name")) == "lexsys-cache" and f.get(("Server", "redis_version"), "").startswith("7."))
+    check("INFO says what it is", f.get(("Server", "server_name")) == "cancho-cache" and f.get(("Server", "redis_version"), "").startswith("7."))
     check("INFO knows its port", f.get(("Server", "tcp_port")) == str(PORT))
     check("INFO counts this connection", int(f[("Clients", "connected_clients")]) >= 1)
     check("INFO shows the policy", f.get(("Memory", "maxmemory_policy")) == "allkeys-lru")

@@ -510,7 +510,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return reply.put(sc, at, "+OK\r\n");
     }
-    // The commands about the connection and the server (`src/session.ls`).
+    // The commands about the connection and the server (`src/session.cho`).
     if reply.is_word(name, "HELLO") {
         return session.hello(view, table, sc, at, link, names);
     }

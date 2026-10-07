@@ -43,6 +43,11 @@ fn stride() -> [] int {
     return 8;
 }
 
+// Buckets of keys a `WATCH` tells apart (a power of two).
+fn watch_buckets() -> [] int {
+    return 4096;
+}
+
 // Bytes of header before each record's key.
 fn header() -> [] int {
     return 8;
@@ -80,6 +85,10 @@ pub res struct Store {
     cfrom: int,
     cto: int,
     last: int,
+    // For `WATCH` (`docs/design.md` section 14): a counter for each bucket of keys, bumped by every modification of a key in it,
+    // and an epoch bumped by `clear`.
+    versions: Box[[int]],
+    epoch: int,
 }
 
 // A store with an arena of `memory` bytes and room for `max_keys` keys. `seed` is mixed into every hash; it is a
@@ -90,12 +99,13 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch } = st;
     unbox_slice(heap, index);
+    unbox_slice(heap, versions);
     unbox_slice(heap, meta);
     unbox_slice(heap, data);
     return live;
@@ -264,11 +274,29 @@ fn put_expiry[&s](st: &!s Store, m: int, at: int) -> [] int {
     return 0;
 }
 
+// A key with hash `h` was modified: every `WATCH` of its bucket sees it.
+fn bump[&s](st: &!s Store, h: int) -> [] int {
+    let v = contents(st.versions);
+    let b = h & watch_buckets() - 1;
+    v[b] = v[b] + 1;
+    return 0;
+}
+
+// The version of the bucket of hash `h`, and the epoch: what `WATCH` records and `EXEC` compares.
+pub fn version_of[&s](st: &s Store, h: int) -> [] int {
+    return contents(st.versions)[h & watch_buckets() - 1];
+}
+
+pub fn epoch_of[&s](st: &s Store) -> [] int {
+    return st.epoch;
+}
+
 // Take entry `e` out: its record becomes garbage, its number goes on the free chain, its slot is closed up.
 fn remove_entry[&s](st: &!s Store, e: int) -> [] int {
     let meta = contents(st.meta);
     let m = stride() * e;
     let slot = slot_of(st, e);
+    bump(st, meta[m + 5]);
     st.dead = st.dead + header() + meta[m + 1] + meta[m + 3];
     put_expiry(st, m, 0);
     meta[m + 6] = st.free_head;
@@ -311,6 +339,7 @@ pub fn expiry_of[&s](st: &s Store, e: int) -> [] int {
 
 // Give entry `e` an expiry (0: none).
 pub fn set_expiry[&s](st: &!s Store, e: int, at: int) -> [] int {
+    bump(st, contents(st.meta)[stride() * e + 5]);
     put_expiry(st, stride() * e, at);
     return 0;
 }
@@ -489,6 +518,7 @@ fn append[&s, &k, &v](st: &!s Store, e: int, key: &k [byte], value: &v [byte]) -
 
 // `set` without the reclaiming after it; the entry stored is left in `last`.
 fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], expiry: int) -> [] int {
+    bump(st, h);
     let e0 = find(st, key, h);
     if e0 >= 0 {
         let meta = contents(st.meta);
@@ -713,6 +743,7 @@ pub fn clear[&s](st: &!s Store) -> [] int {
     st.cfrom = 0 - 1;
     st.cto = 0;
     st.ttl_keys = 0;
+    st.epoch = st.epoch + 1;
     return 0;
 }
 

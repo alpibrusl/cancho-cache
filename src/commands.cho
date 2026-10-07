@@ -562,3 +562,36 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
     }
     return reply.put(sc, o, "\r\n");
 }
+
+// ---------------------------------------------------------------------
+// Arity
+// ---------------------------------------------------------------------
+
+// What Redis calls a command's arity, for the check a transaction makes when a command is queued (`docs/design.md` section 14.2): the
+// number of words in the command, its own name included, exactly if positive and at least `-n` if negative; 0 for a command this server
+// does not know. These are Redis 7.0's, and `tests/differential.py` checks every one against Redis by queueing the command with one word
+// too few, exactly enough and one too many.
+pub fn arity[&w](name: &w [byte]) -> [] int {
+    if reply.is_word(name, "GET") || reply.is_word(name, "ECHO") || reply.is_word(name, "INCR") || reply.is_word(name, "DECR") || reply.is_word(name, "TTL") || reply.is_word(name, "PTTL") || reply.is_word(name, "PERSIST") || reply.is_word(name, "GETDEL") || reply.is_word(name, "STRLEN") || reply.is_word(name, "TYPE") || reply.is_word(name, "SELECT") {
+        return 2;
+    }
+    if reply.is_word(name, "INCRBY") || reply.is_word(name, "DECRBY") || reply.is_word(name, "SETNX") || reply.is_word(name, "GETSET") {
+        return 3;
+    }
+    if reply.is_word(name, "SETEX") || reply.is_word(name, "PSETEX") {
+        return 4;
+    }
+    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") {
+        return 1;
+    }
+    if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
+        return 0 - 1;
+    }
+    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") {
+        return 0 - 2;
+    }
+    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") {
+        return 0 - 3;
+    }
+    return 0;
+}

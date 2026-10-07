@@ -27,7 +27,7 @@ def cmd(*args):
 
 
 def start(argv, port):
-    p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=None if os.environ.get("DIFF_STDERR") else subprocess.DEVNULL)
     for _ in range(100):
         try:
             socket.create_connection(("127.0.0.1", port), 0.2).close()
@@ -227,7 +227,7 @@ known = [
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
     ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
-    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "38 commands, not 240"),
+    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "43 commands, not 240"),
     ("COMMAND", cmd("COMMAND"), "the command table (flags, arity, key positions) is not kept"),
 ]
 
@@ -252,6 +252,76 @@ def random_mix(seed, ops, keys=20, longest=300, prefix="m"):
 
 
 cases += [("random mix %d" % seed, random_mix(seed, 400)) for seed in (1, 2, 3, 4, 5)]
+
+def seq(*commands):
+    """Several commands, each given as a tuple of words, as one stream."""
+    return b"".join(cmd(*c) for c in commands)
+
+
+M, X = ("MULTI",), ("EXEC",)
+# Transactions (`docs/design.md` section 14): what one connection can show. A second connection (a write to a watched key) is `tests/transactions.py`.
+cases += [
+    ("MULTI EXEC, several commands", seq(M, ("SET", "t:a", "1"), ("INCR", "t:a"), ("GET", "t:a"), ("DEL", "t:a"), X)),
+    ("MULTI EXEC, empty", seq(M, X)),
+    ("MULTI EXEC, one command", seq(M, ("PING",), X)),
+    ("MULTI, then the connection reads the queue back", seq(("SET", "t:r", "5"), M, ("GET", "t:r"), ("INCR", "t:r"), ("GET", "t:r"), X, ("GET", "t:r"))),
+    ("MULTI nested", seq(M, M, ("PING",), X)),
+    ("MULTI with an argument", seq(("MULTI", "x"))),
+    ("MULTI with an argument inside MULTI", seq(M, ("MULTI", "x"), ("PING",), X)),
+    ("EXEC without MULTI", seq(X)),
+    ("EXEC with an argument", seq(("EXEC", "x"))),
+    ("DISCARD without MULTI", seq(("DISCARD",))),
+    ("DISCARD with an argument", seq(("DISCARD", "x"))),
+    ("MULTI DISCARD", seq(M, ("SET", "t:d", "1"), ("DISCARD",), ("GET", "t:d"))),
+    ("MULTI DISCARD, then a new MULTI", seq(M, ("SET", "t:d", "1"), ("DISCARD",), M, ("GET", "t:d"), X)),
+    ("MULTI, unknown command, EXEC", seq(M, ("SET", "t:u", "1"), ("NOSUCH", "a", "b"), X, ("GET", "t:u"))),
+    ("MULTI, wrong arity, EXEC", seq(M, ("SET", "t:u", "1"), ("GET",), X, ("GET", "t:u"))),
+    ("EXECABORT clears the transaction", seq(M, ("NOSUCH",), X, X, ("PING",))),
+    ("DISCARD after an error in the queue", seq(M, ("NOSUCH",), ("DISCARD",), M, ("PING",), X)),
+    ("runtime error in the middle, the rest run", seq(("SET", "t:e", "x"), M, ("SET", "t:f", "1"), ("INCR", "t:e"), ("GET", "t:f"), X)),
+    ("syntax error inside a command, found at EXEC", seq(M, ("SET", "t:s", "1", "EX"), ("SET", "t:s", "2"), ("GET", "t:s"), X)),
+    ("SET options inside MULTI", seq(M, ("SET", "t:o", "1", "EX", "100"), ("TTL", "t:o"), ("SET", "t:o", "2", "NX"), ("GET", "t:o"), X)),
+    ("MGET and MSET inside MULTI", seq(M, ("MSET", "t:m1", "a", "t:m2", "b"), ("MGET", "t:m1", "t:m2", "t:m3"), X)),
+    ("QUIT inside MULTI closes the connection", seq(M, ("PING",), ("QUIT",), ("PING",))),
+    ("RESET inside MULTI", seq(M, ("PING",), ("RESET",), X)),
+    ("RESET inside MULTI, then MULTI again", seq(M, ("SET", "t:z", "1"), ("RESET",), M, ("GET", "t:z"), X)),
+    ("WATCH, no change, EXEC", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), M, ("GET", "t:w"), X)),
+    ("WATCH, own write, EXEC aborts", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("SET", "t:w", "2"), M, ("GET", "t:w"), X, ("GET", "t:w"))),
+    ("WATCH, own write of the same value, EXEC aborts", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("SET", "t:w", "1"), M, ("GET", "t:w"), X)),
+    ("WATCH, own DEL, EXEC aborts", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("DEL", "t:w"), M, ("PING",), X)),
+    ("WATCH, own EXPIRE, EXEC aborts", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("EXPIRE", "t:w", "100"), M, ("PING",), X)),
+    ("WATCH, own FLUSHALL, EXEC aborts", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("FLUSHALL",), M, ("PING",), X)),
+    ("WATCH a key that does not exist, then create it", seq(("DEL", "t:n"), ("WATCH", "t:n"), ("SET", "t:n", "1"), M, ("PING",), X)),
+    ("WATCH, a read does not abort", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("GET", "t:w"), ("TTL", "t:w"), M, ("PING",), X)),
+    ("WATCH, the abort clears the watch", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("SET", "t:w", "2"), M, X, M, ("PING",), X)),
+    ("WATCH several keys, one changes", seq(("SET", "t:w1", "1"), ("WATCH", "t:w1", "t:w2", "t:w3"), ("SET", "t:w2", "x"), M, ("PING",), X)),
+    ("WATCH, UNWATCH, then a write", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("UNWATCH",), ("SET", "t:w", "2"), M, ("PING",), X)),
+    ("UNWATCH with nothing watched", seq(("UNWATCH",))),
+    ("UNWATCH with an argument", seq(("UNWATCH", "x"))),
+    ("WATCH with no key", seq(("WATCH",))),
+    ("WATCH inside MULTI", seq(M, ("WATCH", "t:w"), ("PING",), X)),
+    ("WATCH inside MULTI does not mark the transaction", seq(M, ("WATCH", "t:w"), X)),
+    ("WATCH, DISCARD clears the watch", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), M, ("DISCARD",), ("SET", "t:w", "2"), M, ("PING",), X)),
+    ("WATCH, RESET clears the watch", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), ("RESET",), ("SET", "t:w", "2"), M, ("PING",), X)),
+    ("WATCH the same key twice", seq(("SET", "t:w", "1"), ("WATCH", "t:w", "t:w"), M, ("PING",), X)),
+    ("HELLO 3, MULTI EXEC", seq(("HELLO", "3"), M, ("SET", "t:h", "1"), ("GET", "t:h"), ("GET", "t:nokey"), X)),
+    ("HELLO 3, an aborted EXEC is a RESP3 null", seq(("HELLO", "3"), ("SET", "t:w", "1"), ("WATCH", "t:w"), ("SET", "t:w", "2"), M, ("PING",), X)),
+    ("HELLO 3, MULTI errors", seq(("HELLO", "3"), M, ("NOSUCH",), X, X)),
+    ("WATCH cleared by a successful EXEC", seq(("SET", "t:w", "1"), ("WATCH", "t:w"), M, X, ("SET", "t:w", "2"), M, ("PING",), X)),
+    ("a long transaction", seq(M, *[("SET", "t:l%d" % i, "v" * i) for i in range(40)], *[("GET", "t:l%d" % i) for i in range(40)], X)),
+]
+# Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
+# transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
+# COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
+for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH"]:
+    for given in range(0, 5):
+        numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "SETEX", "PSETEX")
+        args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]
+        cases.append(("arity of %s with %d words, queued" % (name, given), seq(M, (name, *args), X)))
+for name in ("CLIENT", "CONFIG", "AUTH", "SELECT", "NOSUCH"):
+    cases.append(("arity of %s with no words, queued" % name, seq(M, (name,), X)))
+
 # Against a cache whose index has 32 slots (`cache <port> 64 16`) and a keyspace that fills half of it, so that keys do collide, probe runs
 # form, and a deletion has to shift entries back: with the default million-key index twenty keys never touch each other.
 small_cases = [("small index, random mix %d" % seed, random_mix(seed, 500, keys=14, longest=60, prefix="s")) for seed in range(11, 19)]
@@ -272,6 +342,8 @@ def main():
     try:
         rnd = random.Random(20261002)
         for name, data in cases:
+            if os.environ.get("DIFF_TRACE"):
+                print("case", name, flush=True)
             for fname, chunks in framings(data, rnd):
                 want, got = norm(talk(REDIS_PORT, chunks)), norm(talk(CACHE_PORT, chunks))
                 if want != got:

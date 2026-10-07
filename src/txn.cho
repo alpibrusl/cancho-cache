@@ -1,0 +1,210 @@
+edition 5;
+
+module txn;
+
+import commands;
+import reply;
+import store;
+
+// `txn` -- `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` (`docs/design.md` section 14).
+//
+// A connection's transaction is a row of `stride()` ints and a queue of bytes, both in slabs the loop allocates at start:
+//
+//     0  1 between `MULTI` and `EXEC`/`DISCARD`
+//     1  1 if a command queued since `MULTI` was refused (`EXEC` then answers `-EXECABORT`)
+//     2  bytes of the queue in use
+//     3  commands queued
+//     4  keys watched
+//     5  the store's epoch when the first key was watched
+//     6+2i, 7+2i  the bucket of the i-th watched key and its version then
+//
+// A queued command is the bytes it arrived as, parsed again at `EXEC`. Every function here writes only to the answer buffer at the
+// offset it is given, reads the row and the queue within their bounds, and traps on no input.
+
+// Ints in a connection's row.
+pub fn stride() -> [] int {
+    return 24;
+}
+
+// Keys a connection may watch at once.
+fn most_watched() -> [] int {
+    return 8;
+}
+
+// Forget the transaction and every watch.
+pub fn clear[&x](tx: &!x [int]) -> [] int {
+    var i = 0;
+    while i < len(tx) {
+        tx[i] = 0;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Whether any watched key was modified since it was watched (or the store was cleared).
+fn broken[&x, &s](tx: &x [int], st: &s store.Store) -> [] bool {
+    if tx[4] == 0 {
+        return false;
+    }
+    if store.epoch_of(st) != tx[5] {
+        return true;
+    }
+    var i = 0;
+    while i < tx[4] {
+        if store.version_of(st, tx[6 + 2 * i]) != tx[7 + 2 * i] {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn watch[&v, &t, &b, &s, &x](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &s store.Store, tx: &!x [int]) -> [] int {
+    var k = 1;
+    while k < table[0] {
+        let bucket = store.hash_of(st, reply.arg_of(view, table, k)) & 4095;
+        var seen = false;
+        var i = 0;
+        while i < tx[4] {
+            if tx[6 + 2 * i] == bucket {
+                seen = true;
+            }
+            i = i + 1;
+        }
+        if !seen {
+            if tx[4] >= most_watched() {
+                return reply.put(sc, at, "-ERR too many watched keys\r\n");
+            }
+            if tx[4] == 0 {
+                tx[5] = store.epoch_of(st);
+            }
+            tx[6 + 2 * tx[4]] = bucket;
+            tx[7 + 2 * tx[4]] = store.version_of(st, bucket);
+            tx[4] = tx[4] + 1;
+        }
+        k = k + 1;
+    }
+    return reply.put(sc, at, "+OK\r\n");
+}
+
+// What Redis answers `EXEC` with an argument, in or out of a transaction (and a transaction in progress is discarded).
+fn exec_arity[&b](sc: &!b [byte], at: int) -> [] int {
+    return reply.put(sc, at, "-EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command\r\n");
+}
+
+// Offer the command (`n` bytes of `view`) to the transaction layer. Answers the new offset into `sc` and what happened:
+//
+//     0  not the transaction layer's: the caller runs it as it would any command (this includes a command it refused to queue
+//        because Redis answers the error the command itself gives, an unknown name)
+//     1  answered here
+//     2  `EXEC` of a queue: the array header is written, and the caller runs the `tx[3]` queued commands in `queue[0..tx[2]]`
+//        and then calls `clear`
+pub fn handle[&v, &t, &b, &s, &x, &q, &c](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &s store.Store, tx: &!x [int], queue: &!q [byte], link: &!c [int], n: int) -> [] (int, int) {
+    let argc = table[0];
+    if argc == 0 {
+        // An empty array: `commands.execute` answers nothing to it, and so does a transaction.
+        return (at, 0);
+    }
+    let name = reply.arg_of(view, table, 0);
+    let multi = tx[0] == 1;
+    if !multi {
+        // Outside a transaction only these five are ours, and the others cost nothing here but this comparison.
+        if len(name) < 4 || len(name) > 7 {
+            return (at, 0);
+        }
+        if reply.is_word(name, "MULTI") {
+            if argc != 1 {
+                return (reply.wrong_arguments(sc, at, name), 1);
+            }
+            tx[0] = 1;
+            return (reply.put(sc, at, "+OK\r\n"), 1);
+        }
+        if reply.is_word(name, "WATCH") {
+            if argc < 2 {
+                return (reply.wrong_arguments(sc, at, name), 1);
+            }
+            return (watch(view, table, sc, at, st, tx), 1);
+        }
+        if reply.is_word(name, "UNWATCH") {
+            if argc != 1 {
+                return (reply.wrong_arguments(sc, at, name), 1);
+            }
+            clear(tx);
+            return (reply.put(sc, at, "+OK\r\n"), 1);
+        }
+        if reply.is_word(name, "DISCARD") {
+            if argc != 1 {
+                return (reply.wrong_arguments(sc, at, name), 1);
+            }
+            return (reply.put(sc, at, "-ERR DISCARD without MULTI\r\n"), 1);
+        }
+        if reply.is_word(name, "EXEC") {
+            if argc != 1 {
+                return (exec_arity(sc, at), 1);
+            }
+            return (reply.put(sc, at, "-ERR EXEC without MULTI\r\n"), 1);
+        }
+        if reply.is_word(name, "RESET") && argc == 1 {
+            clear(tx);
+        }
+        return (at, 0);
+    }
+    // Inside a transaction. `QUIT` and `RESET` are the connection's own; the rest is checked for its arity and then queued or run.
+    if reply.is_word(name, "QUIT") {
+        return (at, 0);
+    }
+    if reply.is_word(name, "RESET") && argc == 1 {
+        clear(tx);
+        return (at, 0);
+    }
+    if reply.is_word(name, "EXEC") && argc != 1 {
+        clear(tx);
+        return (exec_arity(sc, at), 1);
+    }
+    let a = commands.arity(name);
+    if a == 0 {
+        // Unknown: Redis refuses it, with the error the command gives, and the transaction can no longer run.
+        tx[1] = 1;
+        return (at, 0);
+    }
+    if a > 0 && argc != a || a < 0 && argc < 0 - a {
+        tx[1] = 1;
+        return (reply.wrong_arguments(sc, at, name), 1);
+    }
+    if reply.is_word(name, "MULTI") {
+        return (reply.put(sc, at, "-ERR MULTI calls can not be nested\r\n"), 1);
+    }
+    if reply.is_word(name, "WATCH") {
+        return (reply.put(sc, at, "-ERR WATCH inside MULTI is not allowed\r\n"), 1);
+    }
+    if reply.is_word(name, "DISCARD") {
+        clear(tx);
+        return (reply.put(sc, at, "+OK\r\n"), 1);
+    }
+    if reply.is_word(name, "EXEC") {
+        if tx[1] == 1 {
+            clear(tx);
+            return (reply.put(sc, at, "-EXECABORT Transaction discarded because of previous errors.\r\n"), 1);
+        }
+        if broken(tx, st) {
+            clear(tx);
+            if link[3] == 3 {
+                return (reply.put(sc, at, "_\r\n"), 1);
+            }
+            return (reply.put(sc, at, "*-1\r\n"), 1);
+        }
+        return (reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), tx[3]), "\r\n"), 2);
+    }
+    if tx[2] + n > len(queue) {
+        tx[1] = 1;
+        return (reply.put(sc, at, "-ERR transaction queue is full\r\n"), 1);
+    }
+    var i = 0;
+    while i < n {
+        queue[tx[2] + i] = view[i];
+        i = i + 1;
+    }
+    tx[2] = tx[2] + n;
+    tx[3] = tx[3] + 1;
+    return (reply.put(sc, at, "+QUEUED\r\n"), 1);
+}

@@ -154,7 +154,7 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
 </div>
 
 <div class="three">
-  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 131 differential cases, four framings each. RESP2 and RESP3 over TCP.</p></div>
+  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 334 differential cases, four framings each. RESP2 and RESP3 over TCP.</p></div>
   <div><h3>A fixed arena</h3><p>Sized at start; nothing is allocated afterwards. Expiry, an approximate LRU, and a compaction whose worst pause is a slice of work, not the arena.</p></div>
   <div><h3>An authority you can read</h3><p>The report lists exactly what the program may do. It is checked in CI, not assumed.</p></div>
 </div>
@@ -179,8 +179,8 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <div class="stats">
     <div><b>1.07&ndash;2.00&times;</b><span>Redis's throughput on one core, pre-registered cells, medians of five interleaved rounds</span></div>
     <div><b>3&ndash;8 ms</b><span>worst-case pause (a compaction slice), measured on a noisy VM; 115 ms before it was sliced</span></div>
-    <div><b>131</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
-    <div><b>38 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
+    <div><b>334</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
+    <div><b>43 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
   </div>
   <p class="note"><a href="https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md">The design document</a> holds the gate, every measurement and its caveats, and each mutant the harnesses were checked against.</p>
 </section>
@@ -196,8 +196,7 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
     <div class="no"><h3>Not yet</h3><ul>
       <li>Data structures beyond strings; pub/sub; scripting</li>
       <li>Persistence, replication, cluster, TLS</li>
-      <li><code>MULTI</code>/<code>EXEC</code>: a default <code>redis-py</code> <code>pipeline()</code> fails; <code>pipeline(transaction=False)</code> works</li>
-      <li>One database; 256 connections; a 16 KiB command</li>
+            <li>One database; 256 connections; a 16 KiB command</li>
     </ul></div>
   </div>
 </section>
@@ -211,7 +210,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)
 (cd ../cancho &amp;&amp; git checkout "$REV" &amp;&amp; cargo build --release -p cancho)
 export CANCHO=$PWD/../cancho/target/release/cancho
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho -o build/cache
 build/cache 6379 &amp;
 redis-cli -p 6379 PING     # PONG</pre>
   <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru]]]</code>. Sizes are fixed at start.</p>

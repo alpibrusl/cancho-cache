@@ -7,6 +7,7 @@ import commands;
 import reply;
 import resp;
 import store;
+import txn;
 
 // `cache` -- a Redis-compatible cache (`docs/design.md`): the loop. The commands are `src/commands.cho`, the memory is
 // `src/store.cho`, the protocol `src/resp.cho`.
@@ -69,6 +70,9 @@ res struct Core {
     // commands answered, connections accepted, port, the next client id).
     names: Box[[byte]],
     info: Box[[int]],
+    // Each connection's transaction: a row of `txn.stride()` ints and a queue of `input_size()` bytes (`src/txn.cho`).
+    txns: Box[[int]],
+    queues: Box[[byte]],
     store: store.Store,
     // When the sweep for expired keys last ran, in the store's milliseconds.
     swept: int,
@@ -142,6 +146,8 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
     let pd = contents(core.pends);
     let sc = contents(core.scratch);
     let tb = contents(core.table);
+    let tall = contents(core.txns);
+    let qall = contents(core.queues);
     let size = input_size();
     let p = stride() * k;
     let base = k * size;
@@ -172,8 +178,45 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                 st[p + 3] = 1;
                 going = false;
             } else {
-                at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 9], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                // `MULTI` and its kin, and a command inside a transaction, are answered or queued by `txn`; everything else is run here.
+                let tx = tall[txn.stride() * k..txn.stride() * k + txn.stride()];
+                let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[base..base + size], st[p + 5..p + 9], n);
+                at = after;
+                if status == 0 {
+                    at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 9], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                }
                 contents(core.info)[2] = contents(core.info)[2] + 1;
+                if status == 2 {
+                    // `EXEC`: run what was queued, one command at a time, the answers going out as they fill the scratch buffer. No other
+                    // connection's command can run in between, which is what makes it atomic.
+                    let queue = qall[base..base + size];
+                    var qi = 0;
+                    var c = 0;
+                    while c < tx[3] {
+                        let qview = queue[qi..tx[2]];
+                        let qn = resp.parse(qview, tb);
+                        if qn <= 0 {
+                            c = tx[3];
+                        } else {
+                            if reply.is_word(reply.arg_of(qview, tb, 0), "UNWATCH") {
+                                // The watches were checked already and `clear` below forgets them.
+                                at = reply.put(sc, at, "+OK\r\n");
+                            } else {
+                                at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 9], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                            }
+                            qi = qi + qn;
+                            c = c + 1;
+                            if at + commands.reserve() > len(sc) {
+                                st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                                at = 0;
+                                if st[p + 2] < 0 {
+                                    c = tx[3];
+                                }
+                            }
+                        }
+                    }
+                    txn.clear(tx);
+                }
                 if st[p + 7] == 1 {
                     st[p + 3] = 1;
                     going = false;
@@ -300,6 +343,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 6] = contents(core.info)[5];
                         st[p + 7] = 0;
                         st[p + 8] = 2;
+                        txn.clear(contents(core.txns)[txn.stride() * slot..txn.stride() * slot + txn.stride()]);
                         contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {
                             if conns.nonblocking(ct, slot) != 0 || conns.watch(ct, core.poller, slot, slot + 1, 1) != 0 {
@@ -332,7 +376,7 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), store: store.open(heap, memory, max_keys, 0, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, limit * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, 0, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
             borrow mut core as &!cw in {
                 store.tick(cw.store, clock_ms(clock));
@@ -405,7 +449,7 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 }
             }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, table, scratch, tmp, names, info, store, swept } = core;
+            let Core { poller, events, state, bufs, pends, table, scratch, tmp, names, info, txns, queues, store, swept } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
@@ -416,6 +460,8 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
             unbox_slice(heap, tmp);
             unbox_slice(heap, names);
             unbox_slice(heap, info);
+            unbox_slice(heap, txns);
+            unbox_slice(heap, queues);
             store.close(heap, store);
             return 0;
         }

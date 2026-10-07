@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-cache</title>
+<meta name="description" content="A Redis-compatible cache written in cancho: no Ffi, no unsafe, and an authority report that says it never touches the filesystem. RESP2 and RESP3, expiry, LRU eviction. Alpha.">
+<meta property="og:title" content="cancho-cache: a Redis-compatible cache, written in cancho">
+<meta property="og:description" content="Strings, expiry and LRU eviction over RESP2/RESP3. One thread, a fixed arena, nothing allocated after start, and a checkable authority report.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://alpibrusl.github.io/cancho-cache/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="cancho-cache: a stack of three boulders on a blue disc, and the words cancho cache.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta property="og:url" content="https://alpibrusl.github.io/cancho-cache/">
+<style>
+:root {
+  --bg: #fbfbfd; --fg: #14171c; --muted: #5b6573; --line: #e1e4ea; --surface: #ffffff; --soft: #f1f3f8;
+  --accent: #2f5de0; --accent-fg: #ffffff; --good: #0f7b5f; --warn: #92400e; --warn-bg: #fdf6e7; --warn-line: #e0b765; --bad: #d1362f;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1014; --fg: #e8eaee; --muted: #9ba5b3; --line: #232932; --surface: #141920; --soft: #181d25;
+    --accent: #7ea2ff; --accent-fg: #0b1020; --good: #4fd1a5; --warn: #f3c77a; --warn-bg: #1d1a12; --warn-line: #8a6a2a; --bad: #ff6b63; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.6 var(--font); }
+a { color: var(--accent); text-underline-offset: .15em; }
+.wrap { width: 100%; max-width: 68rem; margin: 0 auto; padding: 0 20px; }
+.skip { position: absolute; left: 16px; top: -4rem; background: var(--accent); color: var(--accent-fg); padding: .5rem .8rem; border-radius: 6px; z-index: 9; }
+.skip:focus { top: 8px; }
+a:focus-visible, .btn:focus-visible, pre:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 1.5rem; height: 3.4rem; }
+.brand { font: 700 1rem var(--mono); color: var(--fg); text-decoration: none; letter-spacing: -.01em; white-space: nowrap; }
+nav { display: flex; gap: 1.2rem; margin-left: auto; }
+nav a { color: var(--muted); text-decoration: none; font-size: .93rem; white-space: nowrap; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 40rem) { nav a.opt { display: none; } }
+
+h1 { font-size: clamp(2.3rem, 6.2vw, 4rem); line-height: 1.04; letter-spacing: -.035em; margin: 0 0 1rem; font-weight: 750; }
+h2 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); line-height: 1.15; letter-spacing: -.025em; margin: 0 0 .5rem; font-weight: 700; }
+h3 { font-size: 1.05rem; margin: 0 0 .25rem; }
+p { margin: 0 0 1rem; }
+section { padding: 4.5rem 0 0; }
+.lead { font-size: 1.2rem; color: var(--muted); max-width: 34rem; }
+.sub { color: var(--muted); max-width: 38rem; }
+code { font-family: var(--mono); font-size: .9em; background: var(--soft); padding: .1em .35em; border-radius: 5px; }
+
+.hero { padding: 4rem 0 0; display: grid; gap: 2.5rem; align-items: center; }
+@media (min-width: 58rem) { .hero { grid-template-columns: 1.05fr 1fr; } }
+.badge { display: inline-flex; gap: .5rem; align-items: center; font-size: .82rem; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-line); padding: .22rem .7rem; border-radius: 999px; margin-bottom: 1.2rem; text-decoration: none; }
+.badge i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn-line); display: inline-block; }
+.cta { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.6rem; }
+.btn { display: inline-block; padding: .65rem 1.15rem; border-radius: 8px; font-weight: 600; text-decoration: none; border: 1px solid var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); }
+.btn.ghost { color: var(--accent); }
+.btn.ghost:hover { background: var(--soft); }
+
+.term { background: #0d1117; color: #d6dde8; border: 1px solid #262c36; border-radius: 12px; font: .84rem/1.65 var(--mono); padding: 1rem 1.1rem 1.1rem; box-shadow: 0 18px 50px -24px rgba(20, 30, 70, .55); overflow-x: auto; }
+.term .bar { display: flex; gap: .35rem; margin-bottom: .8rem; }
+.term .bar i { width: .65rem; height: .65rem; border-radius: 50%; background: #2d3440; display: block; }
+.term .c { color: #7d8797; } .term .g { color: #5fd3a6; } .term .b { color: #8cb0ff; } .term .y { color: #e8c170; } .term .r { color: #ff8b82; }
+.term pre { margin: 0; white-space: pre; }
+
+.three { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 3.2rem; }
+.three div { border-top: 3px solid var(--accent); padding-top: .8rem; }
+.three p { color: var(--muted); margin: 0; font-size: .96rem; }
+
+.figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.2rem; }
+.figure.wide { margin-top: 2rem; }
+.figure svg, .figure img { display: block; width: 100%; height: auto; }
+.figure h3 { margin-bottom: .6rem; }
+.figure figcaption { color: var(--muted); font-size: .88rem; margin-top: .8rem; }
+.two { display: grid; gap: 1rem; grid-template-columns: 1fr; margin-top: 2rem; }
+@media (min-width: 52rem) { .two { grid-template-columns: 1fr 1fr; } }
+svg .t { fill: var(--fg); font: 600 13px var(--font); } svg .s { fill: var(--muted); font: 12px var(--font); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; } svg .hot { fill: var(--soft); stroke: var(--accent); stroke-width: 2; }
+svg .ar { stroke: var(--muted); stroke-width: 1.5; fill: none; } svg .dash { stroke-dasharray: 5 4; }
+svg .dot { fill: var(--accent); } svg .axis { stroke: var(--line); stroke-width: 2; }
+svg .bar1 { fill: var(--accent); } svg .bar2 { fill: var(--line); }
+
+.grid { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 2rem; }
+.grid div { background: var(--surface); padding: 1.1rem 1.2rem; }
+.grid p { color: var(--muted); font-size: .93rem; margin: 0; }
+
+.stats { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin: 2rem 0 0; }
+.stats div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
+.stats b { display: block; font: 700 1.9rem/1.1 var(--font); letter-spacing: -.03em; }
+.stats span { color: var(--muted); font-size: .88rem; }
+.note { color: var(--muted); font-size: .88rem; margin-top: .9rem; }
+
+pre.code { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; font: .86rem/1.65 var(--mono); overflow-x: auto; margin: 1.4rem 0 0; }
+.status { margin-top: 4.5rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 14px; padding: 1.3rem 1.5rem; }
+.status h2 { font-size: 1.2rem; letter-spacing: -.01em; }
+.status ul { margin: .4rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer { margin-top: 4rem; border-top: 1px solid var(--line); padding: 1.6rem 0 2.6rem; color: var(--muted); font-size: .9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
+table.fit { width: 100%; border-collapse: collapse; margin-top: 2rem; font-size: .95rem; }
+table.fit th, table.fit td { text-align: left; padding: .8rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.fit thead th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+table.fit tbody th { font-weight: 650; }
+table.fit td { color: var(--muted); }
+table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us th { color: var(--fg); }
+@media (max-width: 44rem) { .fitwrap { overflow-x: auto; } table.fit.wide { min-width: 38rem; } }
+.cols { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); margin-top: 1.4rem; }
+.cols > div { border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.3rem; background: var(--surface); }
+.cols ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--muted); } .cols li { margin: .25rem 0; }
+.cols .no h3 { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+.hero-logo { display: block; width: min(100%, 21rem); height: auto; margin: 0 auto; border-radius: 16px; }
+.brand img { height: 1.7rem; width: 1.7rem; vertical-align: middle; margin-right: .5rem; border-radius: 6px; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#top"><img src="assets/cancho-cache-logo-256.png" alt="">cancho-cache</a>
+  <nav aria-label="Sections">
+    <a href="#why" class="opt">Why</a><a href="#proof" class="opt">Evidence</a><a href="#fit" class="opt">Where it fits</a><a href="#start">Try it</a>
+    <a href="https://github.com/alpibrusl/cancho-cache">GitHub</a>
+  </nav>
+</div></header>
+
+<main id="main" class="wrap">
+
+<div class="hero" id="top">
+  <div>
+    <a class="badge" href="#status"><i></i>Alpha · a string cache, not a Redis replacement yet</a>
+    <h1>A Redis-compatible cache that says what it can do.</h1>
+    <p class="lead">Written in cancho: no <code>Ffi</code>, no <code>unsafe</code>, and an authority report, checked in CI, that says it never touches the filesystem or foreign code. <code>redis-cli</code>, <code>redis-py</code> and <code>ioredis</code> connect and work.</p>
+    <div class="cta"><a class="btn primary" href="#start">Try it</a><a class="btn ghost" href="#proof">See the evidence</a></div>
+  </div>
+  <div class="term" role="img" aria-label="A redis-cli session and the authority report"><div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="c">$</span> redis-cli -p 6379 SET greeting hello EX 60
+<span class="g">OK</span>
+<span class="c">$</span> redis-cli -p 6379 TTL greeting
+<span class="y">(integer) 60</span>
+<span class="c">$</span> redis-cli -p 6379 INCRBY visits 41
+<span class="y">(integer) 41</span>
+
+<span class="c">$</span> cancho authority src/*.cho --std
+<span class="b">performs:</span> args, clock, conn_accept, conn_read,
+  conn_write, err_write, heap, net_in(""), poll
+<span class="g">never touches:</span> the filesystem, foreign code</pre>
+  </div>
+</div>
+
+<div class="three">
+  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 131 differential cases, four framings each. RESP2 and RESP3 over TCP.</p></div>
+  <div><h3>A fixed arena</h3><p>Sized at start; nothing is allocated afterwards. Expiry, an approximate LRU, and a compaction whose worst pause is a slice of work, not the arena.</p></div>
+  <div><h3>An authority you can read</h3><p>The report lists exactly what the program may do. It is checked in CI, not assumed.</p></div>
+</div>
+
+<section id="why">
+  <img class="hero-logo" src="assets/cancho-cache-logo.png" alt="cancho-cache logo: three boulders on a blue disc" width="512" height="512" style="margin-bottom:2rem">
+  <h2>A cache should be small enough to audit.</h2>
+  <div class="fitwrap"><table class="fit">
+    <thead><tr><th>Question</th><th>What cancho-cache does</th></tr></thead>
+    <tbody>
+      <tr><th>Can it read my files, or call into C?</th><td>No, and the authority report says so. Adding persistence later will name one directory in that report, not hide it.</td></tr>
+      <tr><th>Will a client library work?</th><td>The three tested ones connect and run a session; the handshake they send (<code>HELLO</code>, <code>INFO</code>, <code>CLIENT</code>) is answered the way Redis answers it.</td></tr>
+      <tr><th>Is it faster than Redis?</th><td>On one core it measures 1.07 to 2.00 times Redis's throughput on the pre-registered cells, while doing much less. It is not a claim about Redis with the same features.</td></tr>
+      <tr><th>What happens when memory is full?</th><td><code>noeviction</code> refuses with Redis's own error; <code>allkeys-lru</code> evicts, with the same hit rate as Redis at the same resident memory.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="proof">
+  <h2>Every claim has a measurement, or says it has none.</h2>
+  <p class="sub">The gate was fixed before the code. Where a claim turned out false, the design document was corrected in place.</p>
+  <div class="stats">
+    <div><b>1.07&ndash;2.00&times;</b><span>Redis's throughput on one core, pre-registered cells, medians of five interleaved rounds</span></div>
+    <div><b>3&ndash;8 ms</b><span>worst-case pause (a compaction slice), measured on a noisy VM; 115 ms before it was sliced</span></div>
+    <div><b>131</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
+    <div><b>38 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
+  </div>
+  <p class="note"><a href="https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md">The design document</a> holds the gate, every measurement and its caveats, and each mutant the harnesses were checked against.</p>
+</section>
+
+<section id="fit">
+  <h2>Where it fits.</h2>
+  <div class="cols">
+    <div><h3>Use it for</h3><ul>
+      <li>A string cache with expiry and an eviction policy</li>
+      <li>A host where the program's authority must be small and readable</li>
+      <li>Local development and tests against a Redis-shaped server</li>
+    </ul></div>
+    <div class="no"><h3>Not yet</h3><ul>
+      <li>Data structures beyond strings; pub/sub; scripting</li>
+      <li>Persistence, replication, cluster, TLS</li>
+      <li><code>MULTI</code>/<code>EXEC</code>: a default <code>redis-py</code> <code>pipeline()</code> fails; <code>pipeline(transaction=False)</code> works</li>
+      <li>One database; 256 connections; a 16 KiB command</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="start">
+  <h2>Try it.</h2>
+  <p class="sub">You need the cancho compiler at the revision CI uses, Rust to build it, and <code>redis-cli</code> to talk to it.</p>
+  <pre class="code">git clone https://github.com/alpibrusl/cancho
+git clone https://github.com/alpibrusl/cancho-cache &amp;&amp; cd cancho-cache
+REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)
+(cd ../cancho &amp;&amp; git checkout "$REV" &amp;&amp; cargo build --release -p cancho)
+export CANCHO=$PWD/../cancho/target/release/cancho
+mkdir -p build
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho -o build/cache
+build/cache 6379 &amp;
+redis-cli -p 6379 PING     # PONG</pre>
+  <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru]]]</code>. Sizes are fixed at start.</p>
+</section>
+
+<section class="status" id="status" style="padding:1.3rem 1.5rem">
+  <h2>Status: alpha</h2>
+  <ul>
+    <li>A string cache, step C2. The gaps to pairing with Redis, each with its design question and gate, are tracked in <a href="https://github.com/alpibrusl/cancho-cache/issues/8">the epic</a>.</li>
+    <li>Not a Redis replacement: see "Not yet" above, and the Limitations in the README.</li>
+  </ul>
+</section>
+
+</main>
+<footer><div class="wrap">
+  <a href="https://github.com/alpibrusl/cancho-cache">GitHub</a>
+  <a href="https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md">Design</a>
+  <a href="https://github.com/alpibrusl/cancho">cancho</a>
+  <a href="https://github.com/alpibrusl/cancho-hooks">cancho-hooks</a>
+  <span>EUPL-1.2</span>
+</div></footer>
+</body>
+</html>

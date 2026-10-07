@@ -1,31 +1,29 @@
+<p align="center"><img src="docs/assets/cancho-cache-logo.png" alt="cancho-cache" width="220"></p>
+
 # cancho-cache
 
 [![ci](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml)
 
-A Redis-compatible cache, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and a checkable
-authority report that says it never touches the filesystem or foreign code.
+**A Redis-compatible cache that says what it can do.** Strings, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that says it never touches the filesystem or foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py` and `ioredis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-It speaks RESP2 and RESP3 over TCP on one thread with one poller, holds its data in a fixed arena (sized at start, nothing
-allocated afterwards), and answers 38 commands of Redis 7.0's 240: strings, expiry and an LRU eviction policy. `redis-cli`,
-`redis-py` and `ioredis` connect and work.
+**Status: alpha, a string cache and not a Redis replacement.** It answers 38 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, one database, and no transactions (`MULTI`/`EXEC`, so a `redis-py` `pipeline()` in its default, transactional mode does not work; `pipeline(transaction=False)` does). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
-It is **not** a Redis replacement: no data structures beyond strings, no persistence, replication or TLS, one database, no
-transactions (`MULTI`/`EXEC`, so a `redis-py` `pipeline()` in its default, transactional mode does not work;
-`pipeline(transaction=False)` does).
+## What you get
 
-## Status
+* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (131 cases and 8 small-index cases, four framings each). The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12.
+* **Speed, measured.** On one core against Redis 7.0.15 it is at 1.07 to 2.00 times Redis's throughput on the pre-registered cells, with the same hit rate at the same resident memory, while doing much less than Redis does.
+* **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before.
+* **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and an approximate LRU (`allkeys-lru`) or `noeviction`, which refuses with Redis's own error.
+* **An authority you can read.** `cancho authority` lists what the program may do, and CI checks it (below).
+* **Real clients.** RESP2 and RESP3, `HELLO`, `AUTH`, `CLIENT`, `INFO`, `CONFIG GET`, `COMMAND`: what a client library sends on connecting.
 
-**Step C2, and real clients connect.** On one core against Redis 7.0.15 it is at 1.07 to 2.00 times Redis's throughput on the
-pre-registered cells, with the same hit rate at the same resident memory, doing much less than Redis does. Its worst-case
-pause (a compaction) is bounded by a slice of work, not by the arena: 3 to 8 ms measured on a noisy VM, against 115 ms before.
 Every measurement, its caveats and the gate fixed before the code are in [`docs/design.md`](docs/design.md).
 
 ## Requirements
 
 - The **cancho** compiler at the revision this repository's CI builds with (below); the revision is part of the contract.
 - Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
-- To run the tests: `redis-server` and `redis-cli` (the oracle of the differential test), `python3` with `pip install redis`,
-  and `node`/`npm` for the `ioredis` check.
+- To run the tests: `redis-server` and `redis-cli` (the oracle of the differential test), `python3` with `pip install redis`, and `node`/`npm` for the `ioredis` check.
 
 ## Quick start
 
@@ -115,10 +113,13 @@ python3 bench/stall.py build/cache 64                     # the worst-case pause
 bench/vs_redis.sh -t set,get -P "1 16"                    # against redis-server, one core each
 ```
 
-## Documentation
+## Learn more
 
-- [`docs/design.md`](docs/design.md): the claim, the pre-registered gate, the command set, the design, and one section for each
-  step built (C0 to C2, the compaction pause, connecting real clients, incremental compaction) with its measurements.
+| | |
+|---|---|
+| [docs/design.md](docs/design.md) | the claim, the pre-registered gate, the command set, the design, and one section for each step built (C0 to C2, the compaction pause, connecting real clients, incremental compaction) with its measurements |
+| [The epic](https://github.com/alpibrusl/cancho-cache/issues/8) | what is left to pair with Redis, one issue per gap |
+| [The project page](https://alpibrusl.github.io/cancho-cache/) | the summary, with the numbers |
 
 ## Layout
 
@@ -135,14 +136,11 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings only. No persistence, replication, TLS, pub/sub, scripting or `MULTI`/`EXEC`. One database. Up to 256 connections and
-a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start.
+Strings only. No persistence, replication, TLS, pub/sub, scripting or `MULTI`/`EXEC`. One database. Up to 256 connections and a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## Contributing
 
-Every change goes through what CI runs: `$CANCHO fmt --check src tests`, the unit tests, the authority check, and the
-differential, limits, expiry, session and fuzz harnesses above. Design before code, in `docs/`, with claims measured; a claim
-that turns out false is corrected in place.
+Every change goes through what CI runs: `$CANCHO fmt --check src tests`, the unit tests, the authority check, and the differential, limits, expiry, session and fuzz harnesses above. Design before code, in `docs/`, with claims measured; a claim that turns out false is corrected in place.
 
 ## Licence
 

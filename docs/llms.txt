@@ -1,0 +1,17 @@
+# cancho-cache
+
+> A Redis-compatible cache written in cancho: strings, expiry and an LRU eviction policy over RESP2 and RESP3, on one thread with a fixed arena (sized at start, nothing allocated afterwards). No Ffi and no unsafe; its authority report says it never touches the filesystem or foreign code. Alpha: a string cache, not a Redis replacement.
+
+## Use it
+- [Quick start](https://github.com/alpibrusl/cancho-cache#quick-start): build the compiler at the pinned revision, build the cache, talk to it with redis-cli.
+- [Commands](https://github.com/alpibrusl/cancho-cache#commands): 38 of Redis 7.0's 240; every reply is byte-identical to Redis 7.0.15 for the cases in tests/differential.py.
+
+## Facts that matter when calling it
+- Clients tested: redis-cli, redis-py (RESP2, RESP3, default) and ioredis. A redis-py pipeline() in its default transactional mode fails (no MULTI/EXEC); pipeline(transaction=False) works.
+- Limits (fixed): one database, 256 connections, a 16 KiB command. CONFIG SET is refused; settings are fixed at start.
+- Not implemented: data structures beyond strings, pub/sub, scripting, persistence, replication, cluster, TLS, MULTI/EXEC.
+- Memory full: noeviction answers Redis's own -OOM error; allkeys-lru evicts.
+
+## Optional
+- [Design](https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md): the claim, the pre-registered gate, every measurement and its caveats.
+- [Roadmap to pairing with Redis](https://github.com/alpibrusl/cancho-cache/issues/8): the epic and its issues.

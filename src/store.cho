@@ -585,6 +585,82 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
     return 0;
 }
 
+// Zero the arena's bytes `from..to`.
+fn zero_fill[&d](data: &!d [byte], from: int, to: int) -> [] int {
+    var i = from;
+    while i < to {
+        data[i] = byte_of(0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Write `bytes` into `key`'s value starting at `offset`, in place if the room it has holds the result, and otherwise in a record at the
+// end of the arena (the old one becomes garbage). A gap between the old end and `offset` is zeros, the value never gets shorter, a key
+// that is not there is created, and an existing key keeps its expiry. `APPEND` is a splice at the old length, `SETRANGE` one at an
+// offset. 0: done (`last` is the entry). 1: the arena has no room for the result (nothing changed; a key this call created is removed
+// again). 2: no room for another key.
+pub fn splice[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, offset: int, bytes: &v [byte]) -> [] int {
+    bump(st, h);
+    var e = find(st, key, h);
+    var created = false;
+    if e < 0 {
+        let code = put_key(st, key, h, bytes[0..0], 0 - 1);
+        if code != 0 {
+            return code;
+        }
+        e = st.last;
+        created = true;
+    }
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    let old = meta[m + 2];
+    var total = old;
+    if offset + len(bytes) > total {
+        total = offset + len(bytes);
+    }
+    let data = contents(st.data);
+    if total <= meta[m + 3] {
+        let base = meta[m] + meta[m + 1];
+        if offset > old {
+            zero_fill(data, base + old, base + offset);
+        }
+        copy(data, base + offset, bytes);
+        meta[m + 2] = total;
+    } else {
+        let size = meta[m + 1] + room(total);
+        st.protect = e;
+        let ok = make_room(st, header() + size);
+        st.protect = 0 - 1;
+        if !ok {
+            if created {
+                remove_entry(st, e);
+            }
+            return 1;
+        }
+        // Compacting may have moved the old record; this is where it is now. The key and the value are one run of bytes in it.
+        let at = st.top;
+        put32(data, at, e);
+        put32(data, at + 4, size);
+        copy_within(data, at + header(), meta[m], meta[m + 1] + old);
+        let base = at + header() + meta[m + 1];
+        if offset > old {
+            zero_fill(data, base + old, base + offset);
+        }
+        copy(data, base + offset, bytes);
+        st.dead = st.dead + header() + meta[m + 1] + meta[m + 3];
+        meta[m] = at + header();
+        meta[m + 2] = total;
+        meta[m + 3] = room(total);
+        st.top = at + header() + size;
+    }
+    st.last = e;
+    st.protect = e;
+    reclaim(st, set_records());
+    st.protect = 0 - 1;
+    return 0;
+}
+
 // Records of a compaction one `set` pays for, and keys it may evict ahead of need.
 fn set_records() -> [] int {
     return 64;

@@ -395,3 +395,27 @@ Executed at once, never queued: `MULTI` (answers `-ERR MULTI calls can not be ne
 * **redis-py's `transaction()` retries without end**, so a server that always aborts hangs a test that uses it. The test writes the loop out, bounded, and the mutant runner counts a harness that times out as having caught the mutant.
 
 **Not built, stated:** queue-time checks of a command's *arguments* (Redis does none either); `WATCH` of more than eight keys (`-ERR too many watched keys`); a queue larger than 16 KiB; the exact Redis 7 rule for a watched key that was already past its time when watched (this server aborts; neither answer is asserted); `MULTI` inside a `MULTI` marking nothing dirty is as Redis has it. Commands are still not described by a `COMMAND` table with flags: `commands.arity` is a second place that knows an arity, to be replaced by the table of issue #10.
+
+## 15. String commands, slice 1 of issue #10: `APPEND`, `SETRANGE`, `GETRANGE`/`SUBSTR`, `GETEX`, `MSETNX`
+
+Status: **built** (49 commands). The design, then what building it found.
+
+**The claim.** The six commands answer as Redis 7.0.15 does, byte for byte, including every error text, at no cost to `GET`/`SET`, and without a second way for a value to change.
+
+**One write path.** `APPEND` and `SETRANGE` are both `store.splice(key, hash, offset, bytes)`: write `bytes` at `offset` of the key's value, in place if the room the value already has holds the result, and otherwise in a new record at the end of the arena with the old one counted as garbage (as `put_key` does when a value grows). A gap between the old end and `offset` is zeros, the value never gets shorter, an existing key keeps its expiry, and a key that is not there is created (and removed again if the arena cannot hold the result, so a refused write leaves nothing behind). `APPEND` is a splice at the old length. The new record copies the old key and value with `copy_within`, so a value is never copied through a buffer and its size is not bounded by the scratch buffer.
+
+**Semantics taken from Redis's source, each with a differential case:** `SETRANGE` with no bytes to write answers the length and creates nothing; the string is limited to 512 MiB (`proto-max-bulk-len`) with Redis's error, which is checked before the arena is asked; `GETRANGE` converts negative indexes, answers an empty string when both are negative and the start is past the end (without that check a pair that both reach before the start would answer the first byte, which a mutant showed the first set of cases did not distinguish), and clamps; `GETEX` parses its options first (`EX`, `PX`, `PERSIST`, no combination of them), then looks the key up (a missing key answers null whatever the expiry argument is), then validates the number, and deletes the key if the new time has already passed; `MSETNX` looks at every key before writing any.
+
+**Not built, and why:** `GETEX ... EXAT|PXAT` and `SET ... EXAT|PXAT` name a time of day, and the cache has a monotonic clock and no calendar (the same known divergence as `EXPIREAT`); they answer `-ERR syntax error`.
+
+**Differences from Redis, stated:**
+
+* **A result that fits 512 MiB and not the arena is `-OOM`**, where Redis allocates it. The arena is the memory limit here.
+* **A large offset is one long command.** `SETRANGE key 60000000 x` on a 64 MiB arena zeroes 60 MB and answers in about 34 ms (10 MB: 8.5 ms; 1 MB: 1 ms), measured on this machine. That is the same order as Redis's own `memset`, and it is **outside the claim of section 13** that no command pauses for more than a slice of work; the bound is the arena, as it was for `FLUSHALL` before. Slicing it would need the write to resume on the next turn, which is not designed.
+
+**Gate, as run (Redis 7.0.15 as the oracle):**
+
+1. `tests/differential.py`: **426 cases + 8 small-index cases, 0 differ** (92 new: 62 cases of the six commands, three of them the ones that put the zero-fill over old garbage, and the arity sweep of the six commands at 0 to 4 words). The first set of cases passed on the first run and two mutants (below) showed they were too kind: the harness is what is judged, so each survivor became a case.
+2. `tests/store_test.cho`: 5 new unit tests of `splice` (in place and by moving; zero gap; a refused write changes nothing and leaves no new key; the expiry is kept; 400 appends to 17 keys in a 2 KiB arena under `allkeys-lru` with the arena's books audited after each).
+3. `tests/string_mutants.py`: **16 deliberately wrong caches, every one caught** (one survived at first, which is the case added for the `GETRANGE` pair above). They run in `mutants.yml` with the transaction mutants.
+4. Throughput, `bench/vs_redis.sh`, the section 2 cells, medians of five interleaved rounds, two runs, this machine: the cache's own medians were 190,223 and 190,259 (`SET`, pipeline 1), 181,587 and 190,223 (`GET`, pipeline 1), 1,329,787 and 1,329,787 (`SET`, pipeline 16) and 1,996,008 and 1,992,032 (`GET`, pipeline 16): the same as section 14.5's, within the spread between runs of one binary. Ratios against Redis: 1.24, 1.33, 1.18, 1.50 and 1.24, 1.33, 1.19, 1.50. No cell is below the gate's 0.9; the pipeline-16 cells are quantised as sections 9 and 13 say. The new commands sit after `GET`/`SET` in the dispatch, so the hot path gains no comparison.

@@ -23,7 +23,7 @@ import store;
 
 // How many commands `COMMAND COUNT` says and `COMMAND LIST` lists: `tests/session_test.py` checks that every one is answered.
 pub fn supported() -> [] int {
-    return 43;
+    return 49;
 }
 
 // The most bytes a client name may have here.
@@ -514,7 +514,7 @@ pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byt
     return reply.put(sc, o, "'. Try CONFIG HELP.\r\n");
 }
 
-// The commands this server answers, as `COMMAND LIST` gives them (lower case, one bulk string each): 43 of them.
+// The commands this server answers, as `COMMAND LIST` gives them (lower case, one bulk string each): 49 of them.
 fn put_command_names[&b](sc: &!b [byte], at: int) -> [] int {
     var o = reply.put_bulk(sc, at, "get");
     o = reply.put_bulk(sc, o, "set");
@@ -558,6 +558,12 @@ fn put_command_names[&b](sc: &!b [byte], at: int) -> [] int {
     o = reply.put_bulk(sc, o, "discard");
     o = reply.put_bulk(sc, o, "watch");
     o = reply.put_bulk(sc, o, "unwatch");
+    o = reply.put_bulk(sc, o, "append");
+    o = reply.put_bulk(sc, o, "setrange");
+    o = reply.put_bulk(sc, o, "getrange");
+    o = reply.put_bulk(sc, o, "substr");
+    o = reply.put_bulk(sc, o, "getex");
+    o = reply.put_bulk(sc, o, "msetnx");
     return reply.put_bulk(sc, o, "reset");
 }
 

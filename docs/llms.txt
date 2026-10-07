@@ -4,7 +4,7 @@
 
 ## Use it
 - [Quick start](https://github.com/alpibrusl/cancho-cache#quick-start): build the compiler at the pinned revision, build the cache, talk to it with redis-cli.
-- [Commands](https://github.com/alpibrusl/cancho-cache#commands): 43 of Redis 7.0's 240; every reply is byte-identical to Redis 7.0.15 for the cases in tests/differential.py.
+- [Commands](https://github.com/alpibrusl/cancho-cache#commands): 49 of Redis 7.0's 240; every reply is byte-identical to Redis 7.0.15 for the cases in tests/differential.py.
 
 ## Facts that matter when calling it
 - Clients tested: redis-cli, redis-py (RESP2, RESP3, default) and ioredis. Transactions work (MULTI, EXEC, DISCARD, WATCH, UNWATCH), so redis-py's default pipeline() and ioredis's multi().exec() work; WATCH follows up to eight keys and EXEC may abort when an unrelated key shares a bucket with a watched one.

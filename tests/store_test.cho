@@ -691,3 +691,153 @@ fn test_growing_the_only_key_is_refused_not_self_evicted[&h](heap: &!h Heap) -> 
     store.close(heap, st);
     return 0;
 }
+
+// `store.splice` (`APPEND` and `SETRANGE`): `length` copies of the letter `c` written at `offset` of key `n`.
+fn splice_n[&b](st: &!b store.Store, n: int, offset: int, c: int, length: int) -> [] int {
+    var answer = 0;
+    region a {
+        let kb = alloc_slice[a](24, byte_of(0));
+        let vb = alloc_slice[a](length + 1, byte_of(0));
+        let k = key_into(kb, n);
+        fill_with(vb, c, length);
+        let key = kb[0..k];
+        answer = store.splice(st, key, store.hash_of(st, key), offset, vb[0..length]);
+    }
+    return answer;
+}
+
+// Byte `i` of key `n`'s value, or -1 if there is no such key or byte.
+fn byte_at[&b](st: &!b store.Store, n: int, i: int) -> [] int {
+    var answer = 0 - 1;
+    region a {
+        let kb = alloc_slice[a](24, byte_of(0));
+        let k = key_into(kb, n);
+        let key = kb[0..k];
+        let e = store.find(st, key, store.hash_of(st, key));
+        if e >= 0 && i < len(store.value(st, e)) {
+            answer = int_of(store.value(st, e)[i]);
+        }
+    }
+    return answer;
+}
+
+fn test_splice_writes_in_place_and_by_moving[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 10), 0);
+        // 10 bytes have room for 16: appending 4 stays where it is.
+        test.assert_eq(splice_n(w, 1, 10, 'a', 4), 0);
+        test.assert_eq(look(w, 1), 14 * 1000 + 'a');
+        test.assert_eq(store.dead(w), 0);
+        // 10 more do not fit the room: the value moves to the end, the old record is garbage.
+        test.assert_eq(splice_n(w, 1, 14, 'a', 10), 0);
+        test.assert_eq(look(w, 1), 24 * 1000 + 'a');
+        test.assert(store.dead(w) > 0);
+        test.assert_eq(store.live(w), 1);
+        test.assert_eq(store.audit(w), 0);
+        // Overwriting the middle changes only that, and the length stays.
+        test.assert_eq(splice_n(w, 1, 5, 'z', 3), 0);
+        test.assert_eq(byte_at(w, 1, 4), 'a');
+        test.assert_eq(byte_at(w, 1, 5), 'z');
+        test.assert_eq(byte_at(w, 1, 7), 'z');
+        test.assert_eq(byte_at(w, 1, 8), 'a');
+        test.assert_eq(byte_at(w, 1, 24), 0 - 1);
+        test.assert_eq(store.audit(w), 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_splice_pads_a_gap_with_zeros_and_creates_a_key[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        // A new key, written at 5: five zeros and then the letters.
+        test.assert_eq(splice_n(w, 1, 5, 'x', 3), 0);
+        test.assert_eq(byte_at(w, 1, 0), 0);
+        test.assert_eq(byte_at(w, 1, 4), 0);
+        test.assert_eq(byte_at(w, 1, 5), 'x');
+        test.assert_eq(byte_at(w, 1, 7), 'x');
+        test.assert_eq(byte_at(w, 1, 8), 0 - 1);
+        // An old key with garbage after its value in the room it had: the gap is zeros all the same.
+        test.assert_eq(put(w, 2, 'q', 3), 0);
+        test.assert_eq(splice_n(w, 2, 4, 'r', 1), 0);
+        test.assert_eq(byte_at(w, 2, 2), 'q');
+        test.assert_eq(byte_at(w, 2, 3), 0);
+        test.assert_eq(byte_at(w, 2, 4), 'r');
+        test.assert_eq(store.live(w), 2);
+        test.assert_eq(store.audit(w), 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_splice_that_does_not_fit_changes_nothing[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 100, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 10), 0);
+        // 8 + 2 + 104 > 100: refused, and the key is as it was.
+        test.assert_eq(splice_n(w, 1, 10, 'b', 90), 1);
+        test.assert_eq(look(w, 1), 10 * 1000 + 'a');
+        // A key it would have created is not left behind.
+        test.assert_eq(splice_n(w, 2, 0, 'c', 200), 1);
+        test.assert_eq(look(w, 2), 0 - 1);
+        test.assert_eq(store.live(w), 1);
+        test.assert_eq(store.audit(w), 0);
+        // A write far past the end is refused the same way, not wrapped.
+        test.assert_eq(splice_n(w, 1, 1000000, 'd', 1), 1);
+        test.assert_eq(look(w, 1), 10 * 1000 + 'a');
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_splice_keeps_the_expiry_and_stamps_the_key[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        store.tick(w, 1000);
+        test.assert_eq(put(w, 1, 'a', 4), 0);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 1);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            store.set_expiry(w, e, 5000);
+        }
+        test.assert_eq(splice_n(w, 1, 4, 'b', 100), 0);
+        test.assert_eq(byte_at(w, 1, 3), 'a');
+        test.assert_eq(byte_at(w, 1, 103), 'b');
+        test.assert_eq(byte_at(w, 1, 104), 0 - 1);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 1);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            test.assert_eq(store.expiry_of(w, e), 5000);
+        }
+        test.assert_eq(store.keys_with_expiry(w), 1);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+// A small arena under allkeys-lru, appended to far past its size, with the books checked after every write: a splice that moves a
+// value while other keys are evicted and the arena is compacted in steps must lose no key it was not asked to, and never its own.
+fn test_splice_under_eviction_keeps_its_books[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 2048, 50, 0, store.evict_lru());
+    borrow mut st as &!w in {
+        var i = 0;
+        while i < 400 {
+            let n = i % 17;
+            test.assert_eq(splice_n(w, n, look(w, n) / 1000, 'm', 29), 0);
+            test.assert_eq(store.audit(w), 0);
+            // The key just written is there, ends in what was written, and is no longer than the arena.
+            test.assert(look(w, n) / 1000 > 0);
+            test.assert(look(w, n) / 1000 < 2048);
+            i = i + 1;
+        }
+        test.assert(store.live(w) > 0);
+        test.assert(store.evicted(w) > 0);
+    }
+    store.close(heap, st);
+    return 0;
+}

@@ -7,9 +7,9 @@ on:
 
 env:
   # The compiler these sources are built and tested with: part of the contract, since a source file does not
-  # record which `std` it was written against. This is the commit of lex-sys #186 (`copy_within`); it moves to
-  # lex-sys's main once that is merged.
-  LEX_SYS_REV: 93e4fff677ae447652cc1ccc05f99588b4c08f44
+  # record which `std` it was written against. This is the commit of cancho #186 (`copy_within`); it moves to
+  # cancho's main once that is merged.
+  CANCHO_REV: a4572ea3b506e4bcec1c4be43deda1043c11ba9f
 
 jobs:
   test:
@@ -21,45 +21,45 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: alpibrusl/lex-sys
-          ref: ${{ env.LEX_SYS_REV }}
-          path: lex-sys
+          repository: alpibrusl/cancho
+          ref: ${{ env.CANCHO_REV }}
+          path: cancho
 
       - name: Cache the compiler
         id: compiler
         uses: actions/cache@v4
         with:
-          path: lex-sys/target/release/lex-sys
-          key: lex-sys-${{ env.LEX_SYS_REV }}
+          path: cancho/target/release/cancho
+          key: cancho-${{ env.CANCHO_REV }}
 
-      - name: Build lex-sys
+      - name: Build cancho
         if: steps.compiler.outputs.cache-hit != 'true'
-        working-directory: lex-sys
-        run: cargo build --release -p lex-sys
+        working-directory: cancho
+        run: cargo build --release -p cancho
 
       - name: Redis, the oracle of the differential test
         run: sudo apt-get update -q && sudo apt-get install -y -q redis-server
 
       - name: Parser tests (every string up to six bytes)
         working-directory: cache
-        run: ../lex-sys/target/release/lex-sys test tests/resp_test.ls src/resp.ls --std
+        run: ../cancho/target/release/cancho test tests/resp_test.cho src/resp.cho --std
 
       - name: Store tests (collisions, backward-shift deletion, a randomised run against a model)
         working-directory: cache
-        run: ../lex-sys/target/release/lex-sys test tests/store_test.ls src/store.ls --std
+        run: ../cancho/target/release/cancho test tests/store_test.cho src/store.cho --std
 
       - name: Formatting
         working-directory: cache
-        run: ../lex-sys/target/release/lex-sys fmt --check src tests
+        run: ../cancho/target/release/cancho fmt --check src tests
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../lex-sys/target/release/lex-sys build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls -o build/cache
+        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho -o build/cache
 
       - name: Authority has no ffi and no filesystem
         working-directory: cache
         run: |
-          ../lex-sys/target/release/lex-sys authority src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls --std > /tmp/authority.txt
+          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "foreign code"
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "the filesystem"

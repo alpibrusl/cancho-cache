@@ -8,8 +8,8 @@ import reply;
 import resp;
 import store;
 
-// `cache` -- a Redis-compatible cache (`docs/design.md`): the loop. The commands are `src/commands.ls`, the memory is
-// `src/store.ls`, the protocol `src/resp.ls`.
+// `cache` -- a Redis-compatible cache (`docs/design.md`): the loop. The commands are `src/commands.cho`, the memory is
+// `src/store.cho`, the protocol `src/resp.cho`.
 //
 //     cache <port> [<arena MiB> [<most keys> [noeviction | allkeys-lru]]]     (64 MiB, 1,000,000 keys, noeviction)
 //
@@ -65,7 +65,7 @@ res struct Core {
     scratch: Box[[byte]],
     // A few bytes for a command to build a value in (`INCR`).
     tmp: Box[[byte]],
-    // Each connection's client name, 64 bytes a slot; and counters about the whole server (`src/session.ls`: connections, start time,
+    // Each connection's client name, 64 bytes a slot; and counters about the whole server (`src/session.cho`: connections, start time,
     // commands answered, connections accepted, port, the next client id).
     names: Box[[byte]],
     info: Box[[int]],

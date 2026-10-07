@@ -1,8 +1,8 @@
-# lexsys-cache
+# cancho-cache
 
-[![ci](https://github.com/alpibrusl/lexsys-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lexsys-cache/actions/workflows/ci.yml)
+[![ci](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml)
 
-A Redis-compatible cache, written in [lex-sys](https://github.com/alpibrusl/lex-sys): no `Ffi`, no `unsafe`, and a checkable
+A Redis-compatible cache, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and a checkable
 authority report that says it never touches the filesystem or foreign code.
 
 It speaks RESP2 and RESP3 over TCP on one thread with one poller, holds its data in a fixed arena (sized at start, nothing
@@ -22,7 +22,7 @@ Every measurement, its caveats and the gate fixed before the code are in [`docs/
 
 ## Requirements
 
-- The **lex-sys** compiler at the revision this repository's CI builds with (below); the revision is part of the contract.
+- The **cancho** compiler at the revision this repository's CI builds with (below); the revision is part of the contract.
 - Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
 - To run the tests: `redis-server` and `redis-cli` (the oracle of the differential test), `python3` with `pip install redis`,
   and `node`/`npm` for the `ioredis` check.
@@ -30,15 +30,15 @@ Every measurement, its caveats and the gate fixed before the code are in [`docs/
 ## Quick start
 
 ```sh
-git clone https://github.com/alpibrusl/lex-sys
-git clone https://github.com/alpibrusl/lexsys-cache && cd lexsys-cache
+git clone https://github.com/alpibrusl/cancho
+git clone https://github.com/alpibrusl/cancho-cache && cd cancho-cache
 
-REV=$(sed -n 's/^ *LEX_SYS_REV: *//p' .github/workflows/ci.yml)    # the revision CI uses
-(cd ../lex-sys && git checkout "$REV" && cargo build --release -p lex-sys)
-export LEX_SYS=$PWD/../lex-sys/target/release/lex-sys
+REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision CI uses
+(cd ../cancho && git checkout "$REV" && cargo build --release -p cancho)
+export CANCHO=$PWD/../cancho/target/release/cancho
 
 mkdir -p build
-$LEX_SYS build --std src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, noeviction | allkeys-lru
 redis-cli -p 6379 PING                 # PONG
@@ -80,7 +80,7 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$LEX_SYS authority src/cache.ls src/resp.ls src/store.ls src/commands.ls src/reply.ls src/session.ls --std
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho --std
 # performs: args, clock, conn_accept, conn_read, conn_write, err_write, heap, net_in(""), poll
 # never touches: the filesystem, foreign code
 ```
@@ -97,8 +97,8 @@ for the cases in `tests/differential.py`; the deliberate divergences (inline com
 ## Tests
 
 ```sh
-$LEX_SYS test tests/resp_test.ls src/resp.ls --std        # the parser, over every string up to six bytes
-$LEX_SYS test tests/store_test.ls src/store.ls --std      # the store: collisions, deletion, a random run against a model
+$CANCHO test tests/resp_test.cho src/resp.cho --std        # the parser, over every string up to six bytes
+$CANCHO test tests/store_test.cho src/store.cho --std      # the store: collisions, deletion, a random run against a model
 python3 tests/differential.py build/cache                 # byte-for-byte against redis-server, four framings each
 python3 tests/limits.py build/cache                       # a full arena and a full key table
 python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under allkeys-lru
@@ -123,13 +123,13 @@ bench/vs_redis.sh -t set,get -P "1 16"                    # against redis-server
 ## Layout
 
 ```
-src/cache.ls      the loop: one poller, one slab of connections
-src/resp.ls       the RESP parser
-src/commands.ls   the commands
-src/session.ls    HELLO, AUTH, CLIENT, INFO, CONFIG, COMMAND, QUIT
-src/reply.ls      reply helpers shared by the two
-src/store.ls      the memory: arena, key table, expiry, eviction, compaction
-tests/            unit tests (lex-sys) and harnesses (Python, with Redis as the oracle)
+src/cache.cho      the loop: one poller, one slab of connections
+src/resp.cho       the RESP parser
+src/commands.cho   the commands
+src/session.cho    HELLO, AUTH, CLIENT, INFO, CONFIG, COMMAND, QUIT
+src/reply.cho      reply helpers shared by the two
+src/store.cho      the memory: arena, key table, expiry, eviction, compaction
+tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)
 bench/            memory, hit rate, stall, and the comparison against Redis
 ```
 
@@ -140,7 +140,7 @@ a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed a
 
 ## Contributing
 
-Every change goes through what CI runs: `$LEX_SYS fmt --check src tests`, the unit tests, the authority check, and the
+Every change goes through what CI runs: `$CANCHO fmt --check src tests`, the unit tests, the authority check, and the
 differential, limits, expiry, session and fuzz harnesses above. Design before code, in `docs/`, with claims measured; a claim
 that turns out false is corrected in place.
 

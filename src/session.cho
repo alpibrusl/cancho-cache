@@ -241,7 +241,7 @@ fn wants[&v, &t](view: &v [byte], table: &t [int], section: &static [byte]) -> [
 fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &s store.Store, world: &w [int]) -> [] int {
     var o = at;
     if wants(view, table, "SERVER") {
-        o = reply.put(sc, o, "# Server\r\nredis_version:7.0.15\r\nserver_name:lexsys-cache\r\nredis_mode:standalone\r\narch_bits:64\r\n");
+        o = reply.put(sc, o, "# Server\r\nredis_version:7.0.15\r\nserver_name:cancho-cache\r\nredis_mode:standalone\r\narch_bits:64\r\n");
         o = kv(sc, o, "tcp_port", world[4]);
         o = kv(sc, o, "uptime_in_seconds", (store.now_of(st) - world[1]) / 1000);
         o = reply.put(sc, o, "\r\n");

@@ -1,15 +1,15 @@
-# lexsys-cache: a Redis-compatible cache in lex-sys
+# cancho-cache: a Redis-compatible cache in cancho
 
 Status: **C0, C1 and C2 built** (sections 8, 9, 10); compaction and the client handshake improved in sections 11 and 12. The numbers in section 2 are measurements of Redis; section 8's are of this project.
 
 ## 1. What this is for, and the claim it must survive
 
 A byte-string key/value cache that speaks enough of RESP2 for `redis-benchmark` and a normal client to use it, built on
-lex-sys with no `Ffi`, no `unsafe`, and an authority report (`lex-sys authority`) that a reader can check. The performance
+cancho with no `Ffi`, no `unsafe`, and an authority report (`cancho authority`) that a reader can check. The performance
 claim is deliberately modest: **at one core, not meaningfully slower than Redis.** If it is slower, this document says so
 and the project stops being "a faster Redis" and becomes, at most, "a Redis with a checkable authority report".
 
-Why it should be possible at all (measured elsewhere, `lex-sys/docs/parallelism.md`): lex-sys's `http.server` loop (epoll,
+Why it should be possible at all (measured elsewhere, `cancho/docs/parallelism.md`): cancho's `http.server` loop (epoll,
 non-blocking, one core) served about 95,000 requests a second with a full JSON parse and schema validation per request.
 A RESP command is far cheaper to parse than that, and Redis itself is a single-threaded event loop, so the comparison is the
 same *shape* of program. It is not a measurement of the cache; it is the reason the experiment is worth its first week.
@@ -34,7 +34,7 @@ measured and reported, not gated. If any cell misses, the result says which and 
 "as fast as Redis".
 
 **Not compared:** multiple cores. Redis scales by running more processes and clients that shard; a cache that shares one
-store across threads needs the communication primitive that lex-sys does not have (`parallelism.md`, T5). One core against
+store across threads needs the communication primitive that cancho does not have (`parallelism.md`, T5). One core against
 one core is the only fair claim today.
 
 ## 3. Correctness gates (these come first)
@@ -42,10 +42,10 @@ one core is the only fair claim today.
 1. **Differential test.** One command sequence, replayed against Redis and against this cache, replies compared byte for byte
    for the supported subset, in four framings: whole commands, one byte at a time, random splits, and pipelined batches.
 2. **No input reaches a trap.** A malformed or hostile frame is answered with `-ERR` and the connection continues or closes;
-   it never traps the process. (lex-sys's own rule: no input may reach a panic.) A mutation-style fuzz over the parser, with
+   it never traps the process. (cancho's own rule: no input may reach a panic.) A mutation-style fuzz over the parser, with
    the corpus kept in the repo.
 3. **Memory is bounded** by `maxmemory`, counted by the cache itself, and never exceeded under a SET flood larger than it.
-4. **Authority**: `lex-sys authority` shows `net_in`, `conn_*`, `poll`, `clock`, `heap`, `args` and no `ffi`; CI diffs it.
+4. **Authority**: `cancho authority` shows `net_in`, `conn_*`, `poll`, `clock`, `heap`, `args` and no `ffi`; CI diffs it.
 
 ## 4. Command set (the first slice)
 
@@ -98,7 +98,7 @@ Any of these is written up here, in place, as the result.
 
 ## 8. C0, built and measured
 
-`src/resp.ls` is the parser, `src/cache.ls` the loop (`PING`, `ECHO`, and the errors Redis gives for everything else),
+`src/resp.cho` is the parser, `src/cache.cho` the loop (`PING`, `ECHO`, and the errors Redis gives for everything else),
 over `std.conns` and the poller. One read per wakeup, every whole command in it answered into one scratch buffer, one
 write; a client that does not read is no longer read from (its answers queue per connection, and input already buffered is
 answered when the queue drains).
@@ -113,14 +113,14 @@ answered when the queue drains).
    skips two bytes without looking, which is the shape of a request-smuggling ambiguity); and a command has at most 16
    arguments (Redis: a million). One more is known and **not** tested: Redis's unknown-command text stops at a NUL byte inside
    an argument (C `%s`), the cache's does not.
-2. **No input reaches a trap**: `tests/resp_test.ls` runs the parser over **every byte string of 0 to 6 bytes over eight
+2. **No input reaches a trap**: `tests/resp_test.cho` runs the parser over **every byte string of 0 to 6 bytes over eight
    symbols (299,593 of them)** and checks it never traps, never claims more than it was given, and that whatever it accepts
    is self-contained (no shorter prefix is a whole command). `tests/fuzz_server.py` sends 3,000 hostile connections
    (random bytes, flipped bytes in valid commands, valid commands cut and continued) at the running server: it stays up and
    still answers `PING`.
 3. **Memory**: nothing is allocated after start (all slabs are sized at start); `maxmemory` has no meaning until there is a
    store (C2).
-4. **Authority** (`lex-sys authority`): `args`, `conn_accept`, `conn_read`, `conn_write`, `err_write`, `heap`, `net_in("")`,
+4. **Authority** (`cancho authority`): `args`, `conn_accept`, `conn_read`, `conn_write`, `err_write`, `heap`, `net_in("")`,
    `poll`; **never touches the filesystem or foreign code**. CI checks the last line.
 
 **Throughput of the loop, against Redis** (`bench/vs_redis.sh`, `PING` as an array of bulk strings, server on core 0, client on
@@ -141,13 +141,13 @@ million `PING` a second with a 3-million-request run, so about 0.4 microseconds 
 
 ## 9. C1, built and measured: the gate
 
-`src/store.ls` is the memory: one arena of keys and values and one open-addressing index with backward-shift deletion (no
+`src/store.cho` is the memory: one arena of keys and values and one open-addressing index with backward-shift deletion (no
 tombstones), all sized at start, nothing allocated afterwards. `GET`, `SET` (plain: no options yet), `DEL` and `EXISTS` use it. An
 overwrite that fits the room a value already has is done in place; one that does not is appended and the old room counted as
 garbage, which compaction (C2) will take back. A refusal is `-OOM command not allowed when used memory > 'maxmemory'.` (Redis's
 words under `noeviction`), changes nothing, and the server carries on.
 
-**Correctness.** `tests/store_test.ls`: six tests, including 3,000 keys deleted in three orders and 200,000 random operations
+**Correctness.** `tests/store_test.cho`: six tests, including 3,000 keys deleted in three orders and 200,000 random operations
 against a model in plain arrays, and a pair of keys (`c80067`, `c99133`) found by search that collide in length, 31-bit tag *and* home
 slot, so that only the byte comparison tells them apart. Mutation-checked: six deliberately broken stores are each caught (the
 byte comparison was *not* caught until that pinned pair was added: random keys never collide this way). `tests/differential.py`
@@ -195,11 +195,11 @@ client that can pick keys can make them collide (a per-process seed needs entrop
 
 ## 10. C2, built and measured: expiry, eviction, and thirty commands
 
-**What exists.** `src/store.ls` now writes records with an 8-byte header (entry number and size), which lets the arena be walked from the
+**What exists.** `src/store.cho` now writes records with an 8-byte header (entry number and size), which lets the arena be walked from the
 front: **compaction** slides the live records down in place, and **eviction** under `allkeys-lru` samples five keys and removes the one used
 longest ago, reclaiming a sixteenth of the arena at a time so that a compaction is paid for once per sixteenth written. Expiry is lazy (a key
 whose time has passed is gone when asked for) and swept (up to a hundred times a second, 256 keys a look, repeating while more than a quarter of
-what it looks at has run out: Redis's rule). `src/commands.ls` is the commands: `PING ECHO GET SET` (with `NX XX GET EX PX KEEPTTL`)
+what it looks at has run out: Redis's rule). `src/commands.cho` is the commands: `PING ECHO GET SET` (with `NX XX GET EX PX KEEPTTL`)
 `SETNX SETEX PSETEX GETSET GETDEL MGET MSET DEL UNLINK EXISTS TOUCH STRLEN TYPE INCR DECR INCRBY DECRBY EXPIRE PEXPIRE` (with `NX XX GT LT`)
 `TTL PTTL PERSIST DBSIZE FLUSHALL FLUSHDB SELECT`: **30 of Redis 7.0's 240**, with Redis's argument checks and error texts, including every
 overflow case of 64-bit integers.
@@ -210,7 +210,7 @@ overflow case of 64-bit integers.
 * Mutation: **nine broken command layers** were each caught (a `TTL` that rounds down, an overflow check off by one, `INCR` accepting `+7`, `GT` on a key
   with no expiry, `NX` ignored, `SET ... GET` replying before the write, `KEEPTTL` ignored, `MSET` with an odd argument count, `PERSIST` that does not
   persist); **twelve broken stores** (compaction without the offset check, without re-pointing, never compacting, evicting the newest, the expiry boundary
-  off by one, no use stamp, and others) were each caught by `tests/store_test.ls` (12 tests, including a model that knows exactly when a `SET` must be
+  off by one, no use stamp, and others) were each caught by `tests/store_test.cho` (12 tests, including a model that knows exactly when a `SET` must be
   refused and a randomised run that checks every value after every compaction).
 * `tests/expiry.py`: lazy and swept expiry against Redis in real time, `PTTL` ranges, and a 1 MiB cache under `allkeys-lru` written to 20 times its size
   that never refuses a write, stays about a MiB, keeps a key that is used all the time, and drops the oldest. `tests/fuzz_server.py` now sends 6,000 hostile
@@ -244,7 +244,7 @@ grows as it is filled. At full utilisation the cache is about 8% smaller; at hal
 
 **The weakness, measured** (`bench/stall.py`): compaction is a pass over the whole arena. On a 64 MiB arena, 200,000 `SET`s past full give a median of 0.035 ms and a 99.9th
 percentile of 0.231 ms, **but a maximum of 114.7 ms**, and 18 commands over 2 ms; on 16 MiB the maximum is 54.2 ms. Redis has no such pause. It is dominated by a byte-at-a-time
-copy (about 0.5 GB/s) because lex-sys has no memmove primitive; two ways out, neither built: a `copy_within` builtin (a language change, one small, and measurable), or compaction
+copy (about 0.5 GB/s) because cancho has no memmove primitive; two ways out, neither built: a `copy_within` builtin (a language change, one small, and measurable), or compaction
 that moves a bounded amount per turn (a design change).
 
 **Still not Redis, stated.** 30 commands of 240; no lists, hashes, sets, sorted sets, streams, pub/sub, scripting, transactions; no persistence, replication, cluster, `AUTH`, TLS, RESP3 or
@@ -253,8 +253,8 @@ that fits a 16 KiB input buffer; a constant hash seed; one core. Compaction paus
 
 ## 11. The compaction pause, after `copy_within`
 
-Section 10 measured the weakness: a worst-case pause of 114.7 ms on a 64 MiB arena, from a byte-at-a-time copy (lex-sys had no block move). lex-sys now has
-`copy_within(buf, dst, src, n)`, a bounds-checked `memmove` inside one slice (`lex-sys/docs/memory-moves.md`, lex-sys #186), and compaction uses it.
+Section 10 measured the weakness: a worst-case pause of 114.7 ms on a 64 MiB arena, from a byte-at-a-time copy (cancho had no block move). cancho now has
+`copy_within(buf, dst, src, n)`, a bounds-checked `memmove` inside one slice (`cancho/docs/memory-moves.md`, cancho #186), and compaction uses it.
 
 | arena | before | after | SETs over 2 ms, of 200,000 (before / after) |
 |---|---|---|---|
@@ -274,8 +274,8 @@ C2 spoke to `redis-cli`. A client *library* says more when it connects, and test
 * **redis-py 8** speaks RESP3 by default and sends `HELLO 3` on connect: the cache refused it, so a default `redis.Redis(...)` could not connect.
 * Both also call `CLIENT SETNAME`/`SETINFO` (`connectionName`, library name) and sometimes `CONFIG GET`, `AUTH`, `COMMAND`.
 
-What was built (`src/session.ls`, with `src/reply.ls` holding the helpers `src/commands.ls` shares with it): `HELLO` (2 and 3, `AUTH`, `SETNAME`), `AUTH`, `CLIENT ID|GETNAME|SETNAME`, `INFO`
-(five sections; `redis_version:7.0.15` is what clients read to decide which commands to try, and the command set mirrors 7.0, so that is what it says; `server_name:lexsys-cache` says what this is), `CONFIG GET|SET|RESETSTAT`,
+What was built (`src/session.cho`, with `src/reply.cho` holding the helpers `src/commands.cho` shares with it): `HELLO` (2 and 3, `AUTH`, `SETNAME`), `AUTH`, `CLIENT ID|GETNAME|SETNAME`, `INFO`
+(five sections; `redis_version:7.0.15` is what clients read to decide which commands to try, and the command set mirrors 7.0, so that is what it says; `server_name:cancho-cache` says what this is), `CONFIG GET|SET|RESETSTAT`,
 `COMMAND|COUNT|LIST`, `QUIT`, `RESET`: **38 commands**. **RESP3** is per connection and covers what this server produces: the null (`_`), and a map for `HELLO` and `CONFIG GET`; integers, errors and strings are the same in both.
 
 **Checks.** `tests/differential.py` is at **131 cases + 8 small-index cases**, four framings each, byte-identical to Redis, now including every `AUTH`/`HELLO`/`CLIENT`/`CONFIG GET` error text and answer and six RESP3 cases (the connection's id, which no two servers share, is normalised out

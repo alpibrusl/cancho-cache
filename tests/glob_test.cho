@@ -1,0 +1,108 @@
+import std.test;
+import glob;
+
+// `glob.matches` against what Redis's `stringmatchlen` answers. The cases are the ones its documentation names and the corners of its
+// code (an unclosed set, a `\` at the end, a range written backwards, `*` that has to give bytes back); `tests/keyspace.py` compares
+// thousands of random patterns and keys with a real Redis through `KEYS`.
+
+fn yes(pattern: &static [byte], text: &static [byte]) -> [] int {
+    test.assert(glob.matches(pattern, text));
+    return 0;
+}
+
+fn no(pattern: &static [byte], text: &static [byte]) -> [] int {
+    test.assert(!glob.matches(pattern, text));
+    return 0;
+}
+
+fn test_literals_and_the_empty_cases() -> [] int {
+    yes("abc", "abc");
+    no("abc", "abd");
+    no("abc", "ab");
+    no("ab", "abc");
+    yes("", "");
+    no("", "a");
+    no("a", "");
+    yes("*", "");
+    yes("**", "");
+    yes("*", "anything");
+    return 0;
+}
+
+fn test_star_gives_bytes_back() -> [] int {
+    yes("a*b", "ab");
+    yes("a*b", "axxb");
+    yes("a*b", "abab");
+    no("a*b", "abc");
+    yes("*a*b*", "xaybz");
+    yes("*ab", "aab");
+    yes("*ab", "ababab");
+    no("*ab", "abx");
+    yes("a**b", "axb");
+    yes("*a", "a");
+    yes("a*", "a");
+    no("a*c", "a");
+    yes("user:*:name", "user:42:name");
+    no("user:*:name", "user:42:nam");
+    return 0;
+}
+
+fn test_question_mark() -> [] int {
+    yes("?", "a");
+    no("?", "");
+    no("?", "ab");
+    yes("h?llo", "hello");
+    yes("h?llo", "hallo");
+    no("h?llo", "hllo");
+    yes("??", "ab");
+    return 0;
+}
+
+fn test_sets_ranges_and_complements() -> [] int {
+    yes("h[ae]llo", "hello");
+    yes("h[ae]llo", "hallo");
+    no("h[ae]llo", "hillo");
+    yes("h[^e]llo", "hallo");
+    no("h[^e]llo", "hello");
+    yes("h[a-b]llo", "hallo");
+    yes("h[a-b]llo", "hbllo");
+    no("h[a-b]llo", "hcllo");
+    // A range written backwards is the same range.
+    yes("h[b-a]llo", "hallo");
+    yes("[a-c]", "b");
+    no("[a-c]", "d");
+    yes("[^a-c]", "d");
+    no("[^a-c]", "b");
+    // A `-` that is not between two bytes is itself.
+    // `[a-]` is the range from `a` to `]`, written backwards, so it has `a` and not `-`: Redis reads three bytes `x-y` as a range wherever it can.
+    no("[a-]", "-");
+    yes("[a-]", "a");
+    yes("[-a]", "-");
+    // A `]` right after `[` closes the (empty) set.
+    no("[]a]", "a");
+    return 0;
+}
+
+fn test_escapes() -> [] int {
+    yes("a\\*b", "a*b");
+    no("a\\*b", "axb");
+    yes("a\\?b", "a?b");
+    no("a\\?b", "axb");
+    yes("a\\\\b", "a\\b");
+    yes("[\\]]", "]");
+    yes("[\\^a]", "^");
+    // A `\` at the end of the pattern is itself.
+    yes("a\\", "a\\");
+    no("a\\", "a");
+    return 0;
+}
+
+fn test_unclosed_sets_run_to_the_end() -> [] int {
+    yes("[abc", "a");
+    no("[abc", "d");
+    no("[", "a");
+    yes("[^", "a");
+    no("[abc", "ab");
+    yes("x[ab", "xb");
+    return 0;
+}

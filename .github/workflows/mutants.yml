@@ -12,6 +12,9 @@ on:
       - tests/txn_mutants.py
       - tests/string_mutants.py
       - tests/mutlib.py
+      - tests/keyspace_mutants.py
+      - tests/keyspace.py
+      - src/glob.cho
       - src/commands.cho
       - tests/transactions.py
       - tests/differential.py
@@ -57,6 +60,10 @@ jobs:
       - name: Every transaction mutant is caught
         working-directory: cache
         run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/txn_mutants.py
+
+      - name: Every keyspace mutant is caught
+        working-directory: cache
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/keyspace_mutants.py
 
       - name: Every string-command mutant is caught
         working-directory: cache

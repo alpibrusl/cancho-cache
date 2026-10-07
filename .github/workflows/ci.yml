@@ -44,6 +44,10 @@ jobs:
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/resp_test.cho src/resp.cho --std
 
+      - name: Pattern matcher tests
+        working-directory: cache
+        run: ../cancho/target/release/cancho test tests/glob_test.cho src/glob.cho --std
+
       - name: Store tests (collisions, backward-shift deletion, a randomised run against a model)
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/store_test.cho src/store.cho --std
@@ -54,12 +58,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho -o build/cache
+        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
 
       - name: Authority has no ffi and no filesystem
         working-directory: cache
         run: |
-          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho --std > /tmp/authority.txt
+          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "foreign code"
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "the filesystem"
@@ -86,6 +90,10 @@ jobs:
       - name: Transactions that need two connections, and real clients running them
         working-directory: cache
         run: python3 tests/transactions.py build/cache
+
+      - name: KEYS, SCAN and RENAME against Redis and against a model
+        working-directory: cache
+        run: python3 tests/keyspace.py build/cache
 
       - name: Expiry, the sweep, PTTL, and eviction under allkeys-lru
         working-directory: cache

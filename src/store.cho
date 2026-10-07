@@ -585,6 +585,107 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
     return 0;
 }
 
+// ---------------------------------------------------------------------
+// Walking the keys
+// ---------------------------------------------------------------------
+
+// Entry numbers run from 0 to this, exclusive. A key keeps its entry number from the `set` that made it until it is removed, through every
+// compaction and every move of its record, which is what lets `SCAN` use the number as its cursor: a key that is there from the first call to
+// the last is met once, and one that is not may be met or not.
+pub fn entries[&s](st: &s Store) -> [] int {
+    return st.fresh;
+}
+
+// Whether entry `e` holds a key that has not run out (an expired key still waiting to be swept is not there).
+pub fn visible[&s](st: &s Store, e: int) -> [] bool {
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    return meta[m + 6] == 0 - 2 && (meta[m + 4] == 0 || meta[m + 4] > st.now);
+}
+
+// The key of entry `e`, as a view of the arena.
+pub fn key_at[&s](st: &s Store, e: int) -> [] &s [byte] {
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    return contents(st.data)[meta[m]..meta[m] + meta[m + 1]];
+}
+
+// A visible entry chosen at random: from a random start, the first one on. -1 if there is none.
+pub fn random_visible[&s](st: &!s Store) -> [] int {
+    if st.live == 0 {
+        return 0 - 1;
+    }
+    let start = draw(st, st.fresh);
+    var k = 0;
+    while k < st.fresh {
+        let e = (start + k) % st.fresh;
+        if visible(st, e) {
+            return e;
+        }
+        k = k + 1;
+    }
+    return 0 - 1;
+}
+
+// Give the key `src` the name `dst`, taking `dst`'s place if there is one (and so its value and expiry go), and keeping its own value and
+// expiry. The entry keeps its number; its record is rewritten at the end of the arena under the new name, so the arena must have room for a
+// second copy of the value while it moves. 0: done. 1: no room for that (nothing was changed). 3: there is no `src`.
+pub fn rename[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte], hd: int) -> [] int {
+    let e = find(st, src, hs);
+    if e < 0 {
+        return 3;
+    }
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    let vlen = meta[m + 2];
+    let size = len(dst) + room(vlen);
+    st.protect = e;
+    let ok = make_room(st, header() + size);
+    st.protect = 0 - 1;
+    if !ok {
+        return 1;
+    }
+    // Whatever was at `dst` goes, and so do both old names' versions for `WATCH`.
+    let d = find(st, dst, hd);
+    if d >= 0 && d != e {
+        remove_entry(st, d);
+    }
+    let data = contents(st.data);
+    // The record at the end: the new name, then the value, copied out of the old record (the key and the value are one run of bytes in it).
+    let at = st.top;
+    put32(data, at, e);
+    put32(data, at + 4, size);
+    var i = 0;
+    while i < len(dst) {
+        data[at + header() + i] = dst[i];
+        i = i + 1;
+    }
+    copy_within(data, at + header() + len(dst), meta[m] + meta[m + 1], vlen);
+    // The old name leaves the index (found by the old hash, so this comes first) and the new one goes in.
+    let slot = slot_of(st, e);
+    bump(st, meta[m + 5]);
+    close_hole(st, slot);
+    st.dead = st.dead + header() + meta[m + 1] + meta[m + 3];
+    meta[m] = at + header();
+    meta[m + 1] = len(dst);
+    meta[m + 3] = room(vlen);
+    meta[m + 5] = hd;
+    meta[m + 7] = st.now;
+    st.top = at + header() + size;
+    let index = contents(st.index);
+    var j = hd & st.mask;
+    while index[j] != 0 {
+        j = j + 1 & st.mask;
+    }
+    index[j] = tag_of(hd) << 32 | e + 1;
+    bump(st, hd);
+    st.last = e;
+    st.protect = e;
+    reclaim(st, set_records());
+    st.protect = 0 - 1;
+    return 0;
+}
+
 // Zero the arena's bytes `from..to`.
 fn zero_fill[&d](data: &!d [byte], from: int, to: int) -> [] int {
     var i = from;

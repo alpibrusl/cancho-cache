@@ -6,16 +6,16 @@
 
 **A Redis-compatible cache that says what it can do.** Strings, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that says it never touches the filesystem or foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py` and `ioredis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha, a string cache and not a Redis replacement.** It answers 38 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, one database, and no transactions (`MULTI`/`EXEC`, so a `redis-py` `pipeline()` in its default, transactional mode does not work; `pipeline(transaction=False)` does). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+**Status: alpha, a string cache and not a Redis replacement.** It answers 43 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## What you get
 
-* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (131 cases and 8 small-index cases, four framings each). The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12.
+* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (334 cases and 8 small-index cases, four framings each). The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12.
 * **Speed, measured.** On one core against Redis 7.0.15 it is at 1.07 to 2.00 times Redis's throughput on the pre-registered cells, with the same hit rate at the same resident memory, while doing much less than Redis does.
 * **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before.
 * **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and an approximate LRU (`allkeys-lru`) or `noeviction`, which refuses with Redis's own error.
 * **An authority you can read.** `cancho authority` lists what the program may do, and CI checks it (below).
-* **Real clients.** RESP2 and RESP3, `HELLO`, `AUTH`, `CLIENT`, `INFO`, `CONFIG GET`, `COMMAND`: what a client library sends on connecting.
+* **Real clients.** RESP2 and RESP3, `HELLO`, `AUTH`, `CLIENT`, `INFO`, `CONFIG GET`, `COMMAND`: what a client library sends on connecting; and transactions, so `redis-py`'s default `pipeline()`, its `WATCH`-based `transaction()` and `ioredis`'s `multi().exec()` work.
 
 Every measurement, its caveats and the gate fixed before the code are in [`docs/design.md`](docs/design.md).
 
@@ -36,7 +36,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision
 export CANCHO=$PWD/../cancho/target/release/cancho
 
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, noeviction | allkeys-lru
 redis-cli -p 6379 PING                 # PONG
@@ -78,7 +78,7 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho --std
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho --std
 # performs: args, clock, conn_accept, conn_read, conn_write, err_write, heap, net_in(""), poll
 # never touches: the filesystem, foreign code
 ```
@@ -88,9 +88,11 @@ $CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/
 `GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `MGET`, `MSET`, `INCR`, `DECR`,
 `INCRBY`, `DECRBY`, `DEL`, `EXISTS`, `TYPE`, `STRLEN`, `DBSIZE`, `FLUSHALL`; `EXPIRE` and `PEXPIRE` (with `NX XX GT LT`),
 `TTL`, `PTTL`, `PERSIST`; and what a client library says on connecting: `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT`, `INFO`,
-`CONFIG GET`, `COMMAND`, `QUIT`, `RESET`. The eviction policy is `allkeys-lru`. Every reply is byte-identical to Redis 7.0.15
+`CONFIG GET`, `COMMAND`, `QUIT`, `RESET`; and transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`. The eviction policy is `allkeys-lru`. Every reply is byte-identical to Redis 7.0.15
 for the cases in `tests/differential.py`; the deliberate divergences (inline commands refused, `CONFIG SET` refused, a
 `COMMAND` that keeps no table of flags) are listed in [`docs/design.md`](docs/design.md) section 12.
+
+**Transactions** (section 14 of the design): `EXEC` is atomic because the loop runs one command at a time. A queued command is stored as the bytes it arrived as, in a 16 KiB queue for each connection (a command that does not fit is refused, and `EXEC` then answers `-EXECABORT`); `WATCH` follows up to eight keys, by a version for each of 4,096 buckets of keys, so `EXEC` can abort when an *unrelated* key shares a bucket with a watched one (a client retries, as it must after a real abort), and it never fails to abort when a watched key changed. Redis has none of these three limits.
 
 ## Tests
 
@@ -102,6 +104,8 @@ python3 tests/limits.py build/cache                       # a full arena and a f
 python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under allkeys-lru
 python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CONFIG/QUIT; redis-py and ioredis connecting
 python3 tests/fuzz_server.py build/cache                  # hostile bytes
+python3 tests/transactions.py build/cache                 # WATCH and EXEC across two connections; redis-py and ioredis transactions
+CANCHO=$CANCHO python3 tests/txn_mutants.py               # 16 deliberately wrong caches, each of which must be caught
 ```
 
 Benchmarks (reported, with the gate in the design doc):
@@ -128,6 +132,7 @@ src/cache.cho      the loop: one poller, one slab of connections
 src/resp.cho       the RESP parser
 src/commands.cho   the commands
 src/session.cho    HELLO, AUTH, CLIENT, INFO, CONFIG, COMMAND, QUIT
+src/txn.cho        MULTI, EXEC, DISCARD, WATCH, UNWATCH
 src/reply.cho      reply helpers shared by the two
 src/store.cho      the memory: arena, key table, expiry, eviction, compaction
 tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)
@@ -136,7 +141,7 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings only. No persistence, replication, TLS, pub/sub, scripting or `MULTI`/`EXEC`. One database. Up to 256 connections and a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+Strings only. No persistence, replication, TLS, pub/sub or scripting. One database. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 256 connections and a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## Contributing
 

@@ -288,7 +288,7 @@ were each caught. The gate benchmark is unchanged (1.23, 1.99, 1.18, 1.50 agains
 `COMMAND` and `COMMAND COUNT`/`LIST` describe 38 commands and keep no table of flags and key positions; `CONFIG GET` with several patterns answers in pattern order where Redis uses its hash table's (and its order differs between runs, so it
 cannot be asserted either way); `AUTH` accepts the `default` user with any password and refuses any other, as a Redis with no password does.
 
-**Found, not fixed: `MULTI`/`EXEC`.** redis-py's `pipeline()` is a transaction by default and sends `MULTI`, so `r.pipeline()` fails against this server (`pipeline(transaction=False)` works, and is what the test uses). Transactions were declared a non-goal; this is the case for
+**Found, then built in section 14: `MULTI`/`EXEC`.** redis-py's `pipeline()` is a transaction by default and sends `MULTI`, so `r.pipeline()` fails against this server (`pipeline(transaction=False)` works, and is what the test uses). Transactions were declared a non-goal; this is the case for
 reconsidering a minimal `MULTI`/`EXEC` (queue per connection, run at `EXEC`), which is a design question (what is queued, what a syntax error inside it does) and not built.
 
 ## 13. Incremental compaction
@@ -334,3 +334,64 @@ The per-`SET` cost of `reclaim` when nothing needs reclaiming is two comparisons
 
 Not built: the slice sizes (64 and 1,024 records) and thresholds (three quarters used, a sixteenth garbage, an eighth left) are the first values tried, not tuned; and `CONFIG RESETSTAT` is still an
 acknowledgement that resets nothing, so `max_turn_ms` covers the whole run.
+
+## 14. `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` (epic #8, issue #9)
+
+Status: **built**; sections 14.1 to 14.4 are the design as it stood before the code, and 14.5 says what building it found.
+
+**The claim.** A client library's transaction (`redis-py` `pipeline()` in its default mode, `ioredis` `multi().exec()`, a `WATCH`-based check-and-set loop) works, with every reply byte-identical to Redis 7.0.15, at no cost to `GET`/`SET` outside a transaction.
+
+**Why it is cheap here.** The loop is one thread and every command runs to completion, so `EXEC` is atomic by construction: no other connection's command can run between two queued ones. What is left is bookkeeping per connection, in fixed memory.
+
+### 14.1 What is queued, and where
+
+- Per connection, a `txn` row of 24 ints (in `MULTI`, dirty, bytes queued, commands queued, watched count, the flush epoch at `WATCH`, and up to eight watched `(bucket, version)` pairs) and a queue of `input_size()` (16 KiB) bytes in a slab of its own: 256 connections cost 4 MiB, fixed at start, nothing allocated afterwards.
+- A queued command is stored as the **bytes it arrived as** (the whole RESP array) and parsed again at `EXEC`. No second representation of a command exists to disagree with the first.
+- If a command does not fit in what is left of the queue, the reply is `-ERR transaction queue is full` and the transaction is marked dirty, so `EXEC` answers `-EXECABORT`. **Deliberate divergence:** Redis has no such bound (it is bounded by memory).
+
+### 14.2 What is checked when a command is queued, and what at `EXEC`
+
+Redis refuses at queue time an unknown command and a wrong argument count, answers the usual error (not `+QUEUED`), and marks the transaction dirty, so that `EXEC` replies `-EXECABORT Transaction discarded because of previous errors.` and runs nothing. Everything else (a syntax error in `SET k v EX`, `INCR` on a non-integer, a value out of range) is found by the command itself at `EXEC`, answered **as that element of the reply array**, and does not stop the others.
+
+The queue-time check needs the arity of every command without running it. `commands.arity(name)` is a table (positive: exactly; negative: at least), covering the 38 commands and the transaction commands. It is a second place that knows an arity; issue #10 replaces it with the `COMMAND` table that the dispatcher and `COMMAND INFO` will both read, and until then a test (14.4) compares it with what the dispatcher answers for every command at every count from 0 to 4.
+
+Executed at once, never queued: `MULTI` (answers `-ERR MULTI calls can not be nested`), `EXEC`, `DISCARD`, `WATCH` (`-ERR WATCH inside MULTI is not allowed`), `QUIT`, `RESET` (which also discards the transaction and the watches). Every other command is queued, `HELLO`, `AUTH` and `CLIENT` included.
+
+### 14.3 `WATCH`: a version for each bucket of keys
+
+`EXEC` must abort if a watched key was modified since `WATCH`. The store gains a table of 4,096 version counters indexed by the low bits of a key's hash; every modification of a key bumps the counter of its bucket: a `SET` (even of the same value: Redis signals it too), a deletion, an expiry change, an eviction, and the removal of an expired key; `FLUSHALL`/`FLUSHDB` bump an epoch that every watch also records. `WATCH` records `(bucket, version)`; `EXEC` compares.
+
+- **Cost.** One increment on the write paths, none on `GET`. Memory: 32 KiB, fixed.
+- **It can abort when it should not**: two keys sharing a bucket (1 in 4,096 for a pair), and a client that retries is the correct reaction, as it must be to a real abort. It never fails to abort when it should. **Deliberate divergence**, stated in the README.
+- **A key that expires after `WATCH` aborts `EXEC`.** Redis 7 does not abort for a key that was already past its time when it was watched; this server cannot tell the two apart and aborts. Not asserted either way by the harness.
+- **At most eight watched keys** per connection, then `-ERR too many watched keys`. **Deliberate divergence** (Redis has no limit); `WATCH` of the same bucket twice counts once.
+- An aborted `EXEC` answers a null array (`*-1` in RESP2, `_` in RESP3) and clears the watches; so does a successful one, `DISCARD`, `UNWATCH`, `RESET` and a disconnect.
+
+### 14.4 Gate, fixed before building
+
+1. `tests/differential.py`: every transaction case that fits one connection, four framings each, byte-identical to Redis: `MULTI`/`EXEC` of several commands, an empty transaction, nesting, `EXEC`/`DISCARD` without `MULTI`, an unknown command and a wrong arity inside (`EXECABORT`), a runtime error in the middle (the others still run), a syntax error inside a command, `WATCH` with no change, `UNWATCH`, `WATCH` inside `MULTI`, `RESET` inside `MULTI`, RESP3 replies, and a `SET`/`GET`/`DEL`/`INCR` mix inside one transaction.
+2. `tests/transactions.py` (new): what one connection cannot show, with a second: a write to a watched key from another connection aborts `EXEC`; a write to another key does not; `FLUSHALL` from another connection aborts; an expiry of the watched key aborts; `redis-py` default `pipeline()` and a `WATCH` check-and-set loop; `ioredis` `multi().exec()`; and the arity table against the dispatcher.
+3. **Mutants, each caught:** commands run as they arrive; `WATCH` ignored; `EXEC` continues after a dirty queue; a runtime error aborts the rest; the queue is not cleared by `DISCARD`; a queue that leaks into the next `MULTI`; watches not cleared by `EXEC`.
+4. The throughput gate of section 2 re-run: outside a transaction a command pays one comparison (`in_multi`), which must not move a cell.
+5. README: remove `MULTI`/`EXEC` from the limitations, state the three divergences above, update the command count.
+
+### 14.5 Built, and what building it found
+
+`src/txn.cho` (the five commands and the queue), the `EXEC` loop in `src/cache.cho`, `commands.arity`, and in `src/store.cho` the version table and epoch (bumped in `put_key`, `remove_entry`, `set_expiry` and `clear`). `COMMAND COUNT` is 43.
+
+**The gate of 14.4, as run (Redis 7.0.15):**
+
+1. `tests/differential.py`: **334 cases + 8 small-index cases**, four framings each, byte-identical (131 before this section; the 203 new ones are the 48 transaction cases above and a sweep of the arity of 30 commands at 0 to 4 words, queued, plus five commands with no words). The sweep compares the arity table against Redis's for every command, which is the check 14.2 promised.
+2. `tests/transactions.py`: 12 two-connection scenarios compared with Redis step by step (a write by another connection to the watched key, the same value, a `DEL`, an `INCR`, an `EXPIRE`, `FLUSHALL` and a key expiring all abort `EXEC`; a write to another key and a read do not; a queued command and another connection's command do not interleave), `EXEC` sending 2.4 MB of answers (more than the 2.2 MB scratch buffer) in pieces and in order, and `redis-py` (default `pipeline()`, a bounded `WATCH` loop that retries after a competing write, `WatchError`, an unknown command in the queue, a RESP3 transaction) and `ioredis` (`multi().exec()` and a watch aborted by a competing writer).
+3. `tests/txn_mutants.py`: **16 deliberately wrong caches, every one caught**: the seven of 14.4, and nine more (no mark on an unknown command or a wrong arity, `RESET` leaving the watches, a `DEL`, `EXPIRE`, `SET` or `FLUSHALL` that does not touch the version, an array where Redis answers a null, a watch compared against the wrong bucket, a queued command cut one byte short). It runs in its own workflow, `mutants.yml`, when the layer changes.
+4. **Throughput**, `bench/vs_redis.sh`, the section 2 cells, medians of five interleaved rounds, this machine (4 vCPUs), the cache built from `main` (before) and from this change (after), run twice each. The cache's own medians, requests a second, before / after: `SET` at pipeline 1: 181,752 and 190,222 / 181,587 and 181,587; `GET` at pipeline 1: 190,295 and 181,587 / 190,259 and 181,818; `SET` at pipeline 16: 1,329,787 and 1,988,072 / 1,333,333 and 1,329,787; `GET` at pipeline 16: 2,000,000 and 1,992,032 / 1,996,008 and 1,992,032. The ratios against Redis in the four cells, after: 1.23, 1.34, 1.24 and 1.50 (first run); 1.23, 1.33, 1.18 and 1.50 (second). **No cell is below the gate's 0.9, and no change in the cache's own figures is outside the run-to-run spread of the same binary** (the baseline's two runs differ from each other by as much). The pipeline-16 cells are quantised, as sections 9 and 13 say (a million requests in 0.5, 0.75 or 1.0 s), which is why `SET` at pipeline 16 reads 1.33M in one run and 1.99M in the next of the *same* build, and why the `GET` ratio at pipeline 16 reads 1.50 here and 2.00 in the first baseline run: Redis's median fell on a step.
+
+**What building it found, each fixed and each now a case:**
+
+* **A trap on `*0\\r\\n`.** The first version of `txn.handle` read the command's name before checking that there was one; an empty array, which the older `commands.execute` guards against, killed the process. The differential case "empty array *0" (it was there before) found it at once. It is the reason the harness has hostile-input cases, and the check now comes first.
+* **`EXEC` with an argument** is not `-ERR wrong number of arguments`: Redis answers `-EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command` and discards a transaction in progress, in or out of `MULTI`.
+* **`RESET` outside a transaction also forgets the watches**; the first version cleared them only inside `MULTI`.
+* **A queued `UNWATCH` is run at `EXEC`**, where the dispatcher does not know it: the loop answers it `+OK` itself, and `clear` forgets the watches.
+* **redis-py's `transaction()` retries without end**, so a server that always aborts hangs a test that uses it. The test writes the loop out, bounded, and the mutant runner counts a harness that times out as having caught the mutant.
+
+**Not built, stated:** queue-time checks of a command's *arguments* (Redis does none either); `WATCH` of more than eight keys (`-ERR too many watched keys`); a queue larger than 16 KiB; the exact Redis 7 rule for a watched key that was already past its time when watched (this server aborts; neither answer is asserted); `MULTI` inside a `MULTI` marking nothing dirty is as Redis has it. Commands are still not described by a `COMMAND` table with flags: `commands.arity` is a second place that knows an arity, to be replaced by the table of issue #10.

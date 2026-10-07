@@ -6,7 +6,7 @@
 
 **A Redis-compatible cache that says what it can do.** Strings, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that says it never touches the filesystem or foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py` and `ioredis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha, a string cache and not a Redis replacement.** It answers 43 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+**Status: alpha, a string cache and not a Redis replacement.** It answers 49 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## What you get
 
@@ -85,7 +85,7 @@ $CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/
 
 ## Commands
 
-`GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `MGET`, `MSET`, `INCR`, `DECR`,
+`GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `GETEX`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `SETRANGE`, `GETRANGE` (and `SUBSTR`), `INCR`, `DECR`,
 `INCRBY`, `DECRBY`, `DEL`, `EXISTS`, `TYPE`, `STRLEN`, `DBSIZE`, `FLUSHALL`; `EXPIRE` and `PEXPIRE` (with `NX XX GT LT`),
 `TTL`, `PTTL`, `PERSIST`; and what a client library says on connecting: `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT`, `INFO`,
 `CONFIG GET`, `COMMAND`, `QUIT`, `RESET`; and transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`. The eviction policy is `allkeys-lru`. Every reply is byte-identical to Redis 7.0.15
@@ -106,6 +106,7 @@ python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CO
 python3 tests/fuzz_server.py build/cache                  # hostile bytes
 python3 tests/transactions.py build/cache                 # WATCH and EXEC across two connections; redis-py and ioredis transactions
 CANCHO=$CANCHO python3 tests/txn_mutants.py               # 16 deliberately wrong caches, each of which must be caught
+CANCHO=$CANCHO python3 tests/string_mutants.py            # 16 more, for APPEND, SETRANGE, GETRANGE, GETEX and MSETNX
 ```
 
 Benchmarks (reported, with the gate in the design doc):

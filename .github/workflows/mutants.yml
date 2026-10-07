@@ -10,6 +10,9 @@ on:
       - src/store.cho
       - src/cache.cho
       - tests/txn_mutants.py
+      - tests/string_mutants.py
+      - tests/mutlib.py
+      - src/commands.cho
       - tests/transactions.py
       - tests/differential.py
 
@@ -51,6 +54,10 @@ jobs:
           pip install redis
           (cd tests/clients && npm install --no-audit --no-fund)
 
-      - name: Every mutant is caught
+      - name: Every transaction mutant is caught
         working-directory: cache
         run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/txn_mutants.py
+
+      - name: Every string-command mutant is caught
+        working-directory: cache
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/string_mutants.py

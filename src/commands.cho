@@ -123,6 +123,170 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
     return reply.put(sc, at, "+OK\r\n");
 }
 
+// The longest a string may be (`proto-max-bulk-len`, 512 MiB): Redis refuses a longer result in its own words, and a result that fits
+// that and not the arena is refused as out of memory.
+fn max_string() -> [] int {
+    return 536870912;
+}
+
+fn too_long[&b](sc: &!b [byte], at: int) -> [] int {
+    return reply.put(sc, at, "-ERR string exceeds maximum allowed size (proto-max-bulk-len)\r\n");
+}
+
+// `APPEND key value`: the length after.
+fn command_append[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let key = reply.arg_of(view, table, 1);
+    let value = reply.arg_of(view, table, 2);
+    let h = store.hash_of(st, key);
+    let e = store.find(st, key, h);
+    var old = 0;
+    if e >= 0 {
+        old = len(store.value(st, e));
+    }
+    if old + len(value) > max_string() {
+        return too_long(sc, at);
+    }
+    if store.splice(st, key, h, old, value) != 0 {
+        return reply.refused(sc, at);
+    }
+    return reply.put_integer(sc, at, old + len(value));
+}
+
+// `SETRANGE key offset value`: the length after.
+fn command_setrange[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let (status, offset) = reply.parse_int(reply.arg_of(view, table, 2));
+    if status != 0 {
+        return reply.not_an_integer(sc, at);
+    }
+    if offset < 0 {
+        return reply.put(sc, at, "-ERR offset is out of range\r\n");
+    }
+    let key = reply.arg_of(view, table, 1);
+    let value = reply.arg_of(view, table, 3);
+    let h = store.hash_of(st, key);
+    let e = store.find(st, key, h);
+    var old = 0;
+    if e >= 0 {
+        old = len(store.value(st, e));
+    }
+    if len(value) == 0 {
+        return reply.put_integer(sc, at, old);
+    }
+    if offset > max_string() - len(value) {
+        return too_long(sc, at);
+    }
+    if store.splice(st, key, h, offset, value) != 0 {
+        return reply.refused(sc, at);
+    }
+    if offset + len(value) > old {
+        return reply.put_integer(sc, at, offset + len(value));
+    }
+    return reply.put_integer(sc, at, old);
+}
+
+// `GETRANGE key start end` (and its old name `SUBSTR`): the bytes from `start` to `end` inclusive, counting from the end when negative.
+fn command_getrange[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let (s1, first) = reply.parse_int(reply.arg_of(view, table, 2));
+    if s1 != 0 {
+        return reply.not_an_integer(sc, at);
+    }
+    let (s2, last) = reply.parse_int(reply.arg_of(view, table, 3));
+    if s2 != 0 {
+        return reply.not_an_integer(sc, at);
+    }
+    let key = reply.arg_of(view, table, 1);
+    let e = store.find(st, key, store.hash_of(st, key));
+    if e < 0 {
+        return reply.put(sc, at, "$0\r\n\r\n");
+    }
+    let value = store.value(st, e);
+    let size = len(value);
+    var start = first;
+    var end = last;
+    if start < 0 && end < 0 && start > end {
+        return reply.put(sc, at, "$0\r\n\r\n");
+    }
+    if start < 0 {
+        start = size + start;
+    }
+    if end < 0 {
+        end = size + end;
+    }
+    if start < 0 {
+        start = 0;
+    }
+    if end < 0 {
+        end = 0;
+    }
+    if end >= size {
+        end = size - 1;
+    }
+    if start > end || size == 0 {
+        return reply.put(sc, at, "$0\r\n\r\n");
+    }
+    return reply.put_bulk(sc, at, value[start..end + 1]);
+}
+
+// `GETEX key [EX seconds | PX milliseconds | PERSIST]`: the value, and a new expiry for the key.
+fn command_getex[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
+    let argc = table[0];
+    var persist = false;
+    // 0 none, 1 EX, 2 PX; and where its argument is.
+    var kind = 0;
+    var amount_at = 0;
+    var i = 2;
+    while i < argc {
+        let opt = reply.arg_of(view, table, i);
+        if reply.is_word(opt, "PERSIST") && kind == 0 {
+            persist = true;
+        } else if reply.is_word(opt, "EX") && !persist && kind != 2 && i + 1 < argc {
+            kind = 1;
+            amount_at = i + 1;
+            i = i + 1;
+        } else if reply.is_word(opt, "PX") && !persist && kind != 1 && i + 1 < argc {
+            kind = 2;
+            amount_at = i + 1;
+            i = i + 1;
+        } else {
+            return reply.syntax_error(sc, at);
+        }
+        i = i + 1;
+    }
+    let key = reply.arg_of(view, table, 1);
+    let h = store.hash_of(st, key);
+    let e = store.find(st, key, h);
+    if e < 0 {
+        return reply.put_null(sc, at, proto);
+    }
+    var when = 0;
+    if kind != 0 {
+        let (status, amount) = reply.parse_int(reply.arg_of(view, table, amount_at));
+        if status != 0 {
+            return reply.not_an_integer(sc, at);
+        }
+        if amount <= 0 {
+            return reply.put(sc, at, "-ERR invalid expire time in 'getex' command\r\n");
+        }
+        let (bad, at_when) = expire_at(amount, kind == 1, store.now_of(st));
+        if bad != 0 {
+            return reply.put(sc, at, "-ERR invalid expire time in 'getex' command\r\n");
+        }
+        when = at_when;
+    }
+    // The value goes into the answer before the key can be removed.
+    let o = reply.put_bulk(sc, at, store.value(st, e));
+    if kind != 0 {
+        if when <= store.now_of(st) {
+            store.delete(st, key, h);
+        } else {
+            store.set_expiry(st, e, when);
+        }
+    } else if persist {
+        store.set_expiry(st, e, 0);
+    }
+    return o;
+}
+
 // `INCR`, `DECR`, `INCRBY`, `DECRBY`: add `delta` to the integer in the key, which starts at 0.
 fn add_to[&k, &b, &s, &t](key: &k [byte], delta: int, sc: &!b [byte], at: int, st: &!s store.Store, tmp: &!t [byte]) -> [] int {
     let h = store.hash_of(st, key);
@@ -460,6 +624,52 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return reply.put(sc, at, "+OK\r\n");
     }
+    if reply.is_word(name, "APPEND") {
+        if argc != 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_append(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "SETRANGE") {
+        if argc != 4 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_setrange(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "GETRANGE") || reply.is_word(name, "SUBSTR") {
+        if argc != 4 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_getrange(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "GETEX") {
+        if argc < 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_getex(view, table, sc, at, st, link[3]);
+    }
+    if reply.is_word(name, "MSETNX") {
+        if argc < 3 || argc % 2 == 0 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        var j = 1;
+        while j < argc {
+            let key = reply.arg_of(view, table, j);
+            if store.find(st, key, store.hash_of(st, key)) >= 0 {
+                return reply.put_integer(sc, at, 0);
+            }
+            j = j + 2;
+        }
+        j = 1;
+        while j < argc {
+            let key = reply.arg_of(view, table, j);
+            if store.set(st, key, store.hash_of(st, key), reply.arg_of(view, table, j + 1), 0) != 0 {
+                return reply.refused(sc, at);
+            }
+            j = j + 2;
+        }
+        return reply.put_integer(sc, at, 1);
+    }
     if reply.is_word(name, "STRLEN") {
         if argc != 2 {
             return reply.wrong_arguments(sc, at, name);
@@ -578,8 +788,11 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "INCRBY") || reply.is_word(name, "DECRBY") || reply.is_word(name, "SETNX") || reply.is_word(name, "GETSET") {
         return 3;
     }
-    if reply.is_word(name, "SETEX") || reply.is_word(name, "PSETEX") {
+    if reply.is_word(name, "SETEX") || reply.is_word(name, "PSETEX") || reply.is_word(name, "GETRANGE") || reply.is_word(name, "SUBSTR") || reply.is_word(name, "SETRANGE") {
         return 4;
+    }
+    if reply.is_word(name, "APPEND") {
+        return 3;
     }
     if reply.is_word(name, "DBSIZE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") {
         return 1;
@@ -587,10 +800,10 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
         return 0 - 1;
     }
-    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") {
+    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") {
         return 0 - 2;
     }
-    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") {
+    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") {
         return 0 - 3;
     }
     return 0;

@@ -25,6 +25,8 @@ env:
 jobs:
   mutants:
     runs-on: ubuntu-latest
+    # A step that hangs (a package mirror that does not answer, once, held a job for GitHub's six hours) fails instead.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,7 +51,7 @@ jobs:
         run: cargo build --release -p cancho
 
       - name: Redis, the oracle
-        run: sudo apt-get update -q && sudo apt-get install -y -q redis-server
+        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server
 
       - name: Client libraries
         working-directory: cache

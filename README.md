@@ -148,7 +148,7 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings only. No persistence, replication, TLS, pub/sub or scripting. One database. A value is at most 16 KiB, whether it is `SET` or built by `APPEND` and `SETRANGE`. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 256 connections and a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+Strings only. No persistence, replication, TLS, pub/sub or scripting. One database. A value is at most 16 KiB, whether it is `SET` or built by `APPEND` and `SETRANGE`. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 256 connections and a 16 KiB command (both fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## Contributing
 

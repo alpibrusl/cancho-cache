@@ -33,9 +33,15 @@ fn input_size() -> [] int {
     return 16384;
 }
 
+// How much answer is built before it is sent. Under what a connection may have waiting, so that what the kernel does not take fits the queue
+// and a command's answer never makes a client that is slow to read lose its connection.
+fn flush_at() -> [] int {
+    return 32768;
+}
+
 // What one connection may have waiting to be sent.
 fn output_size() -> [] int {
-    return 65536;
+    return commands.piece();
 }
 
 // Per connection `k`, `state[10k..10k+10]` is:
@@ -49,6 +55,7 @@ fn output_size() -> [] int {
 //     6  its client id
 //     7  1 if a command asked for the connection to be closed after its answers (`QUIT`)
 //     8  the protocol it speaks: 2, or 3 after `HELLO 3`
+//     9  where a command that answers in pieces (`MGET`) is to go on from; 0 when none is part way
 fn stride() -> [] int {
     return 10;
 }
@@ -160,7 +167,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
             going = false;
         } else {
             let view = bf[base + used..base + st[p]];
-            let n = resp.parse(view, tb);
+            var n = resp.parse(view, tb);
             if n == 0 {
                 if used == 0 && st[p] >= size {
                     at = reply.put(sc, at, "-ERR Protocol error: command too large\r\n");
@@ -180,50 +187,79 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
             } else {
                 // `MULTI` and its kin, and a command inside a transaction, are answered or queued by `txn`; everything else is run here.
                 let tx = tall[txn.stride() * k..txn.stride() * k + txn.stride()];
-                let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[base..base + size], st[p + 5..p + 9], n);
+                let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[base..base + size], st[p + 5..p + 10], n);
                 at = after;
                 if status == 0 {
-                    at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 9], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                    at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
                 }
-                contents(core.info)[2] = contents(core.info)[2] + 1;
+                if status == 0 && st[p + 9] != 0 {
+                    // A command that answers in pieces (`MGET`) wrote one and has more to say. What it wrote goes out now; the command stays
+                    // where it is in the input, and when the answers have gone (this turn, or the one the socket can take more in) it is parsed
+                    // again and goes on from where `st[p + 9]` says.
+                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                    at = 0;
+                    n = 0;
+                } else {
+                    contents(core.info)[2] = contents(core.info)[2] + 1;
+                }
                 if status == 2 {
-                    // `EXEC`: run what was queued, one command at a time, the answers going out as they fill the scratch buffer. No other
-                    // connection's command can run in between, which is what makes it atomic.
+                    // `EXEC`: run what was queued, one command at a time, the answers going out as they fill. If the client is not reading and the
+                    // answers cannot all be sent, it stops where it is (`tx[22]`, `tx[23]`), stays at the `EXEC` in the input, and goes on when the
+                    // socket can take more: the same way a command that answers in pieces does. While it waits, other connections' commands run,
+                    // so an `EXEC` that has to wait for its client is no longer atomic with them; one that does not wait still is.
                     let queue = qall[base..base + size];
-                    var qi = 0;
-                    var c = 0;
-                    while c < tx[3] {
+                    var qi = tx[23];
+                    var running = true;
+                    while running && qi < tx[2] {
                         let qview = queue[qi..tx[2]];
                         let qn = resp.parse(qview, tb);
                         if qn <= 0 {
-                            c = tx[3];
+                            qi = tx[2];
                         } else {
+                            var done = true;
                             if reply.is_word(reply.arg_of(qview, tb, 0), "UNWATCH") {
                                 // The watches were checked already and `clear` below forgets them.
                                 at = reply.put(sc, at, "+OK\r\n");
                             } else {
-                                at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 9], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                                at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                                if st[p + 9] != 0 {
+                                    // Part way through a command that answers in pieces: what it wrote goes out, and it is called again.
+                                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                                    at = 0;
+                                    done = false;
+                                    if st[p + 2] != 0 {
+                                        running = false;
+                                    }
+                                }
                             }
-                            qi = qi + qn;
-                            c = c + 1;
-                            if at + commands.reserve() > len(sc) {
-                                st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
-                                at = 0;
-                                if st[p + 2] < 0 {
-                                    c = tx[3];
+                            if done {
+                                qi = qi + qn;
+                                if at >= flush_at() || at + commands.reserve() > len(sc) {
+                                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                                    at = 0;
+                                    if st[p + 2] != 0 {
+                                        running = false;
+                                    }
                                 }
                             }
                         }
                     }
-                    txn.clear(tx);
+                    if qi < tx[2] && st[p + 2] > 0 {
+                        tx[22] = 1;
+                        tx[23] = qi;
+                        n = 0;
+                    } else {
+                        txn.clear(tx);
+                    }
                 }
                 if st[p + 7] == 1 {
                     st[p + 3] = 1;
                     going = false;
                 }
                 used = used + n;
-                // Room for the biggest answer one command can make.
-                if at + commands.reserve() > len(sc) {
+                // Room for the biggest answer one command can make, and no more than the queue for a slow client can take at once: once
+                // that much is waiting the loop stops, leaving the commands after it in the input until the client has read.
+                if at >= flush_at() || at + commands.reserve() > len(sc) {
                     st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
                     at = 0;
                 }
@@ -343,6 +379,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 6] = contents(core.info)[5];
                         st[p + 7] = 0;
                         st[p + 8] = 2;
+                        st[p + 9] = 0;
                         txn.clear(contents(core.txns)[txn.stride() * slot..txn.stride() * slot + txn.stride()]);
                         contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {

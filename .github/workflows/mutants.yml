@@ -59,6 +59,11 @@ jobs:
           pip install redis
           (cd tests/clients && npm install --no-audit --no-fund)
 
+      - name: Every mutant still applies to the source, exactly once (fast)
+        working-directory: cache
+        run: |
+          for f in txn string keyspace; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
+
       - name: Every transaction mutant is caught
         working-directory: cache
         run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/txn_mutants.py

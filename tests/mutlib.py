@@ -24,6 +24,18 @@ def run_mutants(mutants, only=""):
     if not CANCHO:
         raise SystemExit("set CANCHO to the compiler")
     holes = []
+    if os.environ.get("MUTANTS_LINT"):
+        # Fast: is every mutant's text in its file exactly once? (A later change to the source can leave one that applies to nothing, or twice.)
+        for name, fname, old, new, how in mutants:
+            text = open(os.path.join(ROOT, "src", fname)).read()
+            if text.count(old) != 1 or old == new:
+                print("BROKEN mutant (its text is in %s %d times): %s" % (fname, text.count(old), name))
+                holes.append(name)
+        if holes:
+            print("%d broken mutant(s)" % len(holes))
+            sys.exit(1)
+        print("every mutant applies exactly once (%d)" % len(mutants))
+        return
     for name, fname, old, new, how in mutants:
         if only not in name:
             continue

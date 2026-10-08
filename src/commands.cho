@@ -20,6 +20,12 @@ import store;
 
 // The most bytes the answer to one command can take: `MGET` of the most keys the parser allows, each value as large as
 // a command can carry (the input buffer, 16 KiB), plus framing.
+// What one connection may have waiting to be sent, and so the most a command that answers in pieces writes in one: `MGET` writes up to
+// this much, stops, and is called again when the answers so far have gone (`link[4]` says where it was).
+pub fn piece() -> [] int {
+    return 65536;
+}
+
 pub fn reserve() -> [] int {
     return 1114112;
 }
@@ -599,9 +605,16 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         if argc < 2 {
             return reply.wrong_arguments(sc, at, name);
         }
-        var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), argc - 1), "\r\n");
-        var k = 1;
-        while k < argc {
+        // In pieces: `link[4]` is the argument to go on from (0: not started). It writes keys while the next could still fit within `piece()`
+        // of where it started, and if some are left says so and returns; the caller sends what it wrote and calls again, in the same turn or,
+        // for a client that is not reading, when the socket can take more.
+        var o = at;
+        var k = link[4];
+        if k == 0 {
+            o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), argc - 1), "\r\n");
+            k = 1;
+        }
+        while k < argc && o + max_string() + 32 <= at + piece() {
             let key = reply.arg_of(view, table, k);
             let e = store.find(st, key, store.hash_of(st, key));
             if e < 0 {
@@ -610,6 +623,11 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
                 o = reply.put_bulk(sc, o, store.value(st, e));
             }
             k = k + 1;
+        }
+        if k < argc {
+            link[4] = k;
+        } else {
+            link[4] = 0;
         }
         return o;
     }

@@ -153,6 +153,77 @@ try:
     s.sendall(cmd("MULTI") + b"".join(cmd("GET", "m%d" % (i % 63)) for i in range(100)) + cmd("EXEC"))
     want = b"+OK\r\n" + b"+QUEUED\r\n" * 100 + b"*100\r\n" + b"".join(b"$%d\r\n" % top + bytes([65 + (i % 63) % 26]) * top + b"\r\n" for i in range(100))
     check("EXEC of 100 GETs of the longest value", read_exactly(len(want)), want)
+    # Answers larger than anything buffered whole (issue #11): MGET writes its answer in pieces, and goes on from where it was when the
+    # client has read what it sent. 300 keys of the longest value is 4.9 MB, more than the buffer an answer is built in holds.
+    for i in range(300):
+        ask(s, "APPEND", "big%d" % i, bytes([65 + i % 26]) * (top // 2))
+        ask(s, "APPEND", "big%d" % i, bytes([65 + i % 26]) * (top // 2))
+    keys300 = ["big%d" % i for i in range(300)]
+    want300 = b"*300\r\n" + b"".join(b"$%d\r\n" % top + bytes([65 + i % 26]) * top + b"\r\n" for i in range(300))
+    s.sendall(cmd("MGET", *keys300))
+    check("MGET of 300 longest values (4.9 MB), read as it comes", read_exactly(len(want300)), want300)
+    s.sendall(cmd("MGET", *keys300) + cmd("MGET", *keys300[:70]) + cmd("PING"))
+    want = want300 + want300[:6].replace(b"300", b"70") + b"".join(b"$%d\r\n" % top + bytes([65 + i % 26]) * top + b"\r\n" for i in range(70)) + b"+PONG\r\n"
+    check("two MGETs and a PING in one write, in order", read_exactly(len(want)), want)
+    # A client that does not read for a while: the answer waits for it and arrives whole, and others are served meanwhile.
+    slow = socket.create_connection(("127.0.0.1", 6399))
+    slow.settimeout(10)
+    slow.sendall(cmd("MGET", *keys300))
+    time.sleep(1.0)
+    check("while one client is not reading, another is answered", ask(s, "PING"), b"+PONG\r\n")
+    got = b""
+    while len(got) < len(want300):
+        d = slow.recv(1 << 20)
+        if not d:
+            break
+        got += d
+    check("the client that did not read for a second gets all of its 4.9 MB, in order", got, want300)
+    slow.close()
+    # Many arguments, which a command used to have at most 64 of.
+    for i in range(1000):
+        pass
+    s.sendall(b"".join(cmd("SET", "n%d" % i, "v%d" % i) for i in range(1000)))
+    read_exactly(5 * 1000)
+    s.sendall(cmd("MGET", *["n%d" % i for i in range(1000)]))
+    want1000 = b"*1000\r\n" + b"".join(b"$%d\r\nv%d\r\n" % (len(b"v%d" % i), i) for i in range(1000))
+    check("MGET of 1000 keys", read_exactly(len(want1000)), want1000)
+    check("DEL of 1000 keys", ask(s, "DEL", *["n%d" % i for i in range(1000)]), b":1000\r\n")
+    s.sendall(cmd("MGET", *["n%d" % i for i in range(1000)]))
+    check("and they are gone", read_exactly(6 + 5 * 1000), b"*1000\r\n" + b"$-1\r\n" * 1000)
+    # The same for a client that does not read at all for a second, whatever the kernel's buffers hold: a pipeline of 200 GETs of the longest
+    # value (3.3 MB) and a transaction of 20 MGETs (20 MB). The loop stops when the client's share is waiting and goes on when it has read.
+    slow = socket.create_connection(("127.0.0.1", 6399))
+    slow.settimeout(20)
+    slow.sendall(b"".join(cmd("GET", "big%d" % (i % 60)) for i in range(200)) + cmd("PING"))
+    time.sleep(1.0)
+    want = b"".join(b"$%d\r\n" % top + bytes([65 + (i % 60) % 26]) * top + b"\r\n" for i in range(200)) + b"+PONG\r\n"
+    got = b""
+    while len(got) < len(want):
+        d = slow.recv(1 << 20)
+        if not d:
+            break
+        got += d
+    check("200 pipelined GETs of the longest value, the client reading only after a second", got, want)
+    slow.close()
+    slow = socket.create_connection(("127.0.0.1", 6399))
+    slow.settimeout(30)
+    slow.sendall(cmd("MULTI") + b"".join(cmd("MGET", *keys300[:60]) for _ in range(20)) + cmd("EXEC") + cmd("PING"))
+    time.sleep(1.5)
+    one = b"*60\r\n" + b"".join(b"$%d\r\n" % top + bytes([65 + i % 26]) * top + b"\r\n" for i in range(60))
+    want = b"+OK\r\n" + b"+QUEUED\r\n" * 20 + b"*20\r\n" + one * 20 + b"+PONG\r\n"
+    got = b""
+    while len(got) < len(want):
+        d = slow.recv(1 << 20)
+        if not d:
+            break
+        got += d
+    check("EXEC of 20 MGETs (20 MB) for a client that reads after 1.5 s: all of it, once, and the PING after", got, want)
+    slow.close()
+    # A transaction of 100 MGETs of the longest value: 20 MB of answers in pieces, for a client that reads at once.
+    s.sendall(cmd("MULTI") + b"".join(cmd("MGET", *keys300[:60]) for _ in range(20)) + cmd("EXEC"))
+    one = b"*60\r\n" + b"".join(b"$%d\r\n" % top + bytes([65 + i % 26]) * top + b"\r\n" for i in range(60))
+    want = b"+OK\r\n" + b"+QUEUED\r\n" * 20 + b"*20\r\n" + one * 20
+    check("EXEC of 20 MGETs of 60 longest values (20 MB)", read_exactly(len(want)), want)
     check("the server is still there", ask(s, "PING"), b"+PONG\r\n")
 finally:
     p.terminate()

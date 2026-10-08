@@ -460,3 +460,29 @@ Status: **built** (54 commands). The design, then what building it found.
 **The fix** is the smallest that makes the invariant true again: `max_string()` is 16,384, so `APPEND` and `SETRANGE` refuse a longer result with Redis's own words, and no value is longer than `reserve()` assumes. `tests/limits.py` now builds the longest value, checks that one byte more is refused and changes nothing, that a `SETRANGE` at an offset of 4 million is refused and makes no key (the reproducer), and that the largest answers (`MGET` of 63 longest values, `EXEC` of 100 `GET`s of one) come back whole. It fails on the binary of `main` (`SETRANGE one past it is refused: got :16385`) and passes on this one.
 
 **What it does not fix, and why issue #11 matters:** `MGET` takes at most 63 keys (the table of arguments holds 64), a command at most 16 KiB. Both are what #11 is for; this section is the reason that lifting them comes with answers that are written in pieces and not built whole.
+
+## 17. More arguments, and answers in pieces (epic #8, issue #11, slice 1 of 3)
+
+Issue #11 is three limits: arguments (a command took 64, so `MGET` of a hundred keys failed), connections (256) and the size of a value (16 KiB). They are three changes, in this order; this is the first.
+
+**Arguments.** `resp.max_args()` is 2,048 (was 64). A command must still fit the 16 KiB input buffer, and the shortest argument takes seven bytes (`$1\r\nk\r\n`), so about 2,300 is all that can arrive; 2,048 is the power of two below it. It is not 4,096 because the unit tests allocate the table in a small region, which 4,096 (a 64 KiB table) overran: the first run of `tests/resp_test.cho` trapped in all seven tests, and the limit was lowered to what the test regions hold. Redis takes a million arguments; a command here is still at most 16 KiB.
+
+**Answers in pieces.** With 2,048 keys, an `MGET` answer can be 2,048 × 16 KiB, far more than the scratch buffer (`3 * reserve()`). So `MGET` is resumable: `commands.piece()` (64 KiB, the size of the per-connection queue for a slow client) is how much one call may write; it writes the header on its first call, then as many values as fit, and keeps in `link[4]` (state index 9) the key it is at, or 0 when done. The server sends what was written, leaves the command at the same place in the input, and parses it again when the answers have gone; the second call carries on from `link[4]`. `flush_at()` (32 KiB) is the point at which the main loop sends and stops reading further commands, so that what the kernel does not take always fits the queue: this is the back-pressure, and a client that does not read is waited for rather than dropped (the connection is closed only if the queue overflows, as before).
+
+**`EXEC`** runs its queue the same way. `tx[22]` says an `EXEC` is waiting and `tx[23]` is the byte of the queue it has reached; `txn.handle` answers "carry on" for an `EXEC` that is waiting, before the arity check, and the queue is cleared only when it has run to its end. A queued `MGET` can itself stop part way. **A difference from Redis, stated:** an `EXEC` that has to wait for a client that is not reading is not atomic with other connections' commands, because the loop serves them while it waits; an `EXEC` whose answers go out at once still is.
+
+**What building it found.**
+
+* An `EXEC` whose queued `MGET` left `st[p + 9]` non-zero was taken by the generic "this command is part way" test as being part way itself: it ran again and produced a stray `-ERR EXEC without MULTI` (found by `tests/limits.py`, the slow-reader `EXEC` of 20 `MGET`s). Fixed by testing `status == 0` first.
+* Two transaction mutants stopped applying when the `EXEC` block was rewritten (the lint, `MUTANTS_LINT=1`, said so: "its text is in cache.cho 0 times"); they were re-written against the new text and are caught.
+* My first tests used 64-key `MGET`s, which are over the old limit, and a helper that cannot read arrays.
+
+**Gate, as run (Redis 7.0.15):**
+
+1. `tests/differential.py`: **498 cases + 8 small-index cases, 0 differ**. New: 65, 100 and 1,000 arguments; `MGET` of 64, 100 and 1,000 keys, in RESP3 with misses, and of one key 1,000 times; `DEL`, `EXISTS`, `TOUCH` of 1,000 keys; `MSET` and `MSETNX` of 300 pairs; `MGET` of 500 keys in `MULTI`. A known divergence is moved to the list: `WATCH` of nine keys (the cache watches eight).
+2. `tests/limits.py`: longest values; `MGET` of 63, 300 (4.9 MB) and 1,000 keys; two `MGET`s and a `PING` pipelined; a client that does not read for a second; 200 pipelined `GET`s of 16 KiB to a slow reader; `EXEC` of 20 `MGET`s (20 MB) to a slow reader and to a prompt one, each followed by a `PING` that must answer.
+3. `tests/pieces_mutants.py`: **9 wrong caches, every one caught** (`MGET` all at once, forgetting where it was, never saying more, part way taken as done, `EXEC` resume taken as part way, header written again on resume, `EXEC` not waiting, `flush_at` huge, `max_args` back to 64); and the lint of all four mutant files.
+4. Unit tests: `resp` 7, `glob` 6, `store` 25; `session`, `expiry`, `fuzz_server`, `transactions` and `keyspace` harnesses pass.
+5. Throughput, `bench/vs_redis.sh`, two runs: ratios against Redis 1.18, 1.33, 1.18, 1.50 and 1.23, 2.00, 1.18, 1.50 (`SET` and `GET`, pipeline 1 and 16); none below the gate's 0.9. These cells never reach the new code.
+
+**Not done here:** more than 256 connections (slice 2) and values over 16 KiB (slice 3); `MGET` replies are still limited by 16 KiB per value.

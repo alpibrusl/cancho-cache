@@ -17,6 +17,7 @@ import store;
 //     4  keys watched
 //     5  the store's epoch when the first key was watched
 //     6+2i, 7+2i  the bucket of the i-th watched key and its version then
+//     22  1 while an `EXEC` waits for its client to read, and 23 the byte of the queue it goes on from
 //
 // A queued command is the bytes it arrived as, parsed again at `EXEC`. Every function here writes only to the answer buffer at the
 // offset it is given, reads the row and the queue within their bounds, and traps on no input.
@@ -160,6 +161,10 @@ pub fn handle[&v, &t, &b, &s, &x, &q, &c](view: &v [byte], table: &t [int], sc: 
     if reply.is_word(name, "EXEC") && argc != 1 {
         clear(tx);
         return (exec_arity(sc, at), 1);
+    }
+    if reply.is_word(name, "EXEC") && tx[22] == 1 {
+        // An `EXEC` that stopped for a client that was not reading goes on from where it was, with no new header and no new checks.
+        return (at, 2);
     }
     let a = commands.arity(name);
     if a == 0 {

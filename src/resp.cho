@@ -23,10 +23,12 @@ module resp;
 //
 // and `slots()` is how big the table has to be.
 
-// The most arguments one command may have: `MGET` and `MSET` are the ones that want many. Redis takes a million; the
-// table here is on the stack of the loop, so it is fixed.
+// The most arguments one command may have: `MGET`, `DEL` and `MSET` are the ones that want many. Redis takes a million. A command has to
+// fit the input buffer (16 KiB) and the shortest argument takes seven bytes (`$1\r\nk\r\n`), so about 2,300 is the most that could ever
+// arrive, and this bound is the power of two below the table's 64 KiB that the unit tests' regions can hold: a limit almost nothing reaches, kept
+// so that the table (which is allocated once, `slots()` ints) has a size. It was 64, which `MGET` of a hundred keys, a thing every client library does, did not fit.
 fn max_args() -> [] int {
-    return 64;
+    return 2048;
 }
 
 pub fn slots() -> [] int {

@@ -221,9 +221,9 @@ cases = [
 known = [
     ("inline PING", b"PING\r\n", "inline commands (typed into telnet) are not supported: design.md section 4"),
     ("bulk not followed by CRLF", b"*1\r\n$3\r\nabcde\r\n", "Redis skips two bytes after a bulk without checking them; the cache refuses (a request-smuggling-shaped ambiguity)"),
-    ("sixty-five arguments", cmd("FOO", *["a"] * 64), "the cache takes at most 64 arguments per command; Redis takes a million"),
     ("SET with EXAT", cmd("SET", "k:exat", "1", "EXAT", "99999999999"), "EXAT, PXAT, EXPIREAT and PEXPIREAT name a time of day, and the cache has a monotonic clock and no calendar"),
     ("EXPIREAT", cmd("EXPIREAT", "k:exat", "99999999999"), "the same"),
+    ("WATCH of nine keys", cmd("WATCH", *["w:%d" % i for i in range(9)]), "the cache follows at most eight watched keys per connection (design.md 14.3); Redis has no limit"),
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
     ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
@@ -413,6 +413,21 @@ cases += [
     ("SCAN no cursor", seq(("SCAN",))),
     ("SCAN options in any order, twice", seq(("FLUSHALL",), ("SET", "hello", "x"), ("SCAN", "0", "COUNT", "5", "MATCH", "h*", "COUNT", "7"), ("SCAN", "0", "MATCH", "x*", "MATCH", "h*"))),
     ("the keyspace commands inside MULTI, arity", seq(M, ("KEYS",), ("SCAN",), ("RANDOMKEY", "x"), ("RENAME", "a"), ("RENAMENX", "a"), X)),
+]
+# Many arguments (issue #11, the first limit): the cache took 64 and now takes what a command can carry.
+cases += [
+    ("sixty-five arguments", seq(("FOO", *["a"] * 64))),
+    ("a hundred arguments to an unknown command", seq(("FOO", *["a%d" % i for i in range(99)]))),
+    ("MGET of 64 keys", seq(("FLUSHALL",), *[("SET", "w:%d" % i, "v%d" % i) for i in range(0, 64, 2)], ("MGET", *["w:%d" % i for i in range(64)]))),
+    ("MGET of 100 keys, half of them there", seq(("FLUSHALL",), *[("SET", "w:%d" % i, "v" * (i % 9)) for i in range(0, 100, 2)], ("MGET", *["w:%d" % i for i in range(100)]))),
+    ("MGET of 1000 keys, a tenth of them there", seq(("FLUSHALL",), *[("SET", "w:%d" % i, "v%d" % i) for i in range(0, 1000, 10)], ("MGET", *["w:%d" % i for i in range(1000)]))),
+    ("MGET of 1000 keys that are not there, RESP3", seq(("HELLO", "3"), ("FLUSHALL",), ("MGET", *["w:%d" % i for i in range(1000)]))),
+    ("MGET of one key a thousand times", seq(("FLUSHALL",), ("SET", "w:a", "x"), ("MGET", *["w:a"] * 1000))),
+    ("DEL of 1000 keys", seq(("FLUSHALL",), *[("SET", "w:%d" % i, "v") for i in range(0, 1000, 3)], ("DEL", *["w:%d" % i for i in range(1000)]), ("DBSIZE",))),
+    ("EXISTS and TOUCH of 1000 keys, with repeats", seq(("FLUSHALL",), ("SET", "w:a", "x"), ("EXISTS", *["w:a"] * 500, *["w:b"] * 500), ("TOUCH", *["w:a"] * 1000))),
+    ("MSET of 300 pairs", seq(("FLUSHALL",), ("MSET", *[x for i in range(300) for x in ("w:%d" % i, "v%d" % i)]), ("DBSIZE",), ("GET", "w:299"))),
+    ("MSETNX of 300 pairs, one of them there", seq(("FLUSHALL",), ("SET", "w:150", "old"), ("MSETNX", *[x for i in range(300) for x in ("w:%d" % i, "v%d" % i)]), ("DBSIZE",), ("GET", "w:150"))),
+    ("MGET of 500 keys in MULTI", seq(("FLUSHALL",), ("SET", "w:1", "x"), M, ("MGET", *["w:%d" % i for i in range(500)]), ("DEL", *["w:%d" % i for i in range(500)]), X)),
 ]
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,

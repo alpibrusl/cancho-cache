@@ -124,10 +124,12 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
     return reply.put(sc, at, "+OK\r\n");
 }
 
-// The longest a string may be (`proto-max-bulk-len`, 512 MiB): Redis refuses a longer result in its own words, and a result that fits
-// that and not the arena is refused as out of memory.
+// The longest a string may be. It is what a command can carry (the input buffer, 16 KiB), because every reply buffer is sized for it:
+// `reserve()` is `MGET` of the most keys with values this long, and a value any longer would overrun the buffer an answer is built in
+// (a `GET` of 4 MB killed the server when `APPEND` and `SETRANGE` could build one). Redis's limit is 512 MiB (`proto-max-bulk-len`) and
+// answers a longer result in the words used here; issue #11 lifts this one properly, with answers that are written in pieces.
 fn max_string() -> [] int {
-    return 536870912;
+    return 16384;
 }
 
 fn too_long[&b](sc: &!b [byte], at: int) -> [] int {

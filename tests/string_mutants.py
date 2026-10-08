@@ -13,6 +13,7 @@ from mutlib import run_mutants
 
 # (name, file, old text, new text, how to test)
 MUTANTS = [
+    ("APPEND and SETRANGE may build a value longer than a reply buffer holds", "commands.cho", "fn max_string() -> [] int {\n    return 16384;\n}", "fn max_string() -> [] int {\n    return 536870912;\n}", ("py", "limits.py")),
     ("APPEND writes at the start instead of the end", "commands.cho", "    if store.splice(st, key, h, old, value) != 0 {", "    if store.splice(st, key, h, 0, value) != 0 {", ("diff", "APPEND to an existing key")),
     ("APPEND answers the old length", "commands.cho", "    return reply.put_integer(sc, at, old + len(value));\n}\n\n// `SETRANGE", "    return reply.put_integer(sc, at, old);\n}\n\n// `SETRANGE", ("diff", "APPEND to a new key")),
     ("splice leaves the gap unzeroed when the value moves", "store.cho", "        let base = at + header() + meta[m + 1];\n        if offset > old {", "        let base = at + header() + meta[m + 1];\n        if offset > old + 1000000000 {", ("diff", "SETRANGE pads with zeros over old garbage, a new key")),

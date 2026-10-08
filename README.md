@@ -6,7 +6,7 @@
 
 **A Redis-compatible cache that says what it can do.** Strings, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that says it never touches the filesystem or foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py` and `ioredis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha, a string cache and not a Redis replacement.** It answers 49 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+**Status: alpha, a string cache and not a Redis replacement.** It answers 54 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## What you get
 
@@ -36,7 +36,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision
 export CANCHO=$PWD/../cancho/target/release/cancho
 
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, noeviction | allkeys-lru
 redis-cli -p 6379 PING                 # PONG
@@ -78,19 +78,21 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho --std
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho --std
 # performs: args, clock, conn_accept, conn_read, conn_write, err_write, heap, net_in(""), poll
 # never touches: the filesystem, foreign code
 ```
 
 ## Commands
 
-`GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `GETEX`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `SETRANGE`, `GETRANGE` (and `SUBSTR`), `INCR`, `DECR`,
+`GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `GETEX`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `SETRANGE`, `GETRANGE` (and `SUBSTR`), `INCR`, `DECR`, `KEYS`, `SCAN` (`MATCH COUNT TYPE`), `RANDOMKEY`, `RENAME`, `RENAMENX`,
 `INCRBY`, `DECRBY`, `DEL`, `EXISTS`, `TYPE`, `STRLEN`, `DBSIZE`, `FLUSHALL`; `EXPIRE` and `PEXPIRE` (with `NX XX GT LT`),
 `TTL`, `PTTL`, `PERSIST`; and what a client library says on connecting: `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT`, `INFO`,
 `CONFIG GET`, `COMMAND`, `QUIT`, `RESET`; and transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`. The eviction policy is `allkeys-lru`. Every reply is byte-identical to Redis 7.0.15
 for the cases in `tests/differential.py`; the deliberate divergences (inline commands refused, `CONFIG SET` refused, a
 `COMMAND` that keeps no table of flags) are listed in [`docs/design.md`](docs/design.md) section 12.
+
+**Keys** (section 16 of the design): `KEYS` and `SCAN` walk the keys in the order their entries were numbered, not in Redis's hash order, and a `SCAN` cursor is that number, so only 0 and the cursors the server gave mean anything (and `COUNT` is the number of entries looked at). Every key there from the first call to the last is answered once. `KEYS` refuses a result of more than about 1 MiB (`-ERR the keys do not fit one reply: use SCAN`), and `RENAME` needs room for a second copy of the value while it moves.
 
 **Transactions** (section 14 of the design): `EXEC` is atomic because the loop runs one command at a time. A queued command is stored as the bytes it arrived as, in a 16 KiB queue for each connection (a command that does not fit is refused, and `EXEC` then answers `-EXECABORT`); `WATCH` follows up to eight keys, by a version for each of 4,096 buckets of keys, so `EXEC` can abort when an *unrelated* key shares a bucket with a watched one (a client retries, as it must after a real abort), and it never fails to abort when a watched key changed. Redis has none of these three limits.
 
@@ -107,6 +109,9 @@ python3 tests/fuzz_server.py build/cache                  # hostile bytes
 python3 tests/transactions.py build/cache                 # WATCH and EXEC across two connections; redis-py and ioredis transactions
 CANCHO=$CANCHO python3 tests/txn_mutants.py               # 16 deliberately wrong caches, each of which must be caught
 CANCHO=$CANCHO python3 tests/string_mutants.py            # 16 more, for APPEND, SETRANGE, GETRANGE, GETEX and MSETNX
+python3 tests/keyspace.py build/cache                     # KEYS patterns and SCAN against Redis, SCAN while keys change, RENAME against a model
+CANCHO=$CANCHO python3 tests/keyspace_mutants.py          # 17 more, for the matcher, KEYS, SCAN and RENAME
+$CANCHO test tests/glob_test.cho src/glob.cho --std       # the pattern matcher
 ```
 
 Benchmarks (reported, with the gate in the design doc):
@@ -134,6 +139,7 @@ src/resp.cho       the RESP parser
 src/commands.cho   the commands
 src/session.cho    HELLO, AUTH, CLIENT, INFO, CONFIG, COMMAND, QUIT
 src/txn.cho        MULTI, EXEC, DISCARD, WATCH, UNWATCH
+src/glob.cho       the pattern matcher of KEYS and SCAN MATCH
 src/reply.cho      reply helpers shared by the two
 src/store.cho      the memory: arena, key table, expiry, eviction, compaction
 tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)

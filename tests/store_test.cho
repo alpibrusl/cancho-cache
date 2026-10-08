@@ -692,6 +692,21 @@ fn test_growing_the_only_key_is_refused_not_self_evicted[&h](heap: &!h Heap) -> 
     return 0;
 }
 
+// Key `from` renamed `to`.
+fn rename_n[&b](st: &!b store.Store, from: int, to: int) -> [] int {
+    var answer = 0;
+    region a {
+        let fb = alloc_slice[a](24, byte_of(0));
+        let tb = alloc_slice[a](24, byte_of(0));
+        let f = key_into(fb, from);
+        let t = key_into(tb, to);
+        let src = fb[0..f];
+        let dst = tb[0..t];
+        answer = store.rename(st, src, store.hash_of(st, src), dst, store.hash_of(st, dst));
+    }
+    return answer;
+}
+
 // `store.splice` (`APPEND` and `SETRANGE`): `length` copies of the letter `c` written at `offset` of key `n`.
 fn splice_n[&b](st: &!b store.Store, n: int, offset: int, c: int, length: int) -> [] int {
     var answer = 0;
@@ -837,6 +852,156 @@ fn test_splice_under_eviction_keeps_its_books[&h](heap: &!h Heap) -> [heap] int 
         }
         test.assert(store.live(w) > 0);
         test.assert(store.evicted(w) > 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+// `store.rename`, and the walk `KEYS`/`SCAN` make: `visible`, `key_at` and `entries`.
+fn test_rename_moves_the_value_and_the_expiry_and_frees_the_old_name[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        store.tick(w, 1000);
+        test.assert_eq(put(w, 1, 'a', 10), 0);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 1);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            store.set_expiry(w, e, 9000);
+        }
+        test.assert_eq(rename_n(w, 1, 2), 0);
+        test.assert_eq(look(w, 1), 0 - 1);
+        test.assert_eq(look(w, 2), 10 * 1000 + 'a');
+        test.assert_eq(store.live(w), 1);
+        test.assert_eq(store.keys_with_expiry(w), 1);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 2);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            test.assert_eq(store.expiry_of(w, e), 9000);
+        }
+        test.assert_eq(store.audit(w), 0);
+        // A missing name is 3 and changes nothing.
+        test.assert_eq(rename_n(w, 7, 8), 3);
+        test.assert_eq(store.live(w), 1);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_rename_over_an_existing_key_replaces_it_and_its_expiry[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        store.tick(w, 1000);
+        test.assert_eq(put(w, 1, 'a', 10), 0);
+        test.assert_eq(put(w, 2, 'b', 20), 0);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 2);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            store.set_expiry(w, e, 9000);
+        }
+        test.assert_eq(store.keys_with_expiry(w), 1);
+        test.assert_eq(rename_n(w, 1, 2), 0);
+        test.assert_eq(look(w, 2), 10 * 1000 + 'a');
+        test.assert_eq(look(w, 1), 0 - 1);
+        test.assert_eq(store.live(w), 1);
+        // The expiry of the key that was overwritten went with it, and `a`'s own (none) came.
+        test.assert_eq(store.keys_with_expiry(w), 0);
+        test.assert_eq(store.audit(w), 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_rename_with_no_room_changes_nothing[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 100, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 50), 0);
+        // The value has to be copied while it moves: 8 + 2 + 56 more does not fit beside the 66 it takes.
+        test.assert_eq(rename_n(w, 1, 2), 1);
+        test.assert_eq(look(w, 1), 50 * 1000 + 'a');
+        test.assert_eq(look(w, 2), 0 - 1);
+        test.assert_eq(store.live(w), 1);
+        test.assert_eq(store.audit(w), 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+// A small arena under `allkeys-lru`, with names changed far past its size, the arena's books and the index checked after every move, and
+// the key just moved always there under its new name.
+fn test_rename_under_eviction_keeps_its_books[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 2048, 40, 0, store.evict_lru());
+    borrow mut st as &!w in {
+        var i = 0;
+        while i < 17 {
+            test.assert_eq(put(w, i, 'q', 40), 0);
+            i = i + 1;
+        }
+        i = 0;
+        while i < 600 {
+            let from = 100 + i % 17;
+            let to = 100 + (i + 1) % 17;
+            // Names 0..16 first, then they go round names 100..116.
+            if i < 17 {
+                test.assert_eq(rename_n(w, i, 100 + i), 0);
+            } else {
+                let r = rename_n(w, from, to);
+                test.assert(r == 0 || r == 3);
+                if r == 0 {
+                    test.assert_eq(look(w, to), 40 * 1000 + 'q');
+                    test.assert_eq(look(w, from), 0 - 1);
+                }
+            }
+            test.assert_eq(store.audit(w), 0);
+            i = i + 1;
+        }
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_the_walk_sees_the_keys_that_are_there_and_not_the_rest[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 100, 0, store.evict_none());
+    borrow mut st as &!w in {
+        store.tick(w, 1000);
+        test.assert_eq(put(w, 1, 'a', 3), 0);
+        test.assert_eq(put(w, 2, 'b', 3), 0);
+        test.assert_eq(put(w, 3, 'c', 3), 0);
+        test.assert_eq(drop_key(w, 2), 1);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 3);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            store.set_expiry(w, e, 1500);
+        }
+        var seen = 0;
+        var e = 0;
+        while e < store.entries(w) {
+            if store.visible(w, e) {
+                seen = seen + 1;
+            }
+            e = e + 1;
+        }
+        test.assert_eq(seen, 2);
+        // Key 3 runs out: it is no longer visible though nothing has swept it, and key 1's name is `k1`.
+        store.tick(w, 1600);
+        seen = 0;
+        e = 0;
+        while e < store.entries(w) {
+            if store.visible(w, e) {
+                seen = seen + 1;
+                test.assert_eq(len(store.key_at(w, e)), 2);
+                test.assert_eq(int_of(store.key_at(w, e)[1]), '1');
+            }
+            e = e + 1;
+        }
+        test.assert_eq(seen, 1);
     }
     store.close(heap, st);
     return 0;

@@ -2,6 +2,7 @@ edition 5;
 
 module commands;
 
+import glob;
 import reply;
 import session;
 import store;
@@ -670,6 +671,34 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return reply.put_integer(sc, at, 1);
     }
+    if reply.is_word(name, "KEYS") {
+        if argc != 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_keys(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "SCAN") {
+        if argc < 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_scan(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "RANDOMKEY") {
+        if argc != 1 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let e = store.random_visible(st);
+        if e < 0 {
+            return reply.put_null(sc, at, link[3]);
+        }
+        return reply.put_bulk(sc, at, store.key_at(st, e));
+    }
+    if reply.is_word(name, "RENAME") || reply.is_word(name, "RENAMENX") {
+        if argc != 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_rename(view, table, sc, at, st, reply.is_word(name, "RENAMENX"));
+    }
     if reply.is_word(name, "STRLEN") {
         if argc != 2 {
             return reply.wrong_arguments(sc, at, name);
@@ -774,6 +803,259 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
 }
 
 // ---------------------------------------------------------------------
+// The keyspace: KEYS, SCAN, RANDOMKEY, RENAME, RENAMENX (docs/design.md section 16)
+// ---------------------------------------------------------------------
+
+// Digits of `n >= 0`.
+fn digits_of(n: int) -> [] int {
+    var d = 1;
+    var rest = n / 10;
+    while rest > 0 {
+        d = d + 1;
+        rest = rest / 10;
+    }
+    return d;
+}
+
+// The bytes `$len\r\n`, the key and `\r\n` take.
+fn bulk_size(n: int) -> [] int {
+    return 5 + digits_of(n) + n;
+}
+
+// `KEYS pattern`: every key that matches, in the order of the entry numbers. Redis answers with all of them whatever their number; this answers
+// in one piece, so a reply that would not fit the buffer one command may fill is refused, and `SCAN` is how to read that many.
+fn command_keys[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let pattern = reply.arg_of(view, table, 1);
+    let all = len(pattern) == 1 && int_of(pattern[0]) == '*';
+    let n = store.entries(st);
+    var count = 0;
+    var bytes = 0;
+    var e = 0;
+    while e < n {
+        if store.visible(st, e) {
+            let key = store.key_at(st, e);
+            if all || glob.matches(pattern, key) {
+                count = count + 1;
+                bytes = bytes + bulk_size(len(key));
+            }
+        }
+        e = e + 1;
+    }
+    if bytes + 3 + digits_of(count) > reserve() - 64 {
+        return reply.put(sc, at, "-ERR the keys do not fit one reply: use SCAN\r\n");
+    }
+    var o = reply.put(sc, at, "*");
+    o = reply.put_nat(sc, o, count);
+    o = reply.put(sc, o, "\r\n");
+    e = 0;
+    while e < n {
+        if store.visible(st, e) {
+            let key = store.key_at(st, e);
+            if all || glob.matches(pattern, key) {
+                o = reply.put_bulk(sc, o, key);
+            }
+        }
+        e = e + 1;
+    }
+    return o;
+}
+
+// A `SCAN` cursor as Redis reads one (`strtoul`): digits, with a leading `+`, or a `-` that makes it huge; empty is 0. `(1, 0)` if it is
+// not a cursor. A number past what an int holds is a cursor past the end of the keys, which ends the scan.
+fn parse_cursor[&w](text: &w [byte]) -> [] (int, int) {
+    var i = 0;
+    var huge = false;
+    if len(text) > 0 && (reply.is_word_exact(text[0..1], "+") || reply.is_word_exact(text[0..1], "-")) {
+        huge = reply.is_word_exact(text[0..1], "-");
+        i = 1;
+    }
+    var value = 0;
+    var first = 0 - 1;
+    var past = false;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < '0' || c > '9' {
+            return (1, 0);
+        }
+        if c != '0' && first < 0 {
+            first = i;
+        }
+        if first >= 0 && i - first >= 20 {
+            return (1, 0);
+        }
+        if value > (reply.max_int() - (c - '0')) / 10 {
+            past = true;
+        } else {
+            value = value * 10 + (c - '0');
+        }
+        i = i + 1;
+    }
+    // Twenty digits are an unsigned 64-bit number only up to 18446744073709551615.
+    if first >= 0 && len(text) - first == 20 {
+        let top = "18446744073709551615";
+        var k = 0;
+        while k < 20 {
+            let a = int_of(text[first + k]);
+            let b = int_of(top[k]);
+            if a > b {
+                return (1, 0);
+            }
+            if a < b {
+                k = 20;
+            } else {
+                k = k + 1;
+            }
+        }
+    }
+    if past || huge && value != 0 {
+        return (0, reply.max_int());
+    }
+    return (0, value);
+}
+
+// `SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]`. The cursor is an entry number: the call looks at `COUNT` entries from there (fewer if
+// the answer would not fit), answers the matching keys and the entry to go on from, 0 at the end.
+fn command_scan[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let argc = table[0];
+    let (status, cursor) = parse_cursor(reply.arg_of(view, table, 1));
+    if status != 0 {
+        return reply.put(sc, at, "-ERR invalid cursor\r\n");
+    }
+    var count = 10;
+    var pattern_at = 0;
+    var type_at = 0;
+    var i = 2;
+    while i < argc {
+        let opt = reply.arg_of(view, table, i);
+        let more = argc - i;
+        if reply.is_word(opt, "COUNT") && more >= 2 {
+            let (bad, n) = reply.parse_int(reply.arg_of(view, table, i + 1));
+            if bad != 0 {
+                return reply.not_an_integer(sc, at);
+            }
+            if n < 1 {
+                return reply.syntax_error(sc, at);
+            }
+            count = n;
+            i = i + 2;
+        } else if reply.is_word(opt, "MATCH") && more >= 2 {
+            pattern_at = i + 1;
+            i = i + 2;
+        } else if reply.is_word(opt, "TYPE") && more >= 2 {
+            type_at = i + 1;
+            i = i + 2;
+        } else {
+            return reply.syntax_error(sc, at);
+        }
+    }
+    // Every key here is a string: a `TYPE` other than that matches none.
+    var type_ok = true;
+    if type_at != 0 && !reply.is_word(reply.arg_of(view, table, type_at), "STRING") {
+        type_ok = false;
+    }
+    var pattern = reply.arg_of(view, table, 1)[0..0];
+    var filtered = false;
+    if pattern_at != 0 {
+        pattern = reply.arg_of(view, table, pattern_at);
+        filtered = !(len(pattern) == 1 && int_of(pattern[0]) == '*');
+    }
+    let n = store.entries(st);
+    // The first pass: how far to look, and how many keys and bytes that gives.
+    var e = cursor;
+    if e > n {
+        e = n;
+    }
+    var looked = 0;
+    var found = 0;
+    var bytes = 0;
+    var going = true;
+    while going && e < n && looked < count {
+        if type_ok && store.visible(st, e) {
+            let key = store.key_at(st, e);
+            if !filtered || glob.matches(pattern, key) {
+                if bytes + bulk_size(len(key)) > reserve() - 256 {
+                    going = false;
+                } else {
+                    found = found + 1;
+                    bytes = bytes + bulk_size(len(key));
+                }
+            }
+        }
+        if going {
+            e = e + 1;
+            looked = looked + 1;
+        }
+    }
+    var next = e;
+    if e >= n {
+        next = 0;
+    }
+    var o = reply.put(sc, at, "*2\r\n$");
+    o = reply.put_nat(sc, o, digits_of(next));
+    o = reply.put(sc, o, "\r\n");
+    o = reply.put_nat(sc, o, next);
+    o = reply.put(sc, o, "\r\n*");
+    o = reply.put_nat(sc, o, found);
+    o = reply.put(sc, o, "\r\n");
+    var k = cursor;
+    if k > n {
+        k = n;
+    }
+    while k < e {
+        if type_ok && store.visible(st, k) {
+            let key = store.key_at(st, k);
+            if !filtered || glob.matches(pattern, key) {
+                o = reply.put_bulk(sc, o, key);
+            }
+        }
+        k = k + 1;
+    }
+    return o;
+}
+
+// Whether two byte strings are the same.
+fn same_bytes[&x, &y](a: &x [byte], b: &y [byte]) -> [] bool {
+    if len(a) != len(b) {
+        return false;
+    }
+    var i = 0;
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// `RENAME key newkey` and `RENAMENX key newkey` (`nx`: only if there is no `newkey`, and then 1 or 0).
+fn command_rename[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, nx: bool) -> [] int {
+    let src = reply.arg_of(view, table, 1);
+    let dst = reply.arg_of(view, table, 2);
+    let hs = store.hash_of(st, src);
+    let hd = store.hash_of(st, dst);
+    if store.find(st, src, hs) < 0 {
+        return reply.put(sc, at, "-ERR no such key\r\n");
+    }
+    if same_bytes(src, dst) {
+        if nx {
+            return reply.put_integer(sc, at, 0);
+        }
+        return reply.put(sc, at, "+OK\r\n");
+    }
+    if nx && store.find(st, dst, hd) >= 0 {
+        return reply.put_integer(sc, at, 0);
+    }
+    if store.rename(st, src, hs, dst, hd) != 0 {
+        return reply.refused(sc, at);
+    }
+    if nx {
+        return reply.put_integer(sc, at, 1);
+    }
+    return reply.put(sc, at, "+OK\r\n");
+}
+
+// ---------------------------------------------------------------------
 // Arity
 // ---------------------------------------------------------------------
 
@@ -782,10 +1064,10 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
 // does not know. These are Redis 7.0's, and `tests/differential.py` checks every one against Redis by queueing the command with one word
 // too few, exactly enough and one too many.
 pub fn arity[&w](name: &w [byte]) -> [] int {
-    if reply.is_word(name, "GET") || reply.is_word(name, "ECHO") || reply.is_word(name, "INCR") || reply.is_word(name, "DECR") || reply.is_word(name, "TTL") || reply.is_word(name, "PTTL") || reply.is_word(name, "PERSIST") || reply.is_word(name, "GETDEL") || reply.is_word(name, "STRLEN") || reply.is_word(name, "TYPE") || reply.is_word(name, "SELECT") {
+    if reply.is_word(name, "GET") || reply.is_word(name, "ECHO") || reply.is_word(name, "INCR") || reply.is_word(name, "DECR") || reply.is_word(name, "TTL") || reply.is_word(name, "PTTL") || reply.is_word(name, "PERSIST") || reply.is_word(name, "GETDEL") || reply.is_word(name, "STRLEN") || reply.is_word(name, "TYPE") || reply.is_word(name, "SELECT") || reply.is_word(name, "KEYS") {
         return 2;
     }
-    if reply.is_word(name, "INCRBY") || reply.is_word(name, "DECRBY") || reply.is_word(name, "SETNX") || reply.is_word(name, "GETSET") {
+    if reply.is_word(name, "INCRBY") || reply.is_word(name, "DECRBY") || reply.is_word(name, "SETNX") || reply.is_word(name, "GETSET") || reply.is_word(name, "RENAME") || reply.is_word(name, "RENAMENX") {
         return 3;
     }
     if reply.is_word(name, "SETEX") || reply.is_word(name, "PSETEX") || reply.is_word(name, "GETRANGE") || reply.is_word(name, "SUBSTR") || reply.is_word(name, "SETRANGE") {
@@ -794,13 +1076,13 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "APPEND") {
         return 3;
     }
-    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") {
+    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
         return 1;
     }
     if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
         return 0 - 1;
     }
-    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") {
+    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") {
         return 0 - 2;
     }
     if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") {

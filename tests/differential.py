@@ -227,7 +227,7 @@ known = [
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
     ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
-    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "49 commands, not 240"),
+    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "54 commands, not 240"),
     ("COMMAND", cmd("COMMAND"), "the command table (flags, arity, key positions) is not kept"),
 ]
 
@@ -375,11 +375,50 @@ cases += [
     ("the new string commands inside MULTI", seq(M, ("APPEND", "q:k", "a"), ("SETRANGE", "q:k", "3", "b"), ("GETRANGE", "q:k", "0", "-1"), ("GETEX", "q:k", "EX", "100"), ("MSETNX", "q:x", "1"), X)),
     ("the new string commands, arity inside MULTI", seq(M, ("APPEND", "q:k"), ("SETRANGE", "q:k", "1"), ("GETRANGE", "q:k"), ("GETEX",), ("MSETNX", "q:k"), X)),
 ]
+# The keyspace commands of issue #10, slice 2 (`docs/design.md` section 16). Their answers that depend on the order of the keys, or on a cursor, are
+# compared against Redis by `tests/keyspace.py`; here, what does not (one key, or none).
+cases += [
+    ("RENAME a key", seq(("FLUSHALL",), ("SET", "r:a", "hello"), ("RENAME", "r:a", "r:b"), ("GET", "r:a"), ("GET", "r:b"), ("DBSIZE",))),
+    ("RENAME over an existing key", seq(("FLUSHALL",), ("SET", "r:a", "one"), ("SET", "r:b", "two"), ("RENAME", "r:a", "r:b"), ("GET", "r:b"), ("EXISTS", "r:a"), ("DBSIZE",))),
+    ("RENAME a missing key", seq(("FLUSHALL",), ("RENAME", "r:a", "r:b"), ("SET", "r:b", "x"), ("RENAME", "r:a", "r:b"), ("GET", "r:b"))),
+    ("RENAME a key to itself", seq(("FLUSHALL",), ("RENAME", "r:a", "r:a"), ("SET", "r:a", "x", "EX", "100"), ("RENAME", "r:a", "r:a"), ("GET", "r:a"), ("TTL", "r:a"))),
+    ("RENAME moves the expiry", seq(("FLUSHALL",), ("SET", "r:a", "x", "EX", "100"), ("RENAME", "r:a", "r:b"), ("TTL", "r:b"), ("TTL", "r:a"))),
+    ("RENAME replaces the expiry of the key it overwrites", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("SET", "r:b", "y", "EX", "100"), ("RENAME", "r:a", "r:b"), ("TTL", "r:b"))),
+    ("RENAME to a longer and a shorter name", seq(("FLUSHALL",), ("SET", "r:a", "value"), ("RENAME", "r:a", "r:" + "n" * 200), ("GET", "r:" + "n" * 200), ("RENAME", "r:" + "n" * 200, "s"), ("GET", "s"), ("DBSIZE",))),
+    ("RENAME a long value", seq(("FLUSHALL",), ("SET", "r:a", b"v" * 5000), ("RENAME", "r:a", "r:b"), ("STRLEN", "r:b"), ("GET", "r:b"))),
+    ("RENAME binary keys and values", seq(("FLUSHALL",), ("SET", b"a\x00b\r\n", binary), ("RENAME", b"a\x00b\r\n", b"c\x00d"), ("GET", b"c\x00d"), ("EXISTS", b"a\x00b\r\n"))),
+    ("RENAME there and back, again and again", seq(("FLUSHALL",), ("SET", "r:a", "v"), *[("RENAME", "r:a" if i % 2 == 0 else "r:b", "r:b" if i % 2 == 0 else "r:a") for i in range(40)], ("GET", "r:a"), ("GET", "r:b"), ("DBSIZE",))),
+    ("RENAME among other keys", seq(("FLUSHALL",), *[("SET", "r:o%d" % i, "v%d" % i) for i in range(30)], *[("RENAME", "r:o%d" % i, "r:p%d" % i) for i in range(0, 30, 2)], *[("GET", "r:o%d" % i) for i in range(30)], *[("GET", "r:p%d" % i) for i in range(30)], ("DBSIZE",))),
+    ("RENAME arity", seq(("RENAME", "a"), ("RENAME", "a", "b", "c"), ("RENAMENX", "a"))),
+    ("RENAMENX to a new name", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("RENAMENX", "r:a", "r:b"), ("GET", "r:b"), ("EXISTS", "r:a"))),
+    ("RENAMENX onto an existing key", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("SET", "r:b", "y"), ("RENAMENX", "r:a", "r:b"), ("GET", "r:a"), ("GET", "r:b"))),
+    ("RENAMENX of a missing key", seq(("FLUSHALL",), ("RENAMENX", "r:a", "r:b"), ("SET", "r:b", "y"), ("RENAMENX", "r:a", "r:b"))),
+    ("RENAMENX of a key to itself", seq(("FLUSHALL",), ("RENAMENX", "r:a", "r:a"), ("SET", "r:a", "x"), ("RENAMENX", "r:a", "r:a"))),
+    ("RENAME in MULTI", seq(("FLUSHALL",), ("SET", "r:a", "x"), M, ("RENAME", "r:a", "r:b"), ("GET", "r:b"), ("RENAMENX", "r:b", "r:c"), ("RENAME", "r:zz", "r:y"), X, ("GET", "r:c"))),
+    ("RENAME dirties both names for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:b"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
+    ("RENAME dirties the old name for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:a"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
+    ("RANDOMKEY of nothing", seq(("FLUSHALL",), ("RANDOMKEY",))),
+    ("RANDOMKEY of one key", seq(("FLUSHALL",), ("SET", "r:only", "x"), ("RANDOMKEY",), ("RANDOMKEY",))),
+    ("RANDOMKEY RESP3", seq(("HELLO", "3"), ("FLUSHALL",), ("RANDOMKEY",), ("SET", "r:only", "x"), ("RANDOMKEY",))),
+    ("RANDOMKEY arity", seq(("RANDOMKEY", "x"))),
+    ("KEYS of nothing", seq(("FLUSHALL",), ("KEYS", "*"), ("KEYS", "a*"), ("KEYS", ""))),
+    ("KEYS of one key", seq(("FLUSHALL",), ("SET", "hello", "x"), ("KEYS", "*"), ("KEYS", "h*"), ("KEYS", "h?llo"), ("KEYS", "h[ae]llo"), ("KEYS", "x*"), ("KEYS", "hello"), ("KEYS", "HELLO"))),
+    ("KEYS ignores a key that has expired", seq(("FLUSHALL",), ("SET", "r:t", "x", "PX", "1"), ("PING",))),
+    ("KEYS arity", seq(("KEYS",), ("KEYS", "a", "b"))),
+    ("SCAN of nothing", seq(("FLUSHALL",), ("SCAN", "0"), ("SCAN", "0", "COUNT", "100"), ("SCAN", "0", "MATCH", "a*"), ("SCAN", "0", "TYPE", "string"))),
+    ("SCAN of one key", seq(("FLUSHALL",), ("SET", "hello", "x"), ("SCAN", "0"), ("SCAN", "0", "COUNT", "5"), ("SCAN", "0", "MATCH", "h*"), ("SCAN", "0", "MATCH", "x*"), ("SCAN", "0", "TYPE", "string"), ("SCAN", "0", "TYPE", "STRING"))),
+    ("SCAN option errors", seq(("SCAN", "0", "COUNT", "0"), ("SCAN", "0", "COUNT", "-1"), ("SCAN", "0", "COUNT", "x"), ("SCAN", "0", "COUNT"), ("SCAN", "0", "MATCH"), ("SCAN", "0", "TYPE"), ("SCAN", "0", "BOGUS"), ("SCAN", "0", "BOGUS", "1"))),
+    ("SCAN cursor errors", seq(("SCAN", "abc"), ("SCAN", "1x"), ("SCAN", " 1"), ("SCAN", "1.5"), ("SCAN", "99999999999999999999999"), ("SCAN", "18446744073709551616"), ("SCAN", "99999999999999999999"))),
+    ("SCAN cursors that are zero", seq(("FLUSHALL",), ("SET", "hello", "x"), ("SCAN", "+0"), ("SCAN", ""), ("SCAN", "0000"), ("SCAN", "-0"))),
+    ("SCAN no cursor", seq(("SCAN",))),
+    ("SCAN options in any order, twice", seq(("FLUSHALL",), ("SET", "hello", "x"), ("SCAN", "0", "COUNT", "5", "MATCH", "h*", "COUNT", "7"), ("SCAN", "0", "MATCH", "x*", "MATCH", "h*"))),
+    ("the keyspace commands inside MULTI, arity", seq(M, ("KEYS",), ("SCAN",), ("RANDOMKEY", "x"), ("RENAME", "a"), ("RENAMENX", "a"), X)),
+]
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX"]:
     for given in range(0, 5):
         numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]

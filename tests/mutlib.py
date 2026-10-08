@@ -2,14 +2,14 @@
 harnesses must fail on it.
 
 Each mutant changes one place in a copy of `src/`, builds it, and runs the harness meant to catch it: `("diff", substring)` is
-`tests/differential.py` on the cases whose names contain the substring, `("two",)` is `tests/transactions.py`, `("unit",)` is the store's unit
-tests against the changed `store.cho`. A mutant the harness does not fail is a hole in the harness, and the run exits 1.
+`tests/differential.py` on the cases whose names contain the substring, `("two",)` is `tests/transactions.py`, `("py", name)` another script of `tests/`, `("unit",)` is the store's unit
+tests against the changed `store.cho` and `("globunit",)` the matcher's against the changed `glob.cho`. A mutant the harness does not fail is a hole in the harness, and the run exits 1.
 """
 import os, shutil, subprocess, sys, tempfile
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 CANCHO = os.environ.get("CANCHO")
-FILES = ["cache", "resp", "store", "commands", "reply", "session", "txn"]
+FILES = ["cache", "resp", "store", "commands", "reply", "session", "txn", "glob"]
 
 
 def run(args, env=None, timeout=600):
@@ -24,6 +24,18 @@ def run_mutants(mutants, only=""):
     if not CANCHO:
         raise SystemExit("set CANCHO to the compiler")
     holes = []
+    if os.environ.get("MUTANTS_LINT"):
+        # Fast: is every mutant's text in its file exactly once? (A later change to the source can leave one that applies to nothing, or twice.)
+        for name, fname, old, new, how in mutants:
+            text = open(os.path.join(ROOT, "src", fname)).read()
+            if text.count(old) != 1 or old == new:
+                print("BROKEN mutant (its text is in %s %d times): %s" % (fname, text.count(old), name))
+                holes.append(name)
+        if holes:
+            print("%d broken mutant(s)" % len(holes))
+            sys.exit(1)
+        print("every mutant applies exactly once (%d)" % len(mutants))
+        return
     for name, fname, old, new, how in mutants:
         if only not in name:
             continue
@@ -45,6 +57,10 @@ def run_mutants(mutants, only=""):
                 continue
             if how[0] == "diff":
                 result = run([sys.executable, os.path.join(ROOT, "tests", "differential.py"), binary], env={**os.environ, "DIFF_ONLY": how[1]})
+            elif how[0] == "globunit":
+                result = run([CANCHO, "test", os.path.join(ROOT, "tests", "glob_test.cho"), os.path.join(tmp, "src", "glob.cho"), "--std"])
+            elif how[0] == "py":
+                result = run([sys.executable, os.path.join(ROOT, "tests", how[1]), binary])
             elif how[0] == "unit":
                 result = run([CANCHO, "test", os.path.join(ROOT, "tests", "store_test.cho"), os.path.join(tmp, "src", "store.cho"), "--std"])
             else:

@@ -114,7 +114,50 @@ try:
 finally:
     p.terminate()
 
+# The longest value, and what a reply of the longest value does to the buffer it is built in. `APPEND` and `SETRANGE` once let a value grow
+# past what a reply buffer holds, and a `GET` of one killed the server.
+TOO_LONG = b"-ERR string exceeds maximum allowed size (proto-max-bulk-len)\r\n"
+p = serve(6399, "64")
+try:
+    s = socket.create_connection(("127.0.0.1", 6399))
+    s.settimeout(10)
+    top = 16384
+
+    def read_exactly(n):
+        got = b""
+        while len(got) < n:
+            d = s.recv(1 << 20)
+            if not d:
+                raise SystemExit("connection closed while reading a reply (%d of %d bytes): %r" % (len(got), n, got[:60]))
+            got += d
+        return got
+
+    check("APPEND up to the longest value", ask(s, "APPEND", "big", b"a" * 10000), b":10000\r\n")
+    check("... and to exactly the longest", ask(s, "APPEND", "big", b"b" * (top - 10000)), b":%d\r\n" % top)
+    check("one byte more is refused in Redis's words", ask(s, "APPEND", "big", "c"), TOO_LONG)
+    check("and changed nothing", ask(s, "STRLEN", "big"), b":%d\r\n" % top)
+    check("SETRANGE ending at the longest", ask(s, "SETRANGE", "r", str(top - 1), "x"), b":%d\r\n" % top)
+    check("SETRANGE one past it is refused", ask(s, "SETRANGE", "r", str(top), "x"), TOO_LONG)
+    check("SETRANGE far past it is refused (this used to build a 4 MB value)", ask(s, "SETRANGE", "far", "4000000", "x"), TOO_LONG)
+    check("and made no key", ask(s, "EXISTS", "far"), b":0\r\n")
+    check("GET of the longest value", ask(s, "GET", "big"), b"$%d\r\n" % top + b"a" * 10000 + b"b" * (top - 10000) + b"\r\n")
+    # The largest reply one command can make: MGET of 63 keys of the longest value (the command name is the 64th argument).
+    for i in range(63):
+        # (a longest value does not fit one command, so it is built in two)
+        ask(s, "APPEND", "m%d" % i, bytes([65 + i % 26]) * (top // 2))
+        check("value %d of 63 longest values" % i, ask(s, "APPEND", "m%d" % i, bytes([65 + i % 26]) * (top // 2)), b":%d\r\n" % top)
+    s.sendall(cmd("MGET", *["m%d" % i for i in range(63)]))
+    want = b"*63\r\n" + b"".join(b"$%d\r\n" % top + bytes([65 + i % 26]) * top + b"\r\n" for i in range(63))
+    check("MGET of 63 longest values, the largest reply", read_exactly(len(want)), want)
+    # A transaction of 100 such GETs: 1.6 MB of answers, sent in pieces.
+    s.sendall(cmd("MULTI") + b"".join(cmd("GET", "m%d" % (i % 63)) for i in range(100)) + cmd("EXEC"))
+    want = b"+OK\r\n" + b"+QUEUED\r\n" * 100 + b"*100\r\n" + b"".join(b"$%d\r\n" % top + bytes([65 + (i % 63) % 26]) * top + b"\r\n" for i in range(100))
+    check("EXEC of 100 GETs of the longest value", read_exactly(len(want)), want)
+    check("the server is still there", ask(s, "PING"), b"+PONG\r\n")
+finally:
+    p.terminate()
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)
-print("both limits refuse in Redis's words, change nothing, and the server carries on")
+print("the limits refuse in Redis's words, change nothing, and the server carries on")

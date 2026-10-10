@@ -536,3 +536,79 @@ the report names and the benchmarks could not fix; deriving it once does not.
   no `fs_write`; CI asserts the exact shape.
 - The throughput gate is unchanged (the seed changes hashes, not the hash's cost; the differential
   harness is seed-independent because both servers see the same commands).
+
+## 19. Hashes (epic #8, issue #14)
+
+### 19.1 Representation: a packed list of pairs, one arena record
+
+A hash is one arena record whose value is a packed sequence of `(field, value)` pairs, in insertion
+order (Redis's listpack keeps insertion order too, and `HGETALL`'s order is not promised but is
+observed):
+
+    [4-byte field length][4-byte value length][field bytes][value bytes] ...
+
+Lengths are 4-byte so a pair's header is fixed and a field scan is a walk. A field is found by a
+linear scan; a hash of `n` fields costs `O(n)` per `HSET`/`HGET`, which is Redis's own listpack
+behaviour for small hashes. **No indexed form in slice 1**: the conversion threshold (Redis turns a
+listpack into a hashtable at 128 entries by default) needs a second in-arena structure whose
+compaction story is its own slice. Slice 1 bounds the cost where the arena already bounds it: a hash
+lives in one record, so it can be as large as the arena, and one `HSET` on an `n`-field hash costs
+one scan (find) plus one bounded shift (§19.3). The threshold, measured against Redis at equal
+resident memory, decides slice 2 (`bench/memory.py` extended with a hash workload).
+
+### 19.2 The type tag: a ninth int in `meta`
+
+`meta` was eight ints a key. It becomes nine: slot 8 is the kind, 0 for a string and 1 for a hash.
+`stride()` is the one place the size lives, so `meta`'s allocation and every loop that walks it scale
+without other edits. Nothing else encodes a kind: slot 6 stays exactly "in use / free chain" (its -2
+is compared in the eviction sampler, the sweep, compaction and `visible`), and the hash's bits stay
+the hash's (the index's tag and home slot depend on them). `TYPE` answers `string`, `hash` or
+`none`; there is no `OBJECT` command yet, so `OBJECT ENCODING` is not answered at all — stated here
+rather than left to look like an oversight. A string command that meets a hash key
+(`GET`, `SET`, `INCR`, `APPEND`, `SETRANGE`, `GETRANGE`, `STRLEN`, `GETEX`, `GETDEL`, `GETSET`,
+`SETEX`, `SETNX`, `GETRANGE`/`SUBSTR`, and `MGET`'s per-key hole) answers Redis's own
+`-WRONGTYPE Operation against a key holding the wrong kind of value` byte for byte, and each hash
+command answers it for a string key. Expiry and keyspace commands (`EXPIRE`, `TTL`, `PERSIST`,
+`DEL`, `EXISTS`, `TOUCH`, `RENAME`, `KEYS`, `SCAN`, `RANDOMKEY`, `FLUSHALL`) work on any kind, as in
+Redis.
+
+### 19.3 Mutation: one primitive, `value_splice`, and what each command costs
+
+The store gains one primitive, `value_splice(st, e, cut_from, cut_to, bytes)`: replace the value's
+`[cut_from, cut_to)` with `bytes`, shifting what follows inside the record's room when the lengths
+differ, or appending a fresh record when they do not fit — the same three cases `put_key` and
+`splice` already have (in place / shifted in place / appended), so compaction, eviction and
+backward-shift deletion need no new knowledge of hashes. On it:
+
+* `HSET`/`HSETNX`/`HMSET`: find the field; absent → `value_splice` at the end (one append); present
+  → `value_splice` over the old value (one shift of the tail, or a plain copy when the lengths
+  match).
+* `HDEL`: `value_splice` the pair away (one shift).
+* `HINCRBY`/`HINCRBYFLOAT`: read, parse, format (into the 64-byte `tmp`), and splice back.
+
+So a 10,000-field hash does not make one `HSET` a 10,000-field copy: the shift moves only the bytes
+after the field, and only when the value's length changed; a compaction that happens to run pays the
+arena-slice bound it already has. What slice 1 does not have is the `O(1)` field find of an indexed
+form — that is the measured threshold of slice 2.
+
+### 19.4 Field expiry is out of scope
+
+`HEXPIRE` and the rest of the 7.4 field-expiry family are a non-goal for this issue, as the issue
+says: per-field expiry doubles the expiry bookkeeping (`meta` slot 4 is per key) and no client the
+matrix covers asks for it.
+
+### 19.5 Commands, in the order they land
+
+Slice 1: `HSET`, `HGET`, `HDEL`, `HLEN`, `HEXISTS`, `HGETALL`, `HKEYS`, `HVALS`, `HMGET`, `HMSET`,
+`HSETNX`, `HSTRLEN`, `HINCRBY`. Slice 2: `HINCRBYFLOAT`, `HRANDFIELD`, `HSCAN` (the scan needs the
+keyspace cursor's `TYPE` filter widened, which is why it is not first), and the indexed form with
+its threshold measurement. `RESP3` map replies (`HGETALL`, `HENTER` none; `HGETALL` is a flat array
+in RESP2 and a map in RESP3) are answered in both protocols, byte-identical to Redis 7.0.15.
+
+### 19.6 Gate
+
+Differential against Redis 7.0.15 for every command (error texts, arity, `WRONGTYPE` both ways,
+RESP2 flat and RESP3 map); a model-based store test as `tests/store_test.cho` has for strings
+(insertion order, overwrite, delete, grow past room, compaction moving a hash); mutants of the hash
+path caught by the differential and store tests; `bench/memory.py` extended with a hash workload at
+equal resident memory; the string-path throughput gate unchanged (`bench/vs_redis.sh`).

@@ -2,5 +2,8 @@
   "name": "cancho-cache-clients",
   "private": true,
   "description": "Client libraries the session test connects with (npm install here).",
-  "dependencies": { "ioredis": "^5" }
+  "dependencies": {
+    "ioredis": "^5",
+    "redis": "^6.3.0"
+  }
 }

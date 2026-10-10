@@ -4,9 +4,9 @@
 
 [![ci](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml)
 
-**A Redis-compatible cache that says what it can do.** Strings, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that names the one file it reads (`/dev/urandom`, for the hash seed) and no other, and no foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis` and `node-redis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
+**A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that names the one file it reads (`/dev/urandom`, for the hash seed) and no other, and no foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis` and `node-redis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha, a string cache and not a Redis replacement.** It answers 54 of Redis 7.0's 240 commands; there are no data structures beyond strings, no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+**Status: alpha, a string-and-hash cache and not a Redis replacement.** It answers 67 of Redis 7.0's 240 commands; the data structures are strings and hashes (13 `H*` commands), no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## What you get
 
@@ -90,7 +90,7 @@ fixes the seed for reproducible tests and benchmarks; the sixth argument of `cac
 ## Commands
 
 `GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `GETEX`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `SETRANGE`, `GETRANGE` (and `SUBSTR`), `INCR`, `DECR`, `KEYS`, `SCAN` (`MATCH COUNT TYPE`), `RANDOMKEY`, `RENAME`, `RENAMENX`,
-`INCRBY`, `DECRBY`, `DEL`, `EXISTS`, `TYPE`, `STRLEN`, `DBSIZE`, `FLUSHALL`; `EXPIRE` and `PEXPIRE` (with `NX XX GT LT`),
+`INCRBY`, `DECRBY`, `DEL`, `EXISTS`, `TYPE`, `STRLEN`, `DBSIZE`, `FLUSHALL`; and hashes: `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HDEL`, `HLEN`, `HEXISTS`, `HSTRLEN`, `HGETALL`, `HKEYS`, `HVALS`, `HINCRBY`; `EXPIRE` and `PEXPIRE` (with `NX XX GT LT`),
 `TTL`, `PTTL`, `PERSIST`; and what a client library says on connecting: `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT`, `INFO`,
 `CONFIG GET`, `COMMAND`, `QUIT`, `RESET`; and transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`. The eviction policy is `allkeys-lru`. Every reply is byte-identical to Redis 7.0.15
 for the cases in `tests/differential.py`; the deliberate divergences (inline commands refused, `CONFIG SET` refused, a
@@ -170,7 +170,7 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings only. No persistence, replication, TLS, pub/sub or scripting. One database. A value is at most 16 KiB, whether it is `SET` or built by `APPEND` and `SETRANGE`. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 256 connections and a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+Strings and hashes. No lists, sets or sorted sets, and no persistence, replication, TLS, pub/sub or scripting. One database. A value is at most 16 KiB, whether it is `SET` or built by `APPEND` and `SETRANGE`. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 256 connections and a 16 KiB command (both fixed). `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## Contributing
 

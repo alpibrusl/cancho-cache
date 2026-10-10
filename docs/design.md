@@ -612,3 +612,32 @@ RESP2 flat and RESP3 map); a model-based store test as `tests/store_test.cho` ha
 (insertion order, overwrite, delete, grow past room, compaction moving a hash); mutants of the hash
 path caught by the differential and store tests; `bench/memory.py` extended with a hash workload at
 equal resident memory; the string-path throughput gate unchanged (`bench/vs_redis.sh`).
+
+
+### 19.7 Built (slice 1), and what building it found
+
+`HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HDEL`, `HLEN`, `HEXISTS`, `HSTRLEN`, `HGETALL`, `HKEYS`,
+`HVALS`, `HINCRBY` answer, over the packed record of section 19.1 and the `value_splice` primitive of
+19.3, with a ninth `meta` int for the kind (19.2) and `TYPE` answering `hash`. `HEXPIRE` stays out of
+scope (19.4); `HINCRBYFLOAT`, `HRANDFIELD` and `HSCAN` are slice 2 (19.5), and the string commands
+that meet a hash key answer `WRONGTYPE` (`GET` in slice 1; the rest as they are touched, tracked by
+the differential cases).
+
+**Found, and fixed here.**
+
+* The tail shift in `value_splice` had one direction for both cases: copying back to front is right
+  when the value grows (the tail moves forward) and wrong when it shrinks (the tail moves back and
+  runs over bytes it has not copied yet). The store test's model caught it; the direction is now
+  chosen by which way the tail moves.
+* `HINCRBY` first spliced the new number's bytes over the old value without rewriting the pair
+  header's length (a shorter number left the tail of the old one in the value), then, rewritten to
+  delete-and-append, aliased the number's buffer with the splice scratch. The pair is now built whole
+  in one region buffer and spliced in once.
+* `HSETNX` answered 0 for a field that was absent (its "skip when present" check skipped everything);
+  it now sets absent fields and answers 1, and leaves present ones alone.
+* `HLEN` shared the merged arity check with `HEXISTS`/`HSTRLEN` and demanded three arguments.
+
+**Not measured yet** (the oracle is CI's, and the gates named in 19.6 run there): the differential
+cases for every command above are in `tests/differential.py` (23 new cases), the store test has a
+model-based `value_splice` test, and the memory/throughput benches with a hash workload follow when
+`bench/memory.py` is extended in slice 2.

@@ -442,6 +442,9 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         if e < 0 {
             return reply.put_null(sc, at, link[3]);
         }
+        if store.kind_of(st, e) == store.kind_hash() {
+            return reply.wrong_type(sc, at);
+        }
         return reply.put_bulk(sc, at, store.value(st, e));
     }
     if reply.is_word(name, "SET") {
@@ -717,8 +720,12 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         let key = reply.arg_of(view, table, 1);
-        if store.find(st, key, store.hash_of(st, key)) < 0 {
+        let e = store.find(st, key, store.hash_of(st, key));
+        if e < 0 {
             return reply.put(sc, at, "+none\r\n");
+        }
+        if store.kind_of(st, e) == store.kind_hash() {
+            return reply.put(sc, at, "+hash\r\n");
         }
         return reply.put(sc, at, "+string\r\n");
     }
@@ -778,6 +785,224 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         return session.reset(sc, at, link);
+    }
+    if reply.is_word(name, "HSET") || reply.is_word(name, "HSETNX") {
+        if table[0] < 4 || (table[0] - 2) % 2 == 1 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_hset(view, table, sc, at, st, tmp, reply.is_word(name, "HSETNX"));
+    }
+    if reply.is_word(name, "HMSET") {
+        if table[0] < 4 || (table[0] - 2) % 2 == 1 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        var set = command_hset(view, table, sc, at, st, tmp, false);
+        if set != at {
+            // A WRONGTYPE or OOM reply: pass it through.
+            return set;
+        }
+        return reply.put(sc, at, "+OK\r\n");
+    }
+    if reply.is_word(name, "HGET") {
+        if table[0] != 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let (e, o) = hash_entry(view, table, sc, at, st, 1);
+        if e == 0 - 1 {
+            return reply.put_null(sc, o, link[3]);
+        }
+        if e < 0 {
+            return o;
+        }
+        let packed = store.value(st, e);
+        let (found, spot) = hash_find(packed, reply.arg_of(view, table, 2));
+        if !found {
+            return reply.put_null(sc, at, link[3]);
+        }
+        return reply.put_bulk(sc, at, pair_value(packed, spot));
+    }
+    if reply.is_word(name, "HDEL") {
+        if table[0] < 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let (e, o) = hash_entry(view, table, sc, at, st, 1);
+        if e == 0 - 1 {
+            return reply.put_integer(sc, at, 0);
+        }
+        if e < 0 {
+            return o;
+        }
+        var removed = 0;
+        var k = 2;
+        while k < table[0] {
+            let packed = store.value(st, e);
+            let (found, spot) = hash_find(packed, reply.arg_of(view, table, k));
+            if found {
+                let vfrom = spot + pair_header() + get_len(packed, spot);
+                let vend = vfrom + get_len(packed, spot + 4);
+                if store.value_splice(st, e, spot, vend, "") != 0 {
+                    return reply.refused(sc, at);
+                }
+                removed = removed + 1;
+            }
+            k = k + 1;
+        }
+        if removed > 0 && hash_len(store.value(st, e)) == 0 {
+            let key = reply.arg_of(view, table, 1);
+            store.delete(st, key, store.hash_of(st, key));
+        }
+        return reply.put_integer(sc, at, removed);
+    }
+    if reply.is_word(name, "HLEN") {
+        if table[0] != 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let (e, o) = hash_entry(view, table, sc, at, st, 1);
+        if e == 0 - 1 {
+            return reply.put_integer(sc, at, 0);
+        }
+        if e < 0 {
+            return o;
+        }
+        return reply.put_integer(sc, at, hash_len(store.value(st, e)));
+    }
+    if reply.is_word(name, "HSTRLEN") || reply.is_word(name, "HEXISTS") {
+        if table[0] != 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let (e, o) = hash_entry(view, table, sc, at, st, 1);
+        if e == 0 - 1 {
+            return reply.put_integer(sc, at, 0);
+        }
+        if e < 0 {
+            return o;
+        }
+        let packed = store.value(st, e);
+        let (found, spot) = hash_find(packed, reply.arg_of(view, table, 2));
+        if reply.is_word(name, "HEXISTS") {
+            if found {
+                return reply.put_integer(sc, at, 1);
+            }
+            return reply.put_integer(sc, at, 0);
+        }
+        if !found {
+            return reply.put_integer(sc, at, 0);
+        }
+        return reply.put_integer(sc, at, get_len(packed, spot + 4));
+    }
+    if reply.is_word(name, "HMGET") {
+        if table[0] < 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        var out = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), table[0] - 2), "\r\n");
+        let (e, o) = hash_entry(view, table, sc, out, st, 1);
+        if e < 0 {
+            if e == 0 - 2 {
+                return o;
+            }
+            var none = out;
+            var j = 2;
+            while j < table[0] {
+                none = reply.put_null(sc, none, link[3]);
+                j = j + 1;
+            }
+            return none;
+        }
+        var j = 2;
+        while j < table[0] {
+            let packed = store.value(st, e);
+            let (found, spot) = hash_find(packed, reply.arg_of(view, table, j));
+            if found {
+                out = reply.put_bulk(sc, out, pair_value(packed, spot));
+            } else {
+                out = reply.put_null(sc, out, link[3]);
+            }
+            j = j + 1;
+        }
+        return out;
+    }
+    if reply.is_word(name, "HGETALL") || reply.is_word(name, "HKEYS") || reply.is_word(name, "HVALS") {
+        if table[0] != 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let (e, o) = hash_entry(view, table, sc, at, st, 1);
+        if e == 0 - 1 {
+            return reply.put(sc, at, "*0\r\n");
+        }
+        if e < 0 {
+            return o;
+        }
+        let packed = store.value(st, e);
+        let n = hash_len(packed);
+        var out = reply.put_nat(sc, reply.put(sc, at, "*"), n);
+        if reply.is_word(name, "HGETALL") {
+            out = reply.put_nat(sc, reply.put(sc, at, "*"), n * 2);
+        }
+        out = reply.put(sc, out, "\r\n");
+        var spot = 0;
+        while spot + pair_header() <= len(packed) {
+            let flen = get_len(packed, spot);
+            let vlen = get_len(packed, spot + 4);
+            let field_at = spot + pair_header();
+            let value_at = field_at + flen;
+            if reply.is_word(name, "HGETALL") {
+                out = reply.put_bulk(sc, out, packed[field_at..value_at]);
+                out = reply.put_bulk(sc, out, packed[value_at..value_at + vlen]);
+            }
+            if reply.is_word(name, "HKEYS") {
+                out = reply.put_bulk(sc, out, packed[field_at..value_at]);
+            }
+            if reply.is_word(name, "HVALS") {
+                out = reply.put_bulk(sc, out, packed[value_at..value_at + vlen]);
+            }
+            spot = value_at + vlen;
+        }
+        return out;
+    }
+    if reply.is_word(name, "HINCRBY") {
+        if table[0] != 4 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        let (status, n) = reply.parse_int(reply.arg_of(view, table, 3));
+        if status != 0 {
+            return reply.not_an_integer(sc, at);
+        }
+        let key = reply.arg_of(view, table, 1);
+        let h = store.hash_of(st, key);
+        var e = store.find(st, key, h);
+        if e >= 0 && store.kind_of(st, e) == store.kind_string() {
+            return reply.wrong_type(sc, at);
+        }
+        if e < 0 {
+            if store.set(st, key, h, "", 0 - 1) != 0 {
+                return reply.refused(sc, at);
+            }
+            e = store.find(st, key, h);
+            store.set_kind(st, e, store.kind_hash());
+        }
+        let field = reply.arg_of(view, table, 2);
+        let packed = store.value(st, e);
+        let (found, spot) = hash_find(packed, field);
+        var current = 0;
+        if found {
+            let (parse, got) = reply.parse_int(pair_value(packed, spot));
+            if parse != 0 {
+                return reply.put(sc, at, "-ERR hash value is not an integer\r\n");
+            }
+            current = got;
+        }
+        if n > 0 && current > reply.max_int() - n {
+            return reply.put(sc, at, "-ERR increment or decrement would overflow\r\n");
+        }
+        if n < 0 && current < reply.min_int() - n {
+            return reply.put(sc, at, "-ERR increment or decrement would overflow\r\n");
+        }
+        var next = current + n;
+        let size = reply.put_int(tmp, 0, next);
+        if hash_set_one(st, e, field, tmp[0..size]) != 0 {
+            return reply.refused(sc, at);
+        }
+        return reply.put_integer(sc, at, next);
     }
     // Redis names the command (at most 128 bytes of it) and then the arguments, as `'arg' ` each, until the
     // text so far is 128 bytes: the quotes and spaces count, and the last argument is cut to what is left.
@@ -1058,6 +1283,169 @@ fn command_rename[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byt
 }
 
 // ---------------------------------------------------------------------
+// Hashes (docs/design.md section 19): a packed list of pairs in the value's room
+// ---------------------------------------------------------------------
+
+// Bytes of pair header: a 4-byte field length and a 4-byte value length.
+fn pair_header() -> [] int {
+    return 8;
+}
+
+fn get_len[&d](data: &d [byte], at: int) -> [] int {
+    return int_of(data[at]) | int_of(data[at + 1]) << 8 | int_of(data[at + 2]) << 16 | int_of(data[at + 3]) << 24;
+}
+
+// Does the packed hash `data` hold `field`? Answers `(found, spot)`: `spot` is the offset of the pair's
+// header (its field length, then its value) when found, and the offset of the end of the list when not.
+fn hash_find[&d, &f](data: &d [byte], field: &f [byte]) -> [] (bool, int) {
+    var at = 0;
+    while at + pair_header() <= len(data) {
+        let flen = get_len(data, at);
+        let vlen = get_len(data, at + 4);
+        if flen == len(field) {
+            var i = 0;
+            var same = true;
+            while i < flen {
+                if data[at + pair_header() + i] != field[i] {
+                    same = false;
+                }
+                i = i + 1;
+            }
+            if same {
+                return (true, at);
+            }
+        }
+        at = at + pair_header() + flen + vlen;
+    }
+    return (false, at);
+}
+
+// The value of the field whose pair header is at `spot`.
+fn pair_value[&d](data: &d [byte], spot: int) -> [] &d [byte] {
+    let flen = get_len(data, spot);
+    let vlen = get_len(data, spot + 4);
+    let from = spot + pair_header() + flen;
+    return data[from..from + vlen];
+}
+
+// How many pairs the packed hash `data` holds.
+fn hash_len[&d](data: &d [byte]) -> [] int {
+    var at = 0;
+    var n = 0;
+    while at + pair_header() <= len(data) {
+        at = at + pair_header() + get_len(data, at) + get_len(data, at + 4);
+        n = n + 1;
+    }
+    return n;
+}
+
+// Set one `field` to `value` on the hash entry `e` (already a hash): append the pair when the field is
+// absent, splice the value when it is present. 0: done. 1: no room. `tmp` is at least 8 bytes and at
+// least as long as the field and the value (the command's scratch buffer is 64 bytes and a command's
+// arguments are at most 16 KiB, so a longer pair is refused with OOM, as Redis would refuse it).
+fn hash_set_one[&s, &f, &x](st: &!s store.Store, e: int, field: &f [byte], value: &x [byte]) -> [] int {
+    let packed = store.value(st, e);
+    let (found, spot) = hash_find(packed, field);
+    var end = 0;
+    if found {
+        // Take the pair out and put a fresh one back: the header's lengths cannot be patched in place
+        // (the value's room may move under a compaction), and a delete-then-append is two bounded shifts.
+        let old_pair = pair_header() + get_len(packed, spot) + get_len(packed, spot + 4);
+        if store.value_splice(st, e, spot, spot + old_pair, "") != 0 {
+            return 1;
+        }
+        end = hash_len_end(store.value(st, e));
+    } else {
+        end = hash_len_end(packed);
+    }
+    // The whole pair is built in one region buffer and spliced in at the end, once.
+    region a {
+        let pair = alloc_slice[a](pair_header() + len(field) + len(value), byte_of(0));
+        pair[0] = byte_of(len(field) & 255);
+        pair[1] = byte_of(len(field) >> 8 & 255);
+        pair[2] = byte_of(len(field) >> 16 & 255);
+        pair[3] = byte_of(len(field) >> 24 & 255);
+        pair[4] = byte_of(len(value) & 255);
+        pair[5] = byte_of(len(value) >> 8 & 255);
+        pair[6] = byte_of(len(value) >> 16 & 255);
+        pair[7] = byte_of(len(value) >> 24 & 255);
+        var i = 0;
+        while i < len(field) {
+            pair[pair_header() + i] = field[i];
+            i = i + 1;
+        }
+        var j = 0;
+        while j < len(value) {
+            pair[pair_header() + len(field) + j] = value[j];
+            j = j + 1;
+        }
+        return store.value_splice(st, e, end, end, pair);
+    }
+}
+
+// Where the packed hash `data` ends: the offset a new pair is appended at.
+fn hash_len_end[&d](data: &d [byte]) -> [] int {
+    var at = 0;
+    while at + pair_header() <= len(data) {
+        at = at + pair_header() + get_len(data, at) + get_len(data, at + 4);
+    }
+    return at;
+}
+
+// The entry for a hash command's key, with the kind checked: `(e, o)` where `e` is -1 when the key is
+// absent (nothing written) and -2 when the reply is a WRONGTYPE already written at `o`.
+fn hash_entry[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, k: int) -> [] (int, int) {
+    let key = reply.arg_of(view, table, k);
+    let e = store.find(st, key, store.hash_of(st, key));
+    if e < 0 {
+        return (0 - 1, at);
+    }
+    if store.kind_of(st, e) != store.kind_hash() {
+        return (0 - 2, reply.wrong_type(sc, at));
+    }
+    return (e, at);
+}
+
+// `HSET`/`HMSET`/`HSETNX key field value [field value ...]`: each field is set; the answer is how many
+// fields were not there before (`HSETNX` answers 0/1 for its one pair, `HMSET` answers OK).
+fn command_hset[&v, &t, &b, &s, &x](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, tmp: &!x [byte], nx: bool) -> [] int {
+    let key = reply.arg_of(view, table, 1);
+    let h = store.hash_of(st, key);
+    var e = store.find(st, key, h);
+    if e >= 0 && store.kind_of(st, e) == store.kind_string() {
+        return reply.wrong_type(sc, at);
+    }
+    if e < 0 {
+        if store.set(st, key, h, "", 0 - 1) != 0 {
+            return reply.refused(sc, at);
+        }
+        e = store.find(st, key, h);
+        store.set_kind(st, e, store.kind_hash());
+    }
+    var added = 0;
+    var k = 2;
+    while k + 1 < table[0] {
+        let field = reply.arg_of(view, table, k);
+        let value = reply.arg_of(view, table, k + 1);
+        let (found, spot) = hash_find(store.value(st, e), field);
+        if found {
+            if !nx {
+                if hash_set_one(st, e, field, value) != 0 {
+                    return reply.refused(sc, at);
+                }
+            }
+        } else {
+            if hash_set_one(st, e, field, value) != 0 {
+                return reply.refused(sc, at);
+            }
+            added = added + 1;
+        }
+        k = k + 2;
+    }
+    return reply.put_integer(sc, at, added);
+}
+
+// ---------------------------------------------------------------------
 // Arity
 // ---------------------------------------------------------------------
 
@@ -1077,6 +1465,21 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     }
     if reply.is_word(name, "APPEND") {
         return 3;
+    }
+    if reply.is_word(name, "HGET") || reply.is_word(name, "HEXISTS") || reply.is_word(name, "HSTRLEN") {
+        return 3;
+    }
+    if reply.is_word(name, "HINCRBY") {
+        return 4;
+    }
+    if reply.is_word(name, "HLEN") || reply.is_word(name, "HGETALL") || reply.is_word(name, "HKEYS") || reply.is_word(name, "HVALS") {
+        return 2;
+    }
+    if reply.is_word(name, "HDEL") || reply.is_word(name, "HMGET") {
+        return 0 - 3;
+    }
+    if reply.is_word(name, "HSET") || reply.is_word(name, "HMSET") || reply.is_word(name, "HSETNX") {
+        return 0 - 4;
     }
     if reply.is_word(name, "DBSIZE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
         return 1;

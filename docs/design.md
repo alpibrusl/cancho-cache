@@ -460,3 +460,198 @@ Status: **built** (54 commands). The design, then what building it found.
 **The fix** is the smallest that makes the invariant true again: `max_string()` is 16,384, so `APPEND` and `SETRANGE` refuse a longer result with Redis's own words, and no value is longer than `reserve()` assumes. `tests/limits.py` now builds the longest value, checks that one byte more is refused and changes nothing, that a `SETRANGE` at an offset of 4 million is refused and makes no key (the reproducer), and that the largest answers (`MGET` of 63 longest values, `EXEC` of 100 `GET`s of one) come back whole. It fails on the binary of `main` (`SETRANGE one past it is refused: got :16385`) and passes on this one.
 
 **What it does not fix, and why issue #11 matters:** `MGET` takes at most 63 keys (the table of arguments holds 64), a command at most 16 KiB. Both are what #11 is for; this section is the reason that lifting them comes with answers that are written in pieces and not built whole.
+
+## 17. The client compatibility matrix (epic #8, issue #13, slice 1)
+
+`tests/session.py` already gates redis-py (RESP2, RESP3, default) and ioredis. Slice 1 adds the
+third widely-used client library, `node-redis` 4 (`redis` on npm), a per-client battery under
+`tests/clients/`, and a matrix harness (`tests/clients_matrix.py`) whose output the README's table
+must agree with.
+
+### 17.1 The battery
+
+`tests/clients/node_redis_session.js`: connect and handshake (node-redis 4 sends `HELLO` and its
+`CLIENT SETINFO` on connect; both are answered), string commands (`SET`/`GET`/`INCR`/`INCRBY`/
+`MGET`), expiry (`SET EX`, `EXPIRE`, `TTL`, `GETDEL`), a pipeline and a `MULTI`/`EXEC` transaction
+in the library's own shapes, an error reply surfaced as an exception with Redis's text
+(`value is not an integer or out of range`), `CLIENT SETNAME`, a reconnect on a fresh connection,
+and the library idiom `sendCommand`. The battery is idempotent (it clears its keys first), so a warm
+server cannot make it fail.
+
+One finding: node-redis returns the RESP integer as a JavaScript number where redis-py and ioredis
+return booleans for the same reply (`EXPIRE`). The battery pins the library's actual behaviour, not
+Redis's, which is the point of a per-client matrix.
+
+### 17.2 The matrix
+
+`tests/clients_matrix.py` starts a fresh server per client and prints one Markdown row per client
+that ran, `pass`/`fail`/`not run` with the failure's last line as the note. It then checks the
+README's matrix section: a client that passed this run must be recorded as passing there, and the
+README may not claim a pass the run did not produce. The harness is the record, the batteries inside
+`tests/session.py` (and `tests/transactions.py`) are the gate, so a missing runtime can only skip,
+never widen, a claim.
+
+### 17.3 Slice 2: redis-rs
+
+`tests/clients/redis-rs/` is a pinned (`redis = "=1.7.1"`) Rust binary, built by CI before the session
+test, that runs the same shape of battery as the node clients: handshake, strings, expiry, a pipeline
+and a `MULTI`/`EXEC` transaction in redis-rs's own shape (`pipe().atomic()`), hashes (`HSET`/`HGET`/
+`HGETALL`, the first client battery to exercise issue #14's commands), an error reply surfacing as an
+`Err` with Redis's text, `CLIENT SETNAME`, and a reconnect on a fresh connection. It is idempotent
+against a warm server (it clears its keys first), and it joins `session.py` and the matrix.
+
+Two findings for the matrix's record: redis-rs sends nothing on connect (its handshake is lazy, so
+the battery's first command is the handshake), and its pipeline replies must be asked for as tuples
+(one value per pipelined command, `ignore()` on the ones not wanted) where redis-py answers a list —
+the battery pins the library's actual shapes, as the node batteries do.
+
+Not run yet, tracked in #13's later slices: go-redis, Jedis, Lettuce,
+StackExchange.Redis, hiredis, framework smoke tests (Django, Rails, Spring, Laravel), Redis's own
+test-suite subset, and the wire-level corpus.
+
+## 18. A random hash seed (epic #8, issue #12)
+
+### 18.1 The gap and the choice of source
+
+The seed is a constant today (`store.open(heap, memory, max_keys, 0, policy)` in `src/cache.cho`), so a
+client that can choose its keys can pick ones that collide on length, tag and home slot
+(`c80067`/`c99133`, pinned in `tests/store_test.cho`) and degrade the open-addressing index to a
+linear scan. Redis randomises its hash seed at start for this reason.
+
+cancho has no randomness builtin, by design (`docs/tls-pure.md` §2.2): the established pattern is
+that the caller reads `/dev/urandom` through `Fs` and seeds a generator; cancho-hooks does exactly
+this in three places. That is what this server now does at start: it holds `Fs("/dev/urandom")`
+(borrowed from the world's `fs`, which it used to release unopened), reads eight bytes, and uses them
+as the seed. A sixth argument, `--seed N`, names the seed instead, for reproducible tests and
+benchmarks; if the read fails (no `/dev/urandom`), the seed is 0, the old constant, and the server
+still starts.
+
+**The authority report, before and after.** Before: `never touches the filesystem`. After: the report
+names `fs_read("/dev/urandom")` and nothing else under `performs`; the CI step is widened to assert
+exactly that (`fs_read("/dev/urandom")` present, `fs_write` absent), so the claim stays readable and
+the widening is to one named file, not to a filesystem. This is the issue's stated trade-off: the
+alternative, a randomness builtin, would add a different label for the same reach.
+
+### 18.2 The sampler's PRNG
+
+`draw` (the eviction and `RANDOMKEY` sampler, xorshift in `store.cho`) keeps its own state and stays
+deterministic given the seed: it is derived from the seed, not from `/dev/urandom` per draw, so a
+`--seed` run is reproducible end to end, and two servers with different seeds evict differently
+without reading the OS again. Sharing the entropy per draw would make eviction depend on a resource
+the report names and the benchmarks could not fix; deriving it once does not.
+
+### 18.3 Gate
+
+- The pinned collision pair collides at seed 0 (as before) and is checked, by probing the store's
+  index, not to collide at the seed this process drew (a regression test that measures the probe
+  length, not one that asserts it).
+- A `--seed N` run is byte-identical to another `--seed N` run.
+- The authority golden changes from `never touches the filesystem` to `fs_read("/dev/urandom")` and
+  no `fs_write`; CI asserts the exact shape.
+- The throughput gate is unchanged (the seed changes hashes, not the hash's cost; the differential
+  harness is seed-independent because both servers see the same commands).
+
+## 19. Hashes (epic #8, issue #14)
+
+### 19.1 Representation: a packed list of pairs, one arena record
+
+A hash is one arena record whose value is a packed sequence of `(field, value)` pairs, in insertion
+order (Redis's listpack keeps insertion order too, and `HGETALL`'s order is not promised but is
+observed):
+
+    [4-byte field length][4-byte value length][field bytes][value bytes] ...
+
+Lengths are 4-byte so a pair's header is fixed and a field scan is a walk. A field is found by a
+linear scan; a hash of `n` fields costs `O(n)` per `HSET`/`HGET`, which is Redis's own listpack
+behaviour for small hashes. **No indexed form in slice 1**: the conversion threshold (Redis turns a
+listpack into a hashtable at 128 entries by default) needs a second in-arena structure whose
+compaction story is its own slice. Slice 1 bounds the cost where the arena already bounds it: a hash
+lives in one record, so it can be as large as the arena, and one `HSET` on an `n`-field hash costs
+one scan (find) plus one bounded shift (§19.3). The threshold, measured against Redis at equal
+resident memory, decides slice 2 (`bench/memory.py` extended with a hash workload).
+
+### 19.2 The type tag: a ninth int in `meta`
+
+`meta` was eight ints a key. It becomes nine: slot 8 is the kind, 0 for a string and 1 for a hash.
+`stride()` is the one place the size lives, so `meta`'s allocation and every loop that walks it scale
+without other edits. Nothing else encodes a kind: slot 6 stays exactly "in use / free chain" (its -2
+is compared in the eviction sampler, the sweep, compaction and `visible`), and the hash's bits stay
+the hash's (the index's tag and home slot depend on them). `TYPE` answers `string`, `hash` or
+`none`; there is no `OBJECT` command yet, so `OBJECT ENCODING` is not answered at all — stated here
+rather than left to look like an oversight. A string command that meets a hash key
+(`GET`, `SET`, `INCR`, `APPEND`, `SETRANGE`, `GETRANGE`, `STRLEN`, `GETEX`, `GETDEL`, `GETSET`,
+`SETEX`, `SETNX`, `GETRANGE`/`SUBSTR`, and `MGET`'s per-key hole) answers Redis's own
+`-WRONGTYPE Operation against a key holding the wrong kind of value` byte for byte, and each hash
+command answers it for a string key. Expiry and keyspace commands (`EXPIRE`, `TTL`, `PERSIST`,
+`DEL`, `EXISTS`, `TOUCH`, `RENAME`, `KEYS`, `SCAN`, `RANDOMKEY`, `FLUSHALL`) work on any kind, as in
+Redis.
+
+### 19.3 Mutation: one primitive, `value_splice`, and what each command costs
+
+The store gains one primitive, `value_splice(st, e, cut_from, cut_to, bytes)`: replace the value's
+`[cut_from, cut_to)` with `bytes`, shifting what follows inside the record's room when the lengths
+differ, or appending a fresh record when they do not fit — the same three cases `put_key` and
+`splice` already have (in place / shifted in place / appended), so compaction, eviction and
+backward-shift deletion need no new knowledge of hashes. On it:
+
+* `HSET`/`HSETNX`/`HMSET`: find the field; absent → `value_splice` at the end (one append); present
+  → `value_splice` over the old value (one shift of the tail, or a plain copy when the lengths
+  match).
+* `HDEL`: `value_splice` the pair away (one shift).
+* `HINCRBY`/`HINCRBYFLOAT`: read, parse, format (into the 64-byte `tmp`), and splice back.
+
+So a 10,000-field hash does not make one `HSET` a 10,000-field copy: the shift moves only the bytes
+after the field, and only when the value's length changed; a compaction that happens to run pays the
+arena-slice bound it already has. What slice 1 does not have is the `O(1)` field find of an indexed
+form — that is the measured threshold of slice 2.
+
+### 19.4 Field expiry is out of scope
+
+`HEXPIRE` and the rest of the 7.4 field-expiry family are a non-goal for this issue, as the issue
+says: per-field expiry doubles the expiry bookkeeping (`meta` slot 4 is per key) and no client the
+matrix covers asks for it.
+
+### 19.5 Commands, in the order they land
+
+Slice 1: `HSET`, `HGET`, `HDEL`, `HLEN`, `HEXISTS`, `HGETALL`, `HKEYS`, `HVALS`, `HMGET`, `HMSET`,
+`HSETNX`, `HSTRLEN`, `HINCRBY`. Slice 2: `HINCRBYFLOAT`, `HRANDFIELD`, `HSCAN` (the scan needs the
+keyspace cursor's `TYPE` filter widened, which is why it is not first), and the indexed form with
+its threshold measurement. `RESP3` map replies (`HGETALL`, `HENTER` none; `HGETALL` is a flat array
+in RESP2 and a map in RESP3) are answered in both protocols, byte-identical to Redis 7.0.15.
+
+### 19.6 Gate
+
+Differential against Redis 7.0.15 for every command (error texts, arity, `WRONGTYPE` both ways,
+RESP2 flat and RESP3 map); a model-based store test as `tests/store_test.cho` has for strings
+(insertion order, overwrite, delete, grow past room, compaction moving a hash); mutants of the hash
+path caught by the differential and store tests; `bench/memory.py` extended with a hash workload at
+equal resident memory; the string-path throughput gate unchanged (`bench/vs_redis.sh`).
+
+
+### 19.7 Built (slice 1), and what building it found
+
+`HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HDEL`, `HLEN`, `HEXISTS`, `HSTRLEN`, `HGETALL`, `HKEYS`,
+`HVALS`, `HINCRBY` answer, over the packed record of section 19.1 and the `value_splice` primitive of
+19.3, with a ninth `meta` int for the kind (19.2) and `TYPE` answering `hash`. `HEXPIRE` stays out of
+scope (19.4); `HINCRBYFLOAT`, `HRANDFIELD` and `HSCAN` are slice 2 (19.5), and the string commands
+that meet a hash key answer `WRONGTYPE` (`GET` in slice 1; the rest as they are touched, tracked by
+the differential cases).
+
+**Found, and fixed here.**
+
+* The tail shift in `value_splice` had one direction for both cases: copying back to front is right
+  when the value grows (the tail moves forward) and wrong when it shrinks (the tail moves back and
+  runs over bytes it has not copied yet). The store test's model caught it; the direction is now
+  chosen by which way the tail moves.
+* `HINCRBY` first spliced the new number's bytes over the old value without rewriting the pair
+  header's length (a shorter number left the tail of the old one in the value), then, rewritten to
+  delete-and-append, aliased the number's buffer with the splice scratch. The pair is now built whole
+  in one region buffer and spliced in once.
+* `HSETNX` answered 0 for a field that was absent (its "skip when present" check skipped everything);
+  it now sets absent fields and answers 1, and leaves present ones alone.
+* `HLEN` shared the merged arity check with `HEXISTS`/`HSTRLEN` and demanded three arguments.
+
+**Not measured yet** (the oracle is CI's, and the gates named in 19.6 run there): the differential
+cases for every command above are in `tests/differential.py` (23 new cases), the store test has a
+model-based `value_splice` test, and the memory/throughput benches with a hash workload follow when
+`bench/memory.py` is extended in slice 2.

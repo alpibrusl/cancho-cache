@@ -460,3 +460,37 @@ Status: **built** (54 commands). The design, then what building it found.
 **The fix** is the smallest that makes the invariant true again: `max_string()` is 16,384, so `APPEND` and `SETRANGE` refuse a longer result with Redis's own words, and no value is longer than `reserve()` assumes. `tests/limits.py` now builds the longest value, checks that one byte more is refused and changes nothing, that a `SETRANGE` at an offset of 4 million is refused and makes no key (the reproducer), and that the largest answers (`MGET` of 63 longest values, `EXEC` of 100 `GET`s of one) come back whole. It fails on the binary of `main` (`SETRANGE one past it is refused: got :16385`) and passes on this one.
 
 **What it does not fix, and why issue #11 matters:** `MGET` takes at most 63 keys (the table of arguments holds 64), a command at most 16 KiB. Both are what #11 is for; this section is the reason that lifting them comes with answers that are written in pieces and not built whole.
+
+## 17. The client compatibility matrix (epic #8, issue #13, slice 1)
+
+`tests/session.py` already gates redis-py (RESP2, RESP3, default) and ioredis. Slice 1 adds the
+third widely-used client library, `node-redis` 4 (`redis` on npm), a per-client battery under
+`tests/clients/`, and a matrix harness (`tests/clients_matrix.py`) whose output the README's table
+must agree with.
+
+### 17.1 The battery
+
+`tests/clients/node_redis_session.js`: connect and handshake (node-redis 4 sends `HELLO` and its
+`CLIENT SETINFO` on connect; both are answered), string commands (`SET`/`GET`/`INCR`/`INCRBY`/
+`MGET`), expiry (`SET EX`, `EXPIRE`, `TTL`, `GETDEL`), a pipeline and a `MULTI`/`EXEC` transaction
+in the library's own shapes, an error reply surfaced as an exception with Redis's text
+(`value is not an integer or out of range`), `CLIENT SETNAME`, a reconnect on a fresh connection,
+and the library idiom `sendCommand`. The battery is idempotent (it clears its keys first), so a warm
+server cannot make it fail.
+
+One finding: node-redis returns the RESP integer as a JavaScript number where redis-py and ioredis
+return booleans for the same reply (`EXPIRE`). The battery pins the library's actual behaviour, not
+Redis's, which is the point of a per-client matrix.
+
+### 17.2 The matrix
+
+`tests/clients_matrix.py` starts a fresh server per client and prints one Markdown row per client
+that ran, `pass`/`fail`/`not run` with the failure's last line as the note. It then checks the
+README's matrix section: a client that passed this run must be recorded as passing there, and the
+README may not claim a pass the run did not produce. The harness is the record, the batteries inside
+`tests/session.py` (and `tests/transactions.py`) are the gate, so a missing runtime can only skip,
+never widen, a claim.
+
+Not run yet, tracked in #13's later slices: go-redis, Jedis, Lettuce, redis-rs,
+StackExchange.Redis, hiredis, framework smoke tests (Django, Rails, Spring, Laravel), Redis's own
+test-suite subset, and the wire-level corpus.

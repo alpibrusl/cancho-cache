@@ -655,3 +655,26 @@ the differential cases).
 cases for every command above are in `tests/differential.py` (23 new cases), the store test has a
 model-based `value_splice` test, and the memory/throughput benches with a hash workload follow when
 `bench/memory.py` is extended in slice 2.
+
+
+### 19.8 Slice 2: `HSCAN`, `HRANDFIELD`, the `WRONGTYPE` net, and `SCAN TYPE`
+
+`HSCAN cursor [MATCH] [COUNT] [NOVALUES]` answers, with the cursor a pair number of the packed record
+(the same shape as the keyspace `SCAN`'s entry-number cursor, and the same buffer bound). `HRANDFIELD
+key [count [WITHVALUES]]` answers one bulk without a count, distinct fields for a positive count
+(clamped to the hash), repeats for a negative one, `WITHVALUES` interleaving and doubling the reply;
+its randomness is the store's sampler (`random_below`, the eviction generator, so a `--seed` run is
+reproducible). `SCAN ... TYPE` now compares the key's kind, so `TYPE hash` matches hashes and
+`TYPE string` strings (a type this server has no key of matches none, exactly as before).
+
+The `WRONGTYPE` net is closed over the string commands that read or scan a value: `GET` (slice 1) and
+now `APPEND`, `SETRANGE`, `GETRANGE`/`SUBSTR`, `STRLEN`, `GETEX`, `GETDEL`, `GETSET`, `INCR`, `DECR`,
+`INCRBY`, `DECRBY` and `MGET`. `SETNX` and `SETEX`/`PSETEX` need no guard: they never read the old
+value (a `SETEX` over a hash replaces it, as in Redis). Seven new differential cases pin all of it,
+including `HRANDFIELD`'s clamping, repetition and error texts and `HSCAN`'s cursors.
+
+**Not in this slice, and why:** `HINCRBYFLOAT` needs a float formatter whose output is byte-compared
+with Redis's (17 significant digits, trailing zeros trimmed) — a piece of work the string path has
+not needed either (there is no `INCRBYFLOAT`), and not something to slip in with the rest. The
+indexed form with its threshold measurement, and the hash-workload memory bench, remain as §19.6
+named them.

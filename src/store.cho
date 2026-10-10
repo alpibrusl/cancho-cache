@@ -436,6 +436,14 @@ fn draw[&s](st: &!s Store, bound: int) -> [] int {
     return (x >> 11 & 0x1fffffffffffff) % bound;
 }
 
+// A pseudo-random number in `0..bound`, the sampler's generator (issue #14's `HRANDFIELD` uses it).
+pub fn random_below[&s](st: &!s Store, bound: int) -> [] int {
+    if bound <= 0 {
+        return 0;
+    }
+    return draw(st, bound);
+}
+
 // Pick the entry to evict: of five random keys in use, the one used longest ago. -1 if there is no key to take.
 fn victim[&s](st: &!s Store) -> [] int {
     if st.live == 0 {

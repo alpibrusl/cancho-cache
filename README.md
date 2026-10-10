@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml)
 
-**A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that names the one file it reads (`/dev/urandom`, for the hash seed) and no other, and no foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis` and `node-redis` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
+**A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that names the one file it reads (`/dev/urandom`, for the hash seed) and no other, and no foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis`, `node-redis` and `redis-rs` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
 **Status: alpha, a string-and-hash cache and not a Redis replacement.** It answers 67 of Redis 7.0's 240 commands; the data structures are strings and hashes (13 `H*` commands), no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
@@ -108,7 +108,7 @@ $CANCHO test tests/store_test.cho src/store.cho --std      # the store: collisio
 python3 tests/differential.py build/cache                 # byte-for-byte against redis-server, four framings each
 python3 tests/limits.py build/cache                       # a full arena and a full key table
 python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under allkeys-lru
-python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CONFIG/QUIT; redis-py, ioredis and node-redis connecting
+python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CONFIG/QUIT; redis-py, ioredis, node-redis and redis-rs connecting
 python3 tests/fuzz_server.py build/cache                  # hostile bytes
 python3 tests/transactions.py build/cache                 # WATCH and EXEC across two connections; redis-py, ioredis and node-redis transactions
 CANCHO=$CANCHO python3 tests/txn_mutants.py               # 16 deliberately wrong caches, each of which must be caught
@@ -140,8 +140,9 @@ client the run did not pass. A client whose runtime is missing is reported as sk
 | redis-py (pip install redis; RESP2, RESP3, default) | pass | |
 | ioredis 5, node (npm install ioredis in tests/clients) | pass | |
 | node-redis 4, node (npm install redis in tests/clients) | pass | |
+| redis-rs 1.7, rust (cargo build --release in tests/clients/redis-rs) | pass | |
 
-Go, Java, Rust and .NET clients (go-redis, Jedis, Lettuce, redis-rs, StackExchange.Redis, hiredis)
+Go, Java and .NET clients (go-redis, Jedis, Lettuce, StackExchange.Redis, hiredis)
 and framework smoke tests (Django, Rails, Spring, Laravel) are not run yet: issue
 [#13](https://github.com/alpibrusl/cancho-cache/issues/13) tracks adding each, pinned, to this table.
 

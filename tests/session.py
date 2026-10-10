@@ -218,6 +218,12 @@ try:
             check(lib + ": becomes ready and gets through a session", run.returncode == 0 and ready in run.stdout, run.stdout + run.stderr)
         else:
             skipped.append(lib + " (npm install " + module + " in tests/clients)")
+    rs_bin = os.path.join(HERE, "clients", "redis-rs", "target", "release", "redis-rs-session")
+    if os.path.isfile(rs_bin):
+        run = subprocess.run([rs_bin, str(PORT)], capture_output=True, text=True, timeout=30)
+        check("redis-rs: becomes ready and gets through a session", run.returncode == 0 and "redis-rs ok" in run.stdout, run.stdout + run.stderr)
+    else:
+        skipped.append("redis-rs (cargo build --release in tests/clients/redis-rs)")
 finally:
     p.terminate()
 
@@ -226,4 +232,4 @@ for s in skipped:
 if failures:
     print("\n".join(failures))
     sys.exit(1)
-print("the session commands behave as stated; clients that ran: %s" % ("redis-py" if "redis-py (pip install redis)" not in skipped else "none of redis-py") + (", ioredis" if not any(x.startswith("ioredis") for x in skipped) else "") + (", node-redis" if not any(x.startswith("node-redis") for x in skipped) else ""))
+print("the session commands behave as stated; clients that ran: %s" % ("redis-py" if "redis-py (pip install redis)" not in skipped else "none of redis-py") + (", ioredis" if not any(x.startswith("ioredis") for x in skipped) else "") + (", node-redis" if not any(x.startswith("node-redis") for x in skipped) else "") + (", redis-rs" if not any(x.startswith("redis-rs") for x in skipped) else ""))

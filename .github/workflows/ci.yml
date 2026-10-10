@@ -80,11 +80,12 @@ jobs:
         working-directory: cache
         run: python3 tests/limits.py build/cache
 
-      - name: Client libraries for the session test (redis-py, ioredis, node-redis)
+      - name: Client libraries for the session test (redis-py, ioredis, node-redis, redis-rs)
         working-directory: cache
         run: |
           pip install redis
           (cd tests/clients && npm install --no-audit --no-fund)
+          (cd tests/clients/redis-rs && cargo build --release)
       - name: The client compatibility matrix, checked against the README's table
         working-directory: cache
         run: python3 tests/clients_matrix.py build/cache

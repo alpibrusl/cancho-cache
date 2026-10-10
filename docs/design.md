@@ -491,7 +491,21 @@ README may not claim a pass the run did not produce. The harness is the record, 
 `tests/session.py` (and `tests/transactions.py`) are the gate, so a missing runtime can only skip,
 never widen, a claim.
 
-Not run yet, tracked in #13's later slices: go-redis, Jedis, Lettuce, redis-rs,
+### 17.3 Slice 2: redis-rs
+
+`tests/clients/redis-rs/` is a pinned (`redis = "=1.7.1"`) Rust binary, built by CI before the session
+test, that runs the same shape of battery as the node clients: handshake, strings, expiry, a pipeline
+and a `MULTI`/`EXEC` transaction in redis-rs's own shape (`pipe().atomic()`), hashes (`HSET`/`HGET`/
+`HGETALL`, the first client battery to exercise issue #14's commands), an error reply surfacing as an
+`Err` with Redis's text, `CLIENT SETNAME`, and a reconnect on a fresh connection. It is idempotent
+against a warm server (it clears its keys first), and it joins `session.py` and the matrix.
+
+Two findings for the matrix's record: redis-rs sends nothing on connect (its handshake is lazy, so
+the battery's first command is the handshake), and its pipeline replies must be asked for as tuples
+(one value per pipelined command, `ignore()` on the ones not wanted) where redis-py answers a list —
+the battery pins the library's actual shapes, as the node batteries do.
+
+Not run yet, tracked in #13's later slices: go-redis, Jedis, Lettuce,
 StackExchange.Redis, hiredis, framework smoke tests (Django, Rails, Spring, Laravel), Redis's own
 test-suite subset, and the wire-level corpus.
 

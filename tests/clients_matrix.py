@@ -88,10 +88,25 @@ def redis_py_battery():
     return run
 
 
+def redis_rs_battery():
+    def run():
+        import shutil
+        bin_path = os.path.join(HERE, "clients", "redis-rs", "target", "release", "redis-rs-session")
+        if not os.path.isfile(bin_path):
+            return ("not run", "cargo build --release in tests/clients/redis-rs")
+        r = subprocess.run([bin_path, str(PORT)], capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            return ("pass", "")
+        out = (r.stdout + r.stderr).strip().splitlines()
+        return ("fail", out[-1] if out else "exit %d" % r.returncode)
+    return run
+
+
 CLIENTS = [
     ("redis-py (pip install redis; RESP2, RESP3, default)", redis_py_battery()),
     ("ioredis 5, node (npm install ioredis in tests/clients)", node_battery("ioredis_session.js")),
     ("node-redis 4, node (npm install redis in tests/clients)", node_battery("node_redis_session.js")),
+    ("redis-rs 1.7, rust (cargo build --release in tests/clients/redis-rs)", redis_rs_battery()),
 ]
 
 

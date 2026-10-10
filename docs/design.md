@@ -460,3 +460,79 @@ Status: **built** (54 commands). The design, then what building it found.
 **The fix** is the smallest that makes the invariant true again: `max_string()` is 16,384, so `APPEND` and `SETRANGE` refuse a longer result with Redis's own words, and no value is longer than `reserve()` assumes. `tests/limits.py` now builds the longest value, checks that one byte more is refused and changes nothing, that a `SETRANGE` at an offset of 4 million is refused and makes no key (the reproducer), and that the largest answers (`MGET` of 63 longest values, `EXEC` of 100 `GET`s of one) come back whole. It fails on the binary of `main` (`SETRANGE one past it is refused: got :16385`) and passes on this one.
 
 **What it does not fix, and why issue #11 matters:** `MGET` takes at most 63 keys (the table of arguments holds 64), a command at most 16 KiB. Both are what #11 is for; this section is the reason that lifting them comes with answers that are written in pieces and not built whole.
+
+## 17. The client compatibility matrix (epic #8, issue #13, slice 1)
+
+`tests/session.py` already gates redis-py (RESP2, RESP3, default) and ioredis. Slice 1 adds the
+third widely-used client library, `node-redis` 4 (`redis` on npm), a per-client battery under
+`tests/clients/`, and a matrix harness (`tests/clients_matrix.py`) whose output the README's table
+must agree with.
+
+### 17.1 The battery
+
+`tests/clients/node_redis_session.js`: connect and handshake (node-redis 4 sends `HELLO` and its
+`CLIENT SETINFO` on connect; both are answered), string commands (`SET`/`GET`/`INCR`/`INCRBY`/
+`MGET`), expiry (`SET EX`, `EXPIRE`, `TTL`, `GETDEL`), a pipeline and a `MULTI`/`EXEC` transaction
+in the library's own shapes, an error reply surfaced as an exception with Redis's text
+(`value is not an integer or out of range`), `CLIENT SETNAME`, a reconnect on a fresh connection,
+and the library idiom `sendCommand`. The battery is idempotent (it clears its keys first), so a warm
+server cannot make it fail.
+
+One finding: node-redis returns the RESP integer as a JavaScript number where redis-py and ioredis
+return booleans for the same reply (`EXPIRE`). The battery pins the library's actual behaviour, not
+Redis's, which is the point of a per-client matrix.
+
+### 17.2 The matrix
+
+`tests/clients_matrix.py` starts a fresh server per client and prints one Markdown row per client
+that ran, `pass`/`fail`/`not run` with the failure's last line as the note. It then checks the
+README's matrix section: a client that passed this run must be recorded as passing there, and the
+README may not claim a pass the run did not produce. The harness is the record, the batteries inside
+`tests/session.py` (and `tests/transactions.py`) are the gate, so a missing runtime can only skip,
+never widen, a claim.
+
+Not run yet, tracked in #13's later slices: go-redis, Jedis, Lettuce, redis-rs,
+StackExchange.Redis, hiredis, framework smoke tests (Django, Rails, Spring, Laravel), Redis's own
+test-suite subset, and the wire-level corpus.
+
+## 18. A random hash seed (epic #8, issue #12)
+
+### 18.1 The gap and the choice of source
+
+The seed is a constant today (`store.open(heap, memory, max_keys, 0, policy)` in `src/cache.cho`), so a
+client that can choose its keys can pick ones that collide on length, tag and home slot
+(`c80067`/`c99133`, pinned in `tests/store_test.cho`) and degrade the open-addressing index to a
+linear scan. Redis randomises its hash seed at start for this reason.
+
+cancho has no randomness builtin, by design (`docs/tls-pure.md` §2.2): the established pattern is
+that the caller reads `/dev/urandom` through `Fs` and seeds a generator; cancho-hooks does exactly
+this in three places. That is what this server now does at start: it holds `Fs("/dev/urandom")`
+(borrowed from the world's `fs`, which it used to release unopened), reads eight bytes, and uses them
+as the seed. A sixth argument, `--seed N`, names the seed instead, for reproducible tests and
+benchmarks; if the read fails (no `/dev/urandom`), the seed is 0, the old constant, and the server
+still starts.
+
+**The authority report, before and after.** Before: `never touches the filesystem`. After: the report
+names `fs_read("/dev/urandom")` and nothing else under `performs`; the CI step is widened to assert
+exactly that (`fs_read("/dev/urandom")` present, `fs_write` absent), so the claim stays readable and
+the widening is to one named file, not to a filesystem. This is the issue's stated trade-off: the
+alternative, a randomness builtin, would add a different label for the same reach.
+
+### 18.2 The sampler's PRNG
+
+`draw` (the eviction and `RANDOMKEY` sampler, xorshift in `store.cho`) keeps its own state and stays
+deterministic given the seed: it is derived from the seed, not from `/dev/urandom` per draw, so a
+`--seed` run is reproducible end to end, and two servers with different seeds evict differently
+without reading the OS again. Sharing the entropy per draw would make eviction depend on a resource
+the report names and the benchmarks could not fix; deriving it once does not.
+
+### 18.3 Gate
+
+- The pinned collision pair collides at seed 0 (as before) and is checked, by probing the store's
+  index, not to collide at the seed this process drew (a regression test that measures the probe
+  length, not one that asserts it).
+- A `--seed N` run is byte-identical to another `--seed N` run.
+- The authority golden changes from `never touches the filesystem` to `fs_read("/dev/urandom")` and
+  no `fs_write`; CI asserts the exact shape.
+- The throughput gate is unchanged (the seed changes hashes, not the hash's cost; the differential
+  harness is seed-independent because both servers see the same commands).

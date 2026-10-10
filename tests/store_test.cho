@@ -309,6 +309,37 @@ fn test_keys_that_collide_in_tag_and_slot_are_told_apart[&h](heap: &!h Heap) -> 
     return 0;
 }
 
+// Issue #12: the server no longer starts with the constant seed 0, so a client cannot pick keys that
+// collide on tag and home slot (the pair above). Measured, not asserted: at seed 0 the pair shares a
+// home slot; at every other seed tried it does not, which is what a random seed buys -- an attacker's
+// pair is a pair for one seed in 2^31, not for every run.
+fn test_the_pinned_collision_pair_is_a_seed_zero_artifact[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 1024, 4, 0, store.evict_none());
+    borrow mut st as &!w in {
+        let ha = store.hash_of(w, "c80067");
+        let hb = store.hash_of(w, "c99133");
+        test.assert_eq(ha >> 33 & 0x7fffffff, hb >> 33 & 0x7fffffff);
+        test.assert_eq(ha & 7, hb & 7);
+    }
+    store.close(heap, st);
+    var separated = 0;
+    var seed = 1;
+    while seed <= 32 {
+        var other = store.open(heap, 1024, 4, seed, store.evict_none());
+        borrow mut other as &!w in {
+            let ha = store.hash_of(w, "c80067");
+            let hb = store.hash_of(w, "c99133");
+            if ha >> 33 & 0x7fffffff != hb >> 33 & 0x7fffffff || ha & 7 != hb & 7 {
+                separated = separated + 1;
+            }
+        }
+        store.close(heap, other);
+        seed = seed + 1;
+    }
+    test.assert_eq(separated, 32);
+    return 0;
+}
+
 // How many bytes a record of a key of `klen` bytes and a value of `vlen` takes: the 8-byte header, the key, and the value
 // rounded up to a multiple of eight. (What `store` does, written out so that the model below does not use `store`.)
 fn record(klen: int, vlen: int) -> [] int {

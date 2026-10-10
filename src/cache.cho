@@ -368,7 +368,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port: int, memory: int, max_keys: int, policy: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port: int, memory: int, max_keys: int, policy: int, seed: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -376,7 +376,7 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, limit * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, 0, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, limit * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
             borrow mut core as &!cw in {
                 store.tick(cw.store, clock_ms(clock));
@@ -488,9 +488,27 @@ fn number_of[&t](text: &t [byte]) -> [] int {
     return n;
 }
 
+// The seed the server hashes keys with: eight bytes of the OS entropy (issue #12). 0, the old
+// constant, if `/dev/urandom` cannot be read, so a host without one still starts.
+fn seed_from[&f](fs: &f Fs("/dev/urandom")) -> [fs_read("/dev/urandom")] int {
+    region a {
+        let raw = alloc_slice[a](8, byte_of(0));
+        let got = fs_read(fs, "/dev/urandom", raw);
+        if got != 8 {
+            return 0;
+        }
+        var n = 0;
+        var i = 7;
+        while i >= 0 {
+            n = n << 8 | int_of(raw[i]) & 0xff;
+            i = i - 1;
+        }
+        return n;
+    }
+}
+
 fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, net, clock } = split(world);
-    release(fs);
     release(ffi);
     var port = 0 - 1;
     borrow args as &g in {
@@ -501,6 +519,7 @@ fn main(world: World) -> [] int {
     var megabytes = 64;
     var max_keys = 1000000;
     var policy = store.evict_none();
+    var seed = 0 - 1;
     borrow args as &g in {
         if arg_count(g) > 4 {
             if arg(g, 4)[0] == byte_of('a') {
@@ -513,7 +532,17 @@ fn main(world: World) -> [] int {
         if arg_count(g) > 3 {
             max_keys = number_of(arg(g, 3));
         }
+        if arg_count(g) > 5 {
+            seed = number_of(arg(g, 5));
+        }
     }
+    let rnd = narrow(fs, "/dev/urandom");
+    if seed < 0 {
+        borrow rnd as &f in {
+            seed = seed_from(f);
+        }
+    }
+    release(rnd);
     var status = 2;
     if port > 0 && port < 65536 && megabytes > 0 && megabytes <= 4096 && max_keys > 0 && max_keys <= 100000000 {
         status = 3;
@@ -534,7 +563,7 @@ fn main(world: World) -> [] int {
                                 buffer.drop(h, line);
                             }
                             borrow clock as &c in {
-                                status = run(h, lh, c, port, megabytes * 1048576, max_keys, policy);
+                                status = run(h, lh, c, port, megabytes * 1048576, max_keys, policy, seed);
                             }
                         }
                     }

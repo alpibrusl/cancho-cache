@@ -494,3 +494,45 @@ never widen, a claim.
 Not run yet, tracked in #13's later slices: go-redis, Jedis, Lettuce, redis-rs,
 StackExchange.Redis, hiredis, framework smoke tests (Django, Rails, Spring, Laravel), Redis's own
 test-suite subset, and the wire-level corpus.
+
+## 18. A random hash seed (epic #8, issue #12)
+
+### 18.1 The gap and the choice of source
+
+The seed is a constant today (`store.open(heap, memory, max_keys, 0, policy)` in `src/cache.cho`), so a
+client that can choose its keys can pick ones that collide on length, tag and home slot
+(`c80067`/`c99133`, pinned in `tests/store_test.cho`) and degrade the open-addressing index to a
+linear scan. Redis randomises its hash seed at start for this reason.
+
+cancho has no randomness builtin, by design (`docs/tls-pure.md` §2.2): the established pattern is
+that the caller reads `/dev/urandom` through `Fs` and seeds a generator; cancho-hooks does exactly
+this in three places. That is what this server now does at start: it holds `Fs("/dev/urandom")`
+(borrowed from the world's `fs`, which it used to release unopened), reads eight bytes, and uses them
+as the seed. A sixth argument, `--seed N`, names the seed instead, for reproducible tests and
+benchmarks; if the read fails (no `/dev/urandom`), the seed is 0, the old constant, and the server
+still starts.
+
+**The authority report, before and after.** Before: `never touches the filesystem`. After: the report
+names `fs_read("/dev/urandom")` and nothing else under `performs`; the CI step is widened to assert
+exactly that (`fs_read("/dev/urandom")` present, `fs_write` absent), so the claim stays readable and
+the widening is to one named file, not to a filesystem. This is the issue's stated trade-off: the
+alternative, a randomness builtin, would add a different label for the same reach.
+
+### 18.2 The sampler's PRNG
+
+`draw` (the eviction and `RANDOMKEY` sampler, xorshift in `store.cho`) keeps its own state and stays
+deterministic given the seed: it is derived from the seed, not from `/dev/urandom` per draw, so a
+`--seed` run is reproducible end to end, and two servers with different seeds evict differently
+without reading the OS again. Sharing the entropy per draw would make eviction depend on a resource
+the report names and the benchmarks could not fix; deriving it once does not.
+
+### 18.3 Gate
+
+- The pinned collision pair collides at seed 0 (as before) and is checked, by probing the store's
+  index, not to collide at the seed this process drew (a regression test that measures the probe
+  length, not one that asserts it).
+- A `--seed N` run is byte-identical to another `--seed N` run.
+- The authority golden changes from `never touches the filesystem` to `fs_read("/dev/urandom")` and
+  no `fs_write`; CI asserts the exact shape.
+- The throughput gate is unchanged (the seed changes hashes, not the hash's cost; the differential
+  harness is seed-independent because both servers see the same commands).

@@ -10,7 +10,7 @@
 
 ## What you get
 
-* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (334 cases and 8 small-index cases, four framings each). The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12.
+* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (515 cases and 8 small-index cases, four framings each). The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12.
 * **Speed, measured.** On one core against Redis 7.0.15 it is at 1.07 to 2.00 times Redis's throughput on the pre-registered cells, with the same hit rate at the same resident memory, while doing much less than Redis does.
 * **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before.
 * **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and an approximate LRU (`allkeys-lru`) or `noeviction`, which refuses with Redis's own error.

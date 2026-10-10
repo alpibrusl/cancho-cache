@@ -210,12 +210,14 @@ try:
         check("redis-py: ttl, setex, getdel", (r.ttl("rp:b") in (99, 100), r.setex("rp:d", 100, "z"), r.getdel("rp:d")) == (True, True, "z"))
         check("redis-py: client_setname/getname, config_get, info", (r.client_setname("py"), r.client_getname(), r.config_get("maxmemory-policy"), r.info("memory")["maxmemory_policy"]) == (True, "py", {"maxmemory-policy": "allkeys-lru"}, "allkeys-lru"))
     node = shutil.which("node")
-    modules = os.path.join(HERE, "clients", "node_modules", "ioredis")
-    if node and os.path.isdir(modules):
-        run = subprocess.run([node, os.path.join(HERE, "clients", "ioredis_session.js"), str(PORT)], capture_output=True, text=True, timeout=30)
-        check("ioredis: becomes ready and gets through a session", run.returncode == 0 and "ioredis ok" in run.stdout, run.stdout + run.stderr)
-    else:
-        skipped.append("ioredis (npm install ioredis in tests/clients)")
+    for lib, module, script, ready in (("ioredis", "ioredis", "ioredis_session.js", "ioredis ok"),
+                                      ("node-redis", "redis", "node_redis_session.js", "node-redis ok")):
+        modules = os.path.join(HERE, "clients", "node_modules", module)
+        if node and os.path.isdir(modules):
+            run = subprocess.run([node, os.path.join(HERE, "clients", script), str(PORT)], capture_output=True, text=True, timeout=30)
+            check(lib + ": becomes ready and gets through a session", run.returncode == 0 and ready in run.stdout, run.stdout + run.stderr)
+        else:
+            skipped.append(lib + " (npm install " + module + " in tests/clients)")
 finally:
     p.terminate()
 
@@ -224,4 +226,4 @@ for s in skipped:
 if failures:
     print("\n".join(failures))
     sys.exit(1)
-print("the session commands behave as stated; clients that ran: %s" % ("redis-py" if "redis-py (pip install redis)" not in skipped else "none of redis-py") + (", ioredis" if not any(x.startswith("ioredis") for x in skipped) else ""))
+print("the session commands behave as stated; clients that ran: %s" % ("redis-py" if "redis-py (pip install redis)" not in skipped else "none of redis-py") + (", ioredis" if not any(x.startswith("ioredis") for x in skipped) else "") + (", node-redis" if not any(x.startswith("node-redis") for x in skipped) else ""))

@@ -1637,17 +1637,16 @@ fn hash_len[&d](data: &d [byte]) -> [] int {
 fn hash_set_one[&s, &f, &x](st: &!s store.Store, e: int, field: &f [byte], value: &x [byte]) -> [] int {
     let packed = store.value(st, e);
     let (found, spot) = hash_find(packed, field);
-    var end = 0;
+    // Where the new pair goes, and how much of the old content it replaces: a field that is there keeps its place (Redis keeps the order a
+    // hash was built in, whatever an overwrite does to the lengths), and a new one goes on the end.
+    var put_at = 0;
+    var cut_to = 0;
     if found {
-        // Take the pair out and put a fresh one back: the header's lengths cannot be patched in place
-        // (the value's room may move under a compaction), and a delete-then-append is two bounded shifts.
-        let old_pair = pair_header() + get_len(packed, spot) + get_len(packed, spot + 4);
-        if store.value_splice(st, e, spot, spot + old_pair, "") != 0 {
-            return 1;
-        }
-        end = hash_len_end(store.value(st, e));
+        put_at = spot;
+        cut_to = spot + pair_header() + get_len(packed, spot) + get_len(packed, spot + 4);
     } else {
-        end = hash_len_end(packed);
+        put_at = hash_len_end(packed);
+        cut_to = put_at;
     }
     // The whole pair is built in one region buffer and spliced in at the end, once.
     region a {
@@ -1670,7 +1669,7 @@ fn hash_set_one[&s, &f, &x](st: &!s store.Store, e: int, field: &f [byte], value
             pair[pair_header() + len(field) + j] = value[j];
             j = j + 1;
         }
-        return store.value_splice(st, e, end, end, pair);
+        return store.value_splice(st, e, put_at, cut_to, pair);
     }
 }
 

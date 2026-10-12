@@ -704,3 +704,22 @@ Issue #11 is three limits: arguments (a command took 64, so `MGET` of a hundred 
 5. Throughput, `bench/vs_redis.sh`, two runs: ratios against Redis 1.18, 1.33, 1.18, 1.50 and 1.23, 2.00, 1.18, 1.50 (`SET` and `GET`, pipeline 1 and 16); none below the gate's 0.9. These cells never reach the new code.
 
 **Not done here:** more than 256 connections (slice 2) and values over 16 KiB (slice 3); `MGET` replies are still limited by 16 KiB per value.
+
+## 21. Many connections: buffers that are lent, not owned (epic #8, issue #11, slice 2 of 3)
+
+**The limit.** The cache owned, for each of its 256 possible connections, a 16 KiB input buffer, a 64 KiB queue for output the kernel has not taken and a 16 KiB queue for a transaction: 96 KiB each, 24 MiB for 256, and **960 MiB for 10,000**, which is Redis's default `maxclients`. Almost all of it is idle: a connection that is waiting for its next command holds no input, no output and no transaction.
+
+**The design.** A connection owns only what it always has: its row of `state` (13 ints, 104 bytes), its client name (64), its transaction row (24 ints, 192) and its entry in `std.conns`. The three buffers are *lent*, from three pools of fixed blocks made at start (nothing is allocated afterwards, which is the claim of the project):
+
+| pool | block | blocks | held by a connection | so the cache holds |
+|---|---:|---:|---|---:|
+| input | 16 KiB | 1,024 (+1 shared) | while a command has arrived only in part | 16 MiB |
+| output | 64 KiB | 256 | while the kernel has not taken all its answers | 16 MiB |
+| transaction | 16 KiB | 128 | from the first command queued after `MULTI` to `EXEC` or `DISCARD` | 2 MiB |
+
+* **Input.** A read goes into the one *shared* block (the last of the input pool) when the connection holds none, whole commands are answered from there, and only if a part of one is left over is it copied into a block lent to the connection. When nothing is left over the block goes back. A pipeline of whole commands (the gate's cells) never takes a block, and one copy that a read used to avoid is now made only for the partial command at the end of a read.
+* **Output.** A block is lent at the start of a turn and returned at its end if the kernel took everything (nearly always). If the pool is empty the answers are still tried straight at the socket, and the connection is closed only if the kernel does not take them all: what a client that is not reading already suffers when its queue overflows.
+* **Transaction.** Lent when the first command is queued. If the pool is empty the queue is "full" (`-ERR transaction queue is full`, `EXECABORT`), as when a queue overflows.
+* **Close.** Every block a connection holds goes back when it closes.
+
+**Measured** (`tests/connections.py`, this machine): 10,000 idle connections raise the cache's RSS by 3.1 MiB, **about 330 bytes each** (the prediction of ~5 MB counted pages the cache never touches; the kernel's socket memory is not in the cache's RSS and is the same for Redis), against ~20 KiB for each of Redis's. All 10,000 answer `PING`; the 10,001st is closed; closing 5,000 makes room again. The fixed buffers are 34 MiB, against 24 MiB before, and are virtual until used. Throughput gate (`-P 1 16`, set and get): 1.04, 1.33, 1.07 and 1.00 times Redis, so the copy of a leftover partial command into a lent block costs nothing measurable. Exhaustion, each tried: 1,400 half-commands leave exactly 1,024 connections and close the rest; 160 `MULTI` queues leave 128 and refuse 32; stalled readers (300 clients that never read) leave the server answering others, and a second wave after they close behaves the same, which shows the blocks come back. **What this costs:** a limit that was a number of connections is now a number of connections *doing something at once* (1,024 with half a command, 256 with unsent answers, 128 in a transaction), and the way it fails is the way an overflowing queue failed before. Redis has no such limit; its buffers are allocated as clients need them.

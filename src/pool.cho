@@ -1,0 +1,44 @@
+edition 5;
+
+module pool;
+
+// `pool` -- a pool of fixed blocks that are handed out by number and taken back (`docs/design.md` section 21). It lives in one slice of ints:
+// `pool[0]` is how many numbers are free and `pool[1..]` is the stack of them, the next to hand out on top. The memory the blocks are made of
+// is not here: the caller has one slab and block `b` is the `b`th piece of it. Nothing is allocated, and nothing here can fail: a pool with
+// nothing free answers -1, and a number given back that cannot fit (one given back twice) is refused, so that a mistake cannot index outside.
+
+// Make the pool full: every number from 0 up to the number of blocks free, the lowest handed out first. The pool is `blocks + 1` ints.
+pub fn fill[&p](pool: &!p [int]) -> [] int {
+    let n = len(pool) - 1;
+    var i = 0;
+    while i < n {
+        pool[1 + i] = n - 1 - i;
+        i = i + 1;
+    }
+    pool[0] = n;
+    return n;
+}
+
+// A free block's number, or -1 if there is none.
+pub fn take[&p](pool: &!p [int]) -> [] int {
+    if pool[0] <= 0 {
+        return 0 - 1;
+    }
+    pool[0] = pool[0] - 1;
+    return pool[1 + pool[0]];
+}
+
+// Give block `b` back. 0 if it was taken back, -1 if it was not (a negative number, one out of range, or a pool that is already full).
+pub fn give[&p](pool: &!p [int], b: int) -> [] int {
+    if b < 0 || b >= len(pool) - 1 || pool[0] >= len(pool) - 1 {
+        return 0 - 1;
+    }
+    pool[1 + pool[0]] = b;
+    pool[0] = pool[0] + 1;
+    return 0;
+}
+
+// How many blocks are free.
+pub fn free[&p](pool: &p [int]) -> [] int {
+    return pool[0];
+}

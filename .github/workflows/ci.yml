@@ -50,6 +50,10 @@ jobs:
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/glob_test.cho src/glob.cho --std
 
+      - name: Lent-buffer pool tests
+        working-directory: cache
+        run: ../cancho/target/release/cancho test tests/pool_test.cho src/pool.cho --std
+
       - name: Store tests (collisions, backward-shift deletion, a randomised run against a model)
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/store_test.cho src/store.cho --std
@@ -60,12 +64,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
+        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho -o build/cache
 
       - name: Authority has no ffi, and reads only /dev/urandom (the hash seed)
         working-directory: cache
         run: |
-          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho --std > /tmp/authority.txt
+          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/^performs/,/^never touches/p' /tmp/authority.txt | grep -q 'fs_read("/dev/urandom")'
           ! grep -q 'fs_write' /tmp/authority.txt
@@ -79,6 +83,10 @@ jobs:
       - name: A full arena and a full key table refuse in Redis's words
         working-directory: cache
         run: python3 tests/limits.py build/cache
+
+      - name: 10,000 connections and the lent-buffer pools running out
+        working-directory: cache
+        run: python3 tests/connections.py build/cache
 
       - name: Client libraries for the session test (redis-py, ioredis, node-redis, redis-rs)
         working-directory: cache

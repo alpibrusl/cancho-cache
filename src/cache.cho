@@ -4,6 +4,7 @@ import std.buffer;
 import std.conns;
 import std.io;
 import commands;
+import pool;
 import reply;
 import resp;
 import store;
@@ -23,9 +24,26 @@ import txn;
 //
 // Sizes are fixed at start and nothing is allocated afterwards.
 
-// Connections at once, at most.
+// Connections at once, at most (Redis's default `maxclients`). What a connection owns while it is idle is a row of `state`, a name and a row
+// of `txns`; its buffers are lent from the pools below (`docs/design.md` section 21).
 fn max_connections() -> [] int {
+    return 10000;
+}
+
+// How many connections may at once be holding a part of a command (each such holds a block of `input_size()`), have answers the kernel has
+// not taken (a block of `output_size()`), or be part way through a transaction (a block of `input_size()` for the queue). One more input
+// block than that is shared: a read goes into it, and only what is left over after the whole commands in it have been answered is copied
+// into a block of the connection's own.
+fn input_blocks() -> [] int {
+    return 1024;
+}
+
+fn pend_blocks() -> [] int {
     return 256;
+}
+
+fn queue_blocks() -> [] int {
+    return 128;
 }
 
 // Each connection's input buffer: a command must fit in it.
@@ -44,7 +62,7 @@ fn output_size() -> [] int {
     return commands.piece();
 }
 
-// Per connection `k`, `state[10k..10k+10]` is:
+// Per connection `k`, `state[13k..13k+13]` is:
 //
 //     0  bytes of input buffered
 //     1  1 if the slot is in use
@@ -56,8 +74,11 @@ fn output_size() -> [] int {
 //     7  1 if a command asked for the connection to be closed after its answers (`QUIT`)
 //     8  the protocol it speaks: 2, or 3 after `HELLO 3`
 //     9  where a command that answers in pieces (`MGET`) is to go on from; 0 when none is part way
+//     10 the block of `bufs` that holds its unanswered input, or -1 when none is buffered (the shared block is `input_blocks()`)
+//     11 the block of `pends` that holds its waiting output, or -1
+//     12 the block of `queues` that holds its transaction's commands, or -1
 fn stride() -> [] int {
-    return 10;
+    return 13;
 }
 
 res struct Core {
@@ -67,6 +88,10 @@ res struct Core {
     state: Box[[int]],
     bufs: Box[[byte]],
     pends: Box[[byte]],
+    // The free blocks of `bufs` (without the shared one), of `pends` and of `queues`: `src/pool.cho`.
+    inpool: Box[[int]],
+    pendpool: Box[[int]],
+    qpool: Box[[int]],
     // The parse table of the command in hand.
     table: Box[[int]],
     // Every answer to one read, before it is written.
@@ -77,7 +102,7 @@ res struct Core {
     // commands answered, connections accepted, port, the next client id).
     names: Box[[byte]],
     info: Box[[int]],
-    // Each connection's transaction: a row of `txn.stride()` ints and a queue of `input_size()` bytes (`src/txn.cho`).
+    // Each connection's transaction: a row of `txn.stride()` ints, and a queue of `input_size()` bytes lent while it has commands (`src/txn.cho`).
     txns: Box[[int]],
     queues: Box[[byte]],
     store: store.Store,
@@ -123,9 +148,29 @@ fn emit[&c, &d, &e](table: &!c conns.Table, slot: int, data: &d [byte], pend: &!
     return pending + len(data) - at;
 }
 
+// Give back every block connection `k` has been lent.
+fn return_blocks[&c](core: &!c Core, k: int) -> [] int {
+    let st = contents(core.state);
+    let p = stride() * k;
+    if st[p + 10] >= 0 {
+        pool.give(contents(core.inpool), st[p + 10]);
+        st[p + 10] = 0 - 1;
+    }
+    if st[p + 11] >= 0 {
+        pool.give(contents(core.pendpool), st[p + 11]);
+        st[p + 11] = 0 - 1;
+    }
+    if st[p + 12] >= 0 {
+        pool.give(contents(core.qpool), st[p + 12]);
+        st[p + 12] = 0 - 1;
+    }
+    return 0;
+}
+
 fn shut[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [] int {
     let st = contents(core.state);
     conns.close(tab, k);
+    return_blocks(core, k);
     st[stride() * k + 1] = 0;
     return 0;
 }
@@ -157,8 +202,23 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
     let qall = contents(core.queues);
     let size = input_size();
     let p = stride() * k;
-    let base = k * size;
-    let obase = k * output_size();
+    // The input is in the block the connection holds, or, if it holds none, in the shared one the read went into.
+    var cur = st[p + 10];
+    if cur < 0 {
+        cur = input_blocks();
+    }
+    let base = cur * size;
+    // A block for the answers the kernel may not take. If there is none to lend, the answers are still offered to the kernel and the connection
+    // is closed only if it does not take them all.
+    if st[p + 11] < 0 && st[p + 2] == 0 {
+        st[p + 11] = pool.take(contents(core.pendpool));
+    }
+    var ops = 0;
+    var ope = 0;
+    if st[p + 11] >= 0 {
+        ops = st[p + 11] * output_size();
+        ope = ops + output_size();
+    }
     var used = 0;
     var at = 0;
     var going = true;
@@ -187,7 +247,17 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
             } else {
                 // `MULTI` and its kin, and a command inside a transaction, are answered or queued by `txn`; everything else is run here.
                 let tx = tall[txn.stride() * k..txn.stride() * k + txn.stride()];
-                let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[base..base + size], st[p + 5..p + 10], n);
+                // A queue is lent from the first command after `MULTI`; if there is none to lend, the queue is full.
+                if tx[0] == 1 && st[p + 12] < 0 {
+                    st[p + 12] = pool.take(contents(core.qpool));
+                }
+                var qlo = 0;
+                var qhi = 0;
+                if st[p + 12] >= 0 {
+                    qlo = st[p + 12] * size;
+                    qhi = qlo + size;
+                }
+                let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[qlo..qhi], st[p + 5..p + 10], n);
                 at = after;
                 if status == 0 {
                     at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
@@ -196,7 +266,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                     // A command that answers in pieces (`MGET`) wrote one and has more to say. What it wrote goes out now; the command stays
                     // where it is in the input, and when the answers have gone (this turn, or the one the socket can take more in) it is parsed
                     // again and goes on from where `st[p + 9]` says.
-                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                    st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                     at = 0;
                     n = 0;
                 } else {
@@ -207,7 +277,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                     // answers cannot all be sent, it stops where it is (`tx[22]`, `tx[23]`), stays at the `EXEC` in the input, and goes on when the
                     // socket can take more: the same way a command that answers in pieces does. While it waits, other connections' commands run,
                     // so an `EXEC` that has to wait for its client is no longer atomic with them; one that does not wait still is.
-                    let queue = qall[base..base + size];
+                    let queue = qall[qlo..qhi];
                     var qi = tx[23];
                     var running = true;
                     while running && qi < tx[2] {
@@ -224,7 +294,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                                 at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
                                 if st[p + 9] != 0 {
                                     // Part way through a command that answers in pieces: what it wrote goes out, and it is called again.
-                                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                                    st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                                     at = 0;
                                     done = false;
                                     if st[p + 2] != 0 {
@@ -235,7 +305,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                             if done {
                                 qi = qi + qn;
                                 if at >= flush_at() || at + commands.reserve() > len(sc) {
-                                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                                    st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                                     at = 0;
                                     if st[p + 2] != 0 {
                                         running = false;
@@ -260,14 +330,14 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                 // Room for the biggest answer one command can make, and no more than the queue for a slow client can take at once: once
                 // that much is waiting the loop stops, leaving the commands after it in the input until the client has read.
                 if at >= flush_at() || at + commands.reserve() > len(sc) {
-                    st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+                    st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                     at = 0;
                 }
             }
         }
     }
     if at > 0 && st[p + 2] >= 0 {
-        st[p + 2] = emit(tab, k, sc[0..at], pd[obase..obase + output_size()], st[p + 2]);
+        st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
     }
     if st[p + 2] < 0 {
         shut(tab, core, k);
@@ -279,11 +349,40 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
         at_front = at_front + 1;
     }
     st[p] = st[p] - used;
+    // A transaction that is over gives its queue back.
+    if st[p + 12] >= 0 && tall[txn.stride() * k] == 0 && tall[txn.stride() * k + 22] == 0 {
+        pool.give(contents(core.qpool), st[p + 12]);
+        st[p + 12] = 0 - 1;
+    }
     if st[p + 3] == 1 && st[p + 2] == 0 {
         shut(tab, core, k);
-    } else {
-        settle(tab, core, k);
+        return 0;
     }
+    // The input left over: kept in a block of the connection's own, which the shared block cannot be; and a block that is no longer needed goes back.
+    if cur == input_blocks() {
+        if st[p] > 0 {
+            let b = pool.take(contents(core.inpool));
+            if b < 0 {
+                // Nowhere to keep the part of a command that has arrived.
+                shut(tab, core, k);
+                return 0;
+            }
+            var i = 0;
+            while i < st[p] {
+                bf[b * size + i] = bf[base + i];
+                i = i + 1;
+            }
+            st[p + 10] = b;
+        }
+    } else if st[p] == 0 {
+        pool.give(contents(core.inpool), cur);
+        st[p + 10] = 0 - 1;
+    }
+    if st[p + 2] == 0 && st[p + 11] >= 0 {
+        pool.give(contents(core.pendpool), st[p + 11]);
+        st[p + 11] = 0 - 1;
+    }
+    settle(tab, core, k);
     return 0;
 }
 
@@ -294,8 +393,17 @@ fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) ->
     let pd = contents(core.pends);
     let size = input_size();
     let p = stride() * k;
-    let base = k * size;
-    let obase = k * output_size();
+    var cur = st[p + 10];
+    if cur < 0 {
+        cur = input_blocks();
+    }
+    let base = cur * size;
+    if st[p + 2] > 0 && st[p + 11] < 0 {
+        // Output waiting and nowhere it is kept: cannot be, and a connection in that state is of no use.
+        shut(tab, core, k);
+        return 0;
+    }
+    let obase = st[p + 11] * output_size();
     if st[p + 2] > 0 {
         // Waiting to send: the kernel can take more.
         if readiness % 4 >= 2 {
@@ -312,6 +420,8 @@ fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) ->
                             shut(tab, core, k);
                         } else {
                             // Held back while the last answers were being sent.
+                            pool.give(contents(core.pendpool), st[p + 11]);
+                            st[p + 11] = 0 - 1;
                             process(tab, core, k);
                         }
                     }
@@ -380,6 +490,9 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 7] = 0;
                         st[p + 8] = 2;
                         st[p + 9] = 0;
+                        st[p + 10] = 0 - 1;
+                        st[p + 11] = 0 - 1;
+                        st[p + 12] = 0 - 1;
                         txn.clear(contents(core.txns)[txn.stride() * slot..txn.stride() * slot + txn.stride()]);
                         contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {
@@ -413,9 +526,12 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, limit * input_size(), byte_of(0)), pends: box_slice(heap, limit * output_size(), byte_of(0)), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, limit * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
             borrow mut core as &!cw in {
+                pool.fill(contents(cw.inpool));
+                pool.fill(contents(cw.pendpool));
+                pool.fill(contents(cw.qpool));
                 store.tick(cw.store, clock_ms(clock));
                 contents(cw.info)[1] = store.now_of(cw.store);
                 contents(cw.info)[4] = port;
@@ -486,12 +602,15 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 }
             }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, table, scratch, tmp, names, info, txns, queues, store, swept } = core;
+            let Core { poller, events, state, bufs, pends, inpool, pendpool, qpool, table, scratch, tmp, names, info, txns, queues, store, swept } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
             unbox_slice(heap, bufs);
             unbox_slice(heap, pends);
+            unbox_slice(heap, inpool);
+            unbox_slice(heap, pendpool);
+            unbox_slice(heap, qpool);
             unbox_slice(heap, table);
             unbox_slice(heap, scratch);
             unbox_slice(heap, tmp);

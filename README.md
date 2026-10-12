@@ -36,7 +36,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision
 export CANCHO=$PWD/../cancho/target/release/cancho
 
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, noeviction | allkeys-lru
 redis-cli -p 6379 PING                 # PONG
@@ -78,7 +78,7 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho --std
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho --std
 # performs: args, clock, conn_accept, conn_read, conn_write, err_write, fs_read("/dev/urandom"), heap, net_in(""), poll
 # never touches: foreign code
 
@@ -107,6 +107,7 @@ $CANCHO test tests/resp_test.cho src/resp.cho --std        # the parser, over ev
 $CANCHO test tests/store_test.cho src/store.cho --std      # the store: collisions, deletion, a random run against a model
 python3 tests/differential.py build/cache                 # byte-for-byte against redis-server, four framings each
 python3 tests/limits.py build/cache                       # a full arena and a full key table
+python3 tests/connections.py build/cache                  # 10,000 connections; pools of lent buffers running out
 python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under allkeys-lru
 python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CONFIG/QUIT; redis-py, ioredis, node-redis and redis-rs connecting
 python3 tests/fuzz_server.py build/cache                  # hostile bytes
@@ -116,6 +117,7 @@ CANCHO=$CANCHO python3 tests/string_mutants.py            # 16 more, for APPEND,
 python3 tests/keyspace.py build/cache                     # KEYS patterns and SCAN against Redis, SCAN while keys change, RENAME against a model
 CANCHO=$CANCHO python3 tests/keyspace_mutants.py          # 17 more, for the matcher, KEYS, SCAN and RENAME
 $CANCHO test tests/glob_test.cho src/glob.cho --std       # the pattern matcher
+$CANCHO test tests/pool_test.cho src/pool.cho --std       # the lent-buffer pools
 ```
 
 Benchmarks (reported, with the gate in the design doc):
@@ -163,6 +165,7 @@ src/commands.cho   the commands
 src/session.cho    HELLO, AUTH, CLIENT, INFO, CONFIG, COMMAND, QUIT
 src/txn.cho        MULTI, EXEC, DISCARD, WATCH, UNWATCH
 src/glob.cho       the pattern matcher of KEYS and SCAN MATCH
+src/pool.cho       pools of fixed buffer blocks lent to connections
 src/reply.cho      reply helpers shared by the two
 src/store.cho      the memory: arena, key table, expiry, eviction, compaction
 tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)
@@ -171,7 +174,7 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings and hashes. No lists, sets or sorted sets, and no persistence, replication, TLS, pub/sub or scripting. One database. A value is at most 16 KiB, whether it is `SET` or built by `APPEND` and `SETRANGE`. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 256 connections and a 16 KiB command (both fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+Strings and hashes. No lists, sets or sorted sets, and no persistence, replication, TLS, pub/sub or scripting. One database. A value is at most 16 KiB, whether it is `SET` or built by `APPEND` and `SETRANGE`. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 10,000 connections, served from pools of lent buffers (1,024 partial commands held at once, 256 connections with output waiting, 128 open transactions; past a pool the connection is closed or, for a queue, the command refused), and a 16 KiB command (fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## Contributing
 

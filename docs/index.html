@@ -210,7 +210,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)
 (cd ../cancho &amp;&amp; git checkout "$REV" &amp;&amp; cargo build --release -p cancho)
 export CANCHO=$PWD/../cancho/target/release/cancho
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho -o build/cache
 build/cache 6379 &amp;
 redis-cli -p 6379 PING     # PONG</pre>
   <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru] [&lt;seed&gt;]]]</code>. Sizes are fixed at start; without a seed argument the hash seed is read from <code>/dev/urandom</code>.</p>

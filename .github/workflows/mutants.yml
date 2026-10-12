@@ -19,6 +19,7 @@ on:
       - tests/keyspace.py
       - src/glob.cho
       - src/pool.cho
+      - src/stream.cho
       - src/commands.cho
       - tests/transactions.py
       - tests/differential.py

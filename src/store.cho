@@ -40,7 +40,7 @@ pub fn evict_lru() -> [] int {
 
 // Ints a key takes in `meta`.
 fn stride() -> [] int {
-    return 9;
+    return 10;
 }
 
 // The kinds a key can be (`docs/design.md` section 19.2): slot 8 of `meta`.
@@ -60,6 +60,12 @@ fn watch_buckets() -> [] int {
 // Bytes of header before each record's key.
 fn header() -> [] int {
     return 8;
+}
+
+// What slot 6 of `meta` holds for an entry that is being filled by a value still arriving (`reserve`): in use, so a compaction keeps its record, but
+// not a key: no index slot, no `SCAN`, no eviction, no expiry.
+fn staging() -> [] int {
+    return 0 - 4;
 }
 
 pub res struct Store {
@@ -98,6 +104,10 @@ pub res struct Store {
     // and an epoch bumped by `clear`.
     versions: Box[[int]],
     epoch: int,
+    // Entries being filled by a value that is still arriving (`reserve`), and a clock that stamps every write of a value (slot 9 of `meta`), so
+    // that an answer sent in pieces can tell that the value it began with has been written since.
+    staged: int,
+    clock: int,
 }
 
 // A store with an arena of `memory` bytes and room for `max_keys` keys. `seed` is mixed into every hash; it is a
@@ -108,11 +118,11 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, meta);
@@ -291,6 +301,12 @@ fn bump[&s](st: &!s Store, h: int) -> [] int {
     return 0;
 }
 
+// A new stamp for a value that was just written.
+fn stamp[&s](st: &!s Store) -> [] int {
+    st.clock = st.clock + 1;
+    return st.clock;
+}
+
 // The version of the bucket of hash `h`, and the epoch: what `WATCH` records and `EXEC` compares.
 pub fn version_of[&s](st: &s Store, h: int) -> [] int {
     return contents(st.versions)[h & watch_buckets() - 1];
@@ -393,7 +409,7 @@ fn compact_step[&s](st: &!s Store, budget: int) -> [] bool {
         let size = get32(data, from + 4);
         let total = header() + size;
         let m = stride() * e;
-        if meta[m + 6] == 0 - 2 && meta[m] == from + header() {
+        if (meta[m + 6] == 0 - 2 || meta[m + 6] == staging()) && meta[m] == from + header() {
             if to != from {
                 // A block move, not a loop: the ranges can overlap (a record moving down by less than its own size), and
                 // a byte loop was the whole of the compaction pause (`docs/design.md` section 10).
@@ -554,6 +570,7 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
         if len(value) <= meta[m + 3] {
             copy(contents(st.data), meta[m] + meta[m + 1], value);
             meta[m + 2] = len(value);
+            meta[m + 9] = stamp(st);
         } else {
             let need = header() + len(key) + room(len(value));
             st.protect = e0;
@@ -567,6 +584,7 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
             meta[m] = append(st, e0, key, value);
             meta[m + 2] = len(value);
             meta[m + 3] = room(len(value));
+            meta[m + 9] = stamp(st);
         }
         if expiry >= 0 {
             put_expiry(st, m, expiry);
@@ -596,6 +614,7 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
     meta[m + 1] = len(key);
     meta[m + 2] = len(value);
     meta[m + 3] = room(len(value));
+    meta[m + 9] = stamp(st);
     meta[m + 4] = 0;
     meta[m + 5] = h;
     meta[m + 6] = 0 - 2;
@@ -709,6 +728,7 @@ pub fn rename[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte]
     }
     index[j] = tag_of(hd) << 32 | e + 1;
     bump(st, hd);
+    meta[m + 9] = stamp(st);
     st.last = e;
     st.protect = e;
     reclaim(st, set_records());
@@ -785,6 +805,7 @@ pub fn splice[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, offset: int, by
         meta[m + 3] = room(total);
         st.top = at + header() + size;
     }
+    meta[m + 9] = stamp(st);
     st.last = e;
     st.protect = e;
     reclaim(st, set_records());
@@ -902,6 +923,7 @@ pub fn value_splice[&s, &v](st: &!s Store, e: int, cut_from: int, cut_to: int, b
         meta[m + 3] = room(total);
         st.top = at + header() + size;
     }
+    meta[m + 9] = stamp(st);
     st.last = e;
     st.protect = e;
     reclaim(st, set_records());
@@ -919,6 +941,136 @@ pub fn set_paid[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [by
         st.protect = 0 - 1;
     }
     return code;
+}
+
+// ---------------------------------------------------------------------
+// A value that arrives in pieces (`docs/design.md` section 22)
+// ---------------------------------------------------------------------
+
+// Make room for `key` and a value of `n` bytes that has not arrived, and take an entry number for it. The record is in the arena but the key is not in
+// the index: nothing sees it until `commit`, and a compaction keeps it and moves it like any other. Answers `(code, entry)`; the codes are `set`'s:
+// 0 reserved, 1 the arena has no room for it (even after compacting and whatever the policy lets it evict), 2 no room for another key.
+pub fn reserve[&s, &k](st: &!s Store, key: &k [byte], n: int) -> [] (int, int) {
+    if st.live + st.staged >= st.max_keys {
+        if st.policy == evict_none() || evict_one(st) == 0 {
+            return (2, 0 - 1);
+        }
+    }
+    if !make_room(st, header() + len(key) + room(n)) {
+        return (1, 0 - 1);
+    }
+    let meta = contents(st.meta);
+    var e = st.fresh;
+    if st.free_head >= 0 {
+        e = st.free_head;
+        st.free_head = meta[stride() * e + 6];
+    } else {
+        st.fresh = st.fresh + 1;
+    }
+    let m = stride() * e;
+    let data = contents(st.data);
+    let size = len(key) + room(n);
+    let at = st.top;
+    put32(data, at, e);
+    put32(data, at + 4, size);
+    copy(data, at + header(), key);
+    st.top = at + header() + size;
+    meta[m] = at + header();
+    meta[m + 1] = len(key);
+    meta[m + 2] = n;
+    meta[m + 3] = room(n);
+    meta[m + 4] = 0;
+    meta[m + 6] = staging();
+    st.staged = st.staged + 1;
+    return (0, e);
+}
+
+// Put `bytes` in the value of staged entry `e` from `offset` on. The caller keeps within the `n` it reserved.
+pub fn fill[&s, &v](st: &!s Store, e: int, offset: int, bytes: &v [byte]) -> [] int {
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    if offset < 0 || offset + len(bytes) > meta[m + 2] {
+        return 1;
+    }
+    copy(contents(st.data), meta[m] + meta[m + 1] + offset, bytes);
+    return 0;
+}
+
+// Give a staged entry up: its record is garbage and its number is free.
+pub fn abort[&s](st: &!s Store, e: int) -> [] int {
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    st.dead = st.dead + header() + meta[m + 1] + meta[m + 3];
+    meta[m + 6] = st.free_head;
+    st.free_head = e;
+    st.staged = st.staged - 1;
+    return 0;
+}
+
+// The value is all here: store it under its key, replacing the key's value and kind if there is one, with `expiry` (0: none). Nothing is copied: the
+// staged record becomes the key's. Answers the entry the key has.
+pub fn commit[&s](st: &!s Store, e: int, expiry: int) -> [] int {
+    let meta = contents(st.meta);
+    let data = contents(st.data);
+    let m = stride() * e;
+    let key = contents(st.data)[meta[m]..meta[m] + meta[m + 1]];
+    let h = hash_of(st, key);
+    bump(st, h);
+    let e0 = find(st, key, h);
+    st.staged = st.staged - 1;
+    var winner = e;
+    if e0 >= 0 {
+        let m0 = stride() * e0;
+        st.dead = st.dead + header() + meta[m0 + 1] + meta[m0 + 3];
+        put32(data, meta[m] - header(), e0);
+        meta[m0] = meta[m];
+        meta[m0 + 1] = meta[m + 1];
+        meta[m0 + 2] = meta[m + 2];
+        meta[m0 + 3] = meta[m + 3];
+        meta[m0 + 8] = kind_string();
+        meta[m0 + 9] = stamp(st);
+        put_expiry(st, m0, expiry);
+        meta[m + 6] = st.free_head;
+        st.free_head = e;
+        winner = e0;
+    } else {
+        let index = contents(st.index);
+        meta[m + 5] = h;
+        meta[m + 6] = 0 - 2;
+        meta[m + 7] = st.now;
+        meta[m + 8] = kind_string();
+        meta[m + 9] = stamp(st);
+        if expiry > 0 {
+            put_expiry(st, m, expiry);
+        }
+        var i = h & st.mask;
+        while index[i] != 0 {
+            i = i + 1 & st.mask;
+        }
+        index[i] = tag_of(h) << 32 | e + 1;
+        st.live = st.live + 1;
+    }
+    st.last = winner;
+    st.protect = winner;
+    reclaim(st, set_records());
+    st.protect = 0 - 1;
+    return winner;
+}
+
+// How many bytes the staged entry `e` was reserved for.
+pub fn staged_size[&s](st: &s Store, e: int) -> [] int {
+    return contents(st.meta)[stride() * e + 2];
+}
+
+// The stamp of entry `e`'s value, which changes whenever the value is written.
+pub fn stamp_of[&s](st: &s Store, e: int) -> [] int {
+    return contents(st.meta)[stride() * e + 9];
+}
+
+// Whether entry `e` is a key in use right now and holds the value that was stamped `at`.
+pub fn unchanged[&s](st: &s Store, e: int, at: int) -> [] bool {
+    let meta = contents(st.meta);
+    return e >= 0 && e < st.fresh && meta[stride() * e + 6] == 0 - 2 && meta[stride() * e + 9] == at;
 }
 
 // Whether a compaction is part way through.
@@ -944,8 +1096,10 @@ pub fn audit[&s](st: &s Store) -> [] int {
     var e = 0;
     while e < st.fresh {
         let m = stride() * e;
-        if meta[m + 6] == 0 - 2 {
-            keys = keys + 1;
+        if meta[m + 6] == 0 - 2 || meta[m + 6] == staging() {
+            if meta[m + 6] == 0 - 2 {
+                keys = keys + 1;
+            }
             bytes = bytes + header() + meta[m + 1] + meta[m + 3];
             let at = meta[m] - header();
             if at < 0 || at + header() + meta[m + 1] + meta[m + 3] > st.top {
@@ -1021,6 +1175,7 @@ pub fn clear[&s](st: &!s Store) -> [] int {
     st.cfrom = 0 - 1;
     st.cto = 0;
     st.ttl_keys = 0;
+    st.staged = 0;
     st.epoch = st.epoch + 1;
     return 0;
 }

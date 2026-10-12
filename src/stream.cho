@@ -1,0 +1,77 @@
+edition 5;
+
+module stream;
+
+import commands;
+import reply;
+import store;
+
+// `stream` -- the two commands that carry a value too large for a block across the wire (`docs/design.md` section 22): `SET key value` and
+// `SETEX`/`PSETEX key amount value` take it in pieces, into a record of the arena that nothing can see until the last byte is here; `GET` of a value
+// longer than a buffered answer holds sends it in pieces, from the arena. The loop (`src/cache.cho`) keeps the state; what is decided here is
+// which commands may, what they say first, and what they say at the end. Every function writes only to the answer buffer at the offset it is given.
+
+// Whether the command in `table` (whose last argument is too long to arrive whole, `resp.streaming`) is one that takes its value in pieces.
+pub fn can[&v, &t](view: &v [byte], table: &t [int]) -> [] bool {
+    let argc = table[0];
+    let name = reply.arg_of(view, table, 0);
+    if argc == 3 && reply.is_word(name, "SET") {
+        return true;
+    }
+    return argc == 4 && (reply.is_word(name, "SETEX") || reply.is_word(name, "PSETEX"));
+}
+
+// Start the `SET` or `SETEX` in `table`, whose value (the last argument) has `table[2 + 2 * (argc - 1)]` bytes still to come: check what `commands`
+// checks, in its order, and reserve the record. Answers `(at, entry, expiry)`: an entry of 0 or more is the record to fill (and `expiry` when the key ends,
+// 0 for never); an entry of -1 means the answer, an error, is already in `sc` and the value is to be read and thrown away.
+pub fn begin[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] (int, int, int) {
+    let argc = table[0];
+    let name = reply.arg_of(view, table, 0);
+    var expiry = 0;
+    if argc == 4 {
+        let seconds = reply.is_word(name, "SETEX");
+        let (status, amount) = reply.parse_int(reply.arg_of(view, table, 2));
+        if status != 0 {
+            return (reply.not_an_integer(sc, at), 0 - 1, 0);
+        }
+        var bad = amount <= 0;
+        if !bad {
+            let (over, when) = commands.expire_at(amount, seconds, store.now_of(st));
+            bad = over != 0;
+            expiry = when;
+        }
+        if bad {
+            if seconds {
+                return (reply.put(sc, at, "-ERR invalid expire time in 'setex' command\r\n"), 0 - 1, 0);
+            }
+            return (reply.put(sc, at, "-ERR invalid expire time in 'psetex' command\r\n"), 0 - 1, 0);
+        }
+    }
+    let (code, e) = store.reserve(st, reply.arg_of(view, table, 1), table[2 + 2 * (argc - 1)]);
+    if code != 0 {
+        return (reply.refused(sc, at), 0 - 1, 0);
+    }
+    return (at, e, expiry);
+}
+
+// The value of staged entry `e` is all here: store it, and say so.
+pub fn finish[&b, &s](sc: &!b [byte], at: int, st: &!s store.Store, e: int, expiry: int) -> [] int {
+    store.commit(st, e, expiry);
+    return reply.put(sc, at, "+OK\r\n");
+}
+
+// Whether the command in `table` is a `GET` whose answer is too long to build in a buffer: if so, write the start of the answer (its length line) and answer
+// the entry whose value is to be sent in pieces; otherwise -1, and the command is run as any other.
+pub fn get_begin[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] (int, int) {
+    if table[0] != 2 || !reply.is_word(reply.arg_of(view, table, 0), "GET") {
+        return (at, 0 - 1);
+    }
+    let key = reply.arg_of(view, table, 1);
+    let e = store.find(st, key, store.hash_of(st, key));
+    if e < 0 || store.kind_of(st, e) == store.kind_hash() || len(store.value(st, e)) <= commands.max_string() {
+        return (at, 0 - 1);
+    }
+    var o = reply.put_byte(sc, at, '$');
+    o = reply.put_nat(sc, o, len(store.value(st, e)));
+    return (reply.put(sc, o, "\r\n"), e);
+}

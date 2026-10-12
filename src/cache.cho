@@ -8,6 +8,7 @@ import pool;
 import reply;
 import resp;
 import store;
+import stream;
 import txn;
 
 // `cache` -- a Redis-compatible cache (`docs/design.md`): the loop. The commands are `src/commands.cho`, the memory is
@@ -77,8 +78,14 @@ fn output_size() -> [] int {
 //     10 the block of `bufs` that holds its unanswered input, or -1 when none is buffered (the shared block is `input_blocks()`)
 //     11 the block of `pends` that holds its waiting output, or -1
 //     12 the block of `queues` that holds its transaction's commands, or -1
+//     13 what it is doing with a value too long for a block (`docs/design.md` section 22): 0 nothing, 1 taking the bytes of a value that is arriving, 3 waiting
+//        for the CRLF after them, 4 sending the bytes of a value that is leaving
+//     14 mode 1 and 3: the entry being filled (-1: the value is thrown away, its answer already given); mode 4: the entry being sent
+//     15 mode 1: bytes of value still to come; mode 4: bytes of value sent
+//     16 mode 1 and 3: when the key ends (0: never); mode 4: the stamp of the value when it began to be sent (`store.stamp_of`)
+//     17 the store's epoch when the mode began: a `FLUSHALL` makes the entry in 14 mean nothing
 fn stride() -> [] int {
-    return 13;
+    return 18;
 }
 
 res struct Core {
@@ -170,6 +177,11 @@ fn return_blocks[&c](core: &!c Core, k: int) -> [] int {
 fn shut[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [] int {
     let st = contents(core.state);
     conns.close(tab, k);
+    // A value that was arriving is given up.
+    if st[stride() * k + 13] != 0 && st[stride() * k + 13] != 4 && st[stride() * k + 14] >= 0 && st[stride() * k + 17] == store.epoch_of(core.store) {
+        store.abort(core.store, st[stride() * k + 14]);
+    }
+    st[stride() * k + 13] = 0;
     return_blocks(core, k);
     st[stride() * k + 1] = 0;
     return 0;
@@ -180,12 +192,49 @@ fn settle[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [poll] int {
     let st = contents(core.state);
     let p = stride() * k;
     var want = 1;
-    if st[p + 2] > 0 {
+    if st[p + 2] > 0 || st[p + 13] == 4 {
         want = 2;
     }
     if want != st[p + 4] {
         conns.rewatch(tab, core.poller, k, k + 1, want);
         st[p + 4] = want;
+    }
+    return 0;
+}
+
+// Send the value of the entry connection `k` is sending (mode 4), a piece at a time while the kernel takes them, and at most `send_turn()` bytes in one go, so
+// that one big value does not hold up the others: when it stops with the mode still 4 and nothing waiting, the connection is watched for room to write and
+// comes back. If the value has been written since it began to go (or the keys were flushed) the answer cannot be finished and the connection is closed.
+fn send_turn() -> [] int {
+    return 262144;
+}
+
+fn pump_get[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, ops: int, ope: int) -> [conn_write] int {
+    let st = contents(core.state);
+    let pd = contents(core.pends);
+    let p = stride() * k;
+    var budget = send_turn();
+    while st[p + 13] == 4 && st[p + 2] == 0 && budget > 0 {
+        let e = st[p + 14];
+        if st[p + 17] != store.epoch_of(core.store) || !store.unchanged(core.store, e, st[p + 16]) {
+            st[p + 2] = 0 - 1;
+            st[p + 13] = 0;
+        } else {
+            let total = len(store.value(core.store, e));
+            var c = total - st[p + 15];
+            if c > flush_at() {
+                c = flush_at();
+            }
+            if c > 0 {
+                st[p + 2] = emit(tab, k, store.value(core.store, e)[st[p + 15]..st[p + 15] + c], pd[ops..ope], st[p + 2]);
+            }
+            st[p + 15] = st[p + 15] + c;
+            budget = budget - c - 1;
+            if st[p + 15] >= total && st[p + 2] >= 0 {
+                st[p + 2] = emit(tab, k, "\r\n", pd[ops..ope], st[p + 2]);
+                st[p + 13] = 0;
+            }
+        }
     }
     return 0;
 }
@@ -223,12 +272,99 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
     var at = 0;
     var going = true;
     while going {
-        if st[p + 2] != 0 || st[p + 3] != 0 || used >= st[p] {
+        // A value that is being sent goes first, and the commands after it wait for it.
+        if st[p + 13] == 4 && st[p + 2] == 0 && st[p + 3] == 0 {
+            if at > 0 {
+                st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
+                at = 0;
+            }
+            if st[p + 2] == 0 {
+                pump_get(tab, core, k, ops, ope);
+            }
+        }
+        if st[p + 2] != 0 || st[p + 3] != 0 || st[p + 13] == 4 || used >= st[p] {
             going = false;
+        } else if st[p + 13] == 1 {
+            // The bytes of a value that is arriving: into the record reserved for it, or nowhere.
+            var take = st[p] - used;
+            if take > st[p + 15] {
+                take = st[p + 15];
+            }
+            if st[p + 14] >= 0 && st[p + 17] != store.epoch_of(core.store) {
+                // The keys were flushed under it; the record is gone.
+                st[p + 14] = 0 - 1;
+                at = reply.put(sc, at, "-ERR the keys were flushed while the value was arriving\r\n");
+            }
+            if st[p + 14] >= 0 {
+                store.fill(core.store, st[p + 14], store.staged_size(core.store, st[p + 14]) - st[p + 15], bf[base + used..base + used + take]);
+            }
+            st[p + 15] = st[p + 15] - take;
+            used = used + take;
+            if st[p + 15] == 0 {
+                st[p + 13] = 3;
+            }
+        } else if st[p + 13] == 3 {
+            // The CRLF after the value; then the command is done.
+            if st[p] - used < 2 {
+                going = false;
+            } else if int_of(bf[base + used]) != '\r' || int_of(bf[base + used + 1]) != '\n' {
+                if st[p + 14] >= 0 && st[p + 17] == store.epoch_of(core.store) {
+                    store.abort(core.store, st[p + 14]);
+                }
+                st[p + 13] = 0;
+                at = reply.put(sc, at, "-ERR Protocol error: expected CRLF after bulk\r\n");
+                st[p + 3] = 1;
+                going = false;
+            } else {
+                used = used + 2;
+                if st[p + 14] >= 0 {
+                    if st[p + 17] == store.epoch_of(core.store) {
+                        at = stream.finish(sc, at, core.store, st[p + 14], st[p + 16]);
+                    } else {
+                        at = reply.put(sc, at, "-ERR the keys were flushed while the value was arriving\r\n");
+                    }
+                }
+                st[p + 13] = 0;
+                contents(core.info)[2] = contents(core.info)[2] + 1;
+                if at >= flush_at() || at + commands.reserve() > len(sc) {
+                    st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
+                    at = 0;
+                }
+            }
         } else {
             let view = bf[base + used..base + st[p]];
             var n = resp.parse(view, tb);
-            if n == 0 {
+            if n == resp.streaming() {
+                // The last argument is too long for a block: `SET` and `SETEX` take it in pieces, nothing else does.
+                if !stream.can(view, tb) {
+                    at = reply.put(sc, at, "-ERR Protocol error: command too large\r\n");
+                    st[p + 3] = 1;
+                    going = false;
+                } else {
+                    let last = tb[0] - 1;
+                    let vstart = tb[1 + 2 * last];
+                    let vlen = tb[2 + 2 * last];
+                    let tx = tall[txn.stride() * k..txn.stride() * k + txn.stride()];
+                    var entry = 0 - 1;
+                    var expiry = 0;
+                    if tx[0] == 1 {
+                        // It cannot be queued: the same as a command that does not fit the queue.
+                        tx[1] = 1;
+                        at = reply.put(sc, at, "-ERR transaction queue is full\r\n");
+                    } else {
+                        let (after, e2, x2) = stream.begin(view, tb, sc, at, core.store);
+                        at = after;
+                        entry = e2;
+                        expiry = x2;
+                    }
+                    st[p + 13] = 1;
+                    st[p + 14] = entry;
+                    st[p + 15] = vlen;
+                    st[p + 16] = expiry;
+                    st[p + 17] = store.epoch_of(core.store);
+                    used = used + vstart;
+                }
+            } else if n == 0 {
                 if used == 0 && st[p] >= size {
                     at = reply.put(sc, at, "-ERR Protocol error: command too large\r\n");
                     st[p + 3] = 1;
@@ -260,7 +396,18 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                 let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[qlo..qhi], st[p + 5..p + 10], n);
                 at = after;
                 if status == 0 {
-                    at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                    // A `GET` of a value too long for a buffer is sent in pieces.
+                    let (after, ge) = stream.get_begin(view, tb, sc, at, core.store);
+                    if ge >= 0 {
+                        at = after;
+                        st[p + 13] = 4;
+                        st[p + 14] = ge;
+                        st[p + 15] = 0;
+                        st[p + 16] = store.stamp_of(core.store, ge);
+                        st[p + 17] = store.epoch_of(core.store);
+                    } else {
+                        at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                    }
                 }
                 if status == 0 && st[p + 9] != 0 {
                     // A command that answers in pieces (`MGET`) wrote one and has more to say. What it wrote goes out now; the command stays
@@ -404,6 +551,15 @@ fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) ->
         return 0;
     }
     let obase = st[p + 11] * output_size();
+    if st[p + 13] == 4 && st[p + 2] == 0 {
+        // A value is being sent and the last of it went: the connection is watched for room to write, and has some.
+        if readiness % 4 >= 2 {
+            process(tab, core, k);
+        } else if readiness % 2 == 1 {
+            shut(tab, core, k);
+        }
+        return 0;
+    }
     if st[p + 2] > 0 {
         // Waiting to send: the kernel can take more.
         if readiness % 4 >= 2 {
@@ -493,6 +649,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 10] = 0 - 1;
                         st[p + 11] = 0 - 1;
                         st[p + 12] = 0 - 1;
+                        st[p + 13] = 0;
                         txn.clear(contents(core.txns)[txn.stride() * slot..txn.stride() * slot + txn.stride()]);
                         contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {

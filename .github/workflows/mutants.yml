@@ -18,6 +18,7 @@ on:
       - src/resp.cho
       - tests/keyspace.py
       - src/glob.cho
+      - src/pool.cho
       - src/commands.cho
       - tests/transactions.py
       - tests/differential.py

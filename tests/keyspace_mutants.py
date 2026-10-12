@@ -19,7 +19,7 @@ MUTANTS = [
     ("the matcher does not read `\\` as an escape", "glob.cho", "    if ch == '\\\\' && p + 1 < n {\n        return (int_of(pattern[p + 1]) == c, p + 2);\n    }", "", ("globunit",)),
     ("KEYS answers all the keys whatever the pattern", "commands.cho", "            if all || glob.matches(pattern, key) {\n                count = count + 1;", "            if true {\n                count = count + 1;", ("py", "keyspace.py")),
     ("SCAN always says it is done", "commands.cho", "    var next = e;\n    if e >= n {\n        next = 0;\n    }", "    var next = 0;", ("py", "keyspace.py")),
-    ("SCAN ignores MATCH", "commands.cho", "        filtered = !(len(pattern) == 1 && int_of(pattern[0]) == '*');", "        filtered = false;", ("py", "keyspace.py")),
+    ("SCAN ignores MATCH", "commands.cho", "pattern_at);\n        filtered = !(len(pattern) == 1 && int_of(pattern[0]) == '*');", "pattern_at);\n        filtered = false;", ("py", "keyspace.py")),
     ("SCAN lets a key that has run out through", "store.cho", "    return meta[m + 6] == 0 - 2 && (meta[m + 4] == 0 || meta[m + 4] > st.now);", "    return meta[m + 6] == 0 - 2;", ("unit",)),
     ("SCAN takes a cursor that is not a number", "commands.cho", "        if c < '0' || c > '9' {\n            return (1, 0);\n        }\n        if c != '0' && first < 0 {", "        if c < '0' || c > '9' {\n            return (0, 0);\n        }\n        if c != '0' && first < 0 {", ("diff", "SCAN cursor errors")),
     ("RENAME leaves the key it overwrites", "store.cho", "    if d >= 0 && d != e {\n        remove_entry(st, d);\n    }", "", ("diff", "RENAME over an existing key")),

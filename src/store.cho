@@ -40,7 +40,16 @@ pub fn evict_lru() -> [] int {
 
 // Ints a key takes in `meta`.
 fn stride() -> [] int {
-    return 8;
+    return 9;
+}
+
+// The kinds a key can be (`docs/design.md` section 19.2): slot 8 of `meta`.
+pub fn kind_string() -> [] int {
+    return 0;
+}
+
+pub fn kind_hash() -> [] int {
+    return 1;
 }
 
 // Buckets of keys a `WATCH` tells apart (a power of two).
@@ -337,6 +346,17 @@ pub fn expiry_of[&s](st: &s Store, e: int) -> [] int {
     return contents(st.meta)[stride() * e + 4];
 }
 
+// Entry `e`'s kind (`docs/design.md` section 19.2): `kind_string` or `kind_hash`.
+pub fn kind_of[&s](st: &s Store, e: int) -> [] int {
+    return contents(st.meta)[stride() * e + 8];
+}
+
+// Give entry `e` a kind.
+pub fn set_kind[&s](st: &!s Store, e: int, kind: int) -> [] int {
+    contents(st.meta)[stride() * e + 8] = kind;
+    return 0;
+}
+
 // Give entry `e` an expiry (0: none).
 pub fn set_expiry[&s](st: &!s Store, e: int, at: int) -> [] int {
     bump(st, contents(st.meta)[stride() * e + 5]);
@@ -414,6 +434,14 @@ fn draw[&s](st: &!s Store, bound: int) -> [] int {
     x = x ^ x << 17;
     st.rng = x;
     return (x >> 11 & 0x1fffffffffffff) % bound;
+}
+
+// A pseudo-random number in `0..bound`, the sampler's generator (issue #14's `HRANDFIELD` uses it).
+pub fn random_below[&s](st: &!s Store, bound: int) -> [] int {
+    if bound <= 0 {
+        return 0;
+    }
+    return draw(st, bound);
 }
 
 // Pick the entry to evict: of five random keys in use, the one used longest ago. -1 if there is no key to take.
@@ -806,6 +834,77 @@ pub fn reclaim[&s](st: &!s Store, budget: int) -> [] int {
 // nothing was changed). 2: no room for another key.
 pub fn set[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], expiry: int) -> [] int {
     return set_paid(st, key, h, value, expiry, set_records());
+}
+
+// Replace the value of entry `e` in `[cut_from, cut_to)` with `bytes` (`docs/design.md` section 19.3): the one
+// primitive the hash commands mutate a packed record through. The value keeps its kind and expiry; the key keeps its
+// room. 0: done. 1: no room (nothing changed). The three cases are `put_key`'s and `splice`'s: the new bytes fit the
+// room (shift what follows, if any), or they do not and a fresh record is appended, the old one garbage.
+pub fn value_splice[&s, &v](st: &!s Store, e: int, cut_from: int, cut_to: int, bytes: &v [byte]) -> [] int {
+    let meta = contents(st.meta);
+    let m = stride() * e;
+    let old = meta[m + 2];
+    var total = old + len(bytes);
+    if cut_to > cut_from {
+        total = total - (cut_to - cut_from);
+    }
+    let data = contents(st.data);
+    if total <= meta[m + 3] {
+        let base = meta[m] + meta[m + 1];
+        // Move the tail out of the way: back to front when it moves forward (the bytes grow), front to
+        // back when it moves back (they shrink), so it never runs over what it has not moved yet.
+        var tail_from = base + cut_to;
+        var tail_to = base + cut_from + len(bytes);
+        var n = old - cut_to;
+        if tail_to > tail_from {
+            while n > 0 {
+                data[tail_to + n - 1] = data[tail_from + n - 1];
+                n = n - 1;
+            }
+        } else {
+            var i = 0;
+            while i < n {
+                data[tail_to + i] = data[tail_from + i];
+                i = i + 1;
+            }
+        }
+        copy(data, base + cut_from, bytes);
+        if total < meta[m + 3] {
+            zero_fill(data, base + total, base + meta[m + 3]);
+        }
+        meta[m + 2] = total;
+    } else {
+        let size = meta[m + 1] + room(total);
+        st.protect = e;
+        let ok = make_room(st, header() + size);
+        st.protect = 0 - 1;
+        if !ok {
+            return 1;
+        }
+        let at = st.top;
+        put32(data, at, e);
+        put32(data, at + 4, size);
+        // The key, the part before the cut, the new bytes, the part after the cut.
+        copy_within(data, at + header(), meta[m], meta[m + 1] + cut_from);
+        copy(data, at + header() + meta[m + 1] + cut_from, bytes);
+        var tail_from = meta[m] + meta[m + 1] + cut_to;
+        var tail_to = at + header() + meta[m + 1] + cut_from + len(bytes);
+        var n = old - cut_to;
+        while n > 0 {
+            data[tail_to + n - 1] = data[tail_from + n - 1];
+            n = n - 1;
+        }
+        st.dead = st.dead + header() + meta[m + 1] + meta[m + 3];
+        meta[m] = at + header();
+        meta[m + 2] = total;
+        meta[m + 3] = room(total);
+        st.top = at + header() + size;
+    }
+    st.last = e;
+    st.protect = e;
+    reclaim(st, set_records());
+    st.protect = 0 - 1;
+    return 0;
 }
 
 // `set` that pays `records` records of compaction instead of the usual number: the tests use a few, to have commands land

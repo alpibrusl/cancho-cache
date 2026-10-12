@@ -1,0 +1,12 @@
+[package]
+name = "redis-rs-session"
+version = "0.1.0"
+edition = "2021"
+description = "The redis-rs client battery of cancho-cache's compatibility matrix (issue #13)"
+publish = false
+
+[dependencies]
+redis = "=1.7.1"
+
+[profile.release]
+# One battery, not a benchmark: default settings.

@@ -62,13 +62,14 @@ jobs:
         working-directory: cache
         run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
 
-      - name: Authority has no ffi and no filesystem
+      - name: Authority has no ffi, and reads only /dev/urandom (the hash seed)
         working-directory: cache
         run: |
           ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
+          sed -n '/^performs/,/^never touches/p' /tmp/authority.txt | grep -q 'fs_read("/dev/urandom")'
+          ! grep -q 'fs_write' /tmp/authority.txt
           sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "foreign code"
-          sed -n '/never touches/,/provably pure/p' /tmp/authority.txt | grep -q "the filesystem"
 
       # The same bytes into Redis and into the cache, four framings, replies compared byte for byte.
       - name: Differential test against Redis
@@ -79,11 +80,15 @@ jobs:
         working-directory: cache
         run: python3 tests/limits.py build/cache
 
-      - name: Client libraries for the session test (redis-py, ioredis)
+      - name: Client libraries for the session test (redis-py, ioredis, node-redis, redis-rs)
         working-directory: cache
         run: |
           pip install redis
           (cd tests/clients && npm install --no-audit --no-fund)
+          (cd tests/clients/redis-rs && cargo build --release)
+      - name: The client compatibility matrix, checked against the README's table
+        working-directory: cache
+        run: python3 tests/clients_matrix.py build/cache
 
       - name: The connection and server commands, and real clients connecting
         working-directory: cache

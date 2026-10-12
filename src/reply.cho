@@ -84,6 +84,11 @@ pub fn not_an_integer[&b](sc: &!b [byte], at: int) -> [] int {
     return put(sc, at, "-ERR value is not an integer or out of range\r\n");
 }
 
+// Redis's own text, byte for byte, for a command that meets a key of the wrong kind (docs/design.md section 19.2).
+pub fn wrong_type[&b](sc: &!b [byte], at: int) -> [] int {
+    return put(sc, at, "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+}
+
 pub fn syntax_error[&b](sc: &!b [byte], at: int) -> [] int {
     return put(sc, at, "-ERR syntax error\r\n");
 }

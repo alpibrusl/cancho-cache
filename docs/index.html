@@ -133,9 +133,9 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
 
 <div class="hero" id="top">
   <div>
-    <a class="badge" href="#status"><i></i>Alpha · a string cache, not a Redis replacement yet</a>
+    <a class="badge" href="#status"><i></i>Alpha · strings and hashes, not a Redis replacement yet</a>
     <h1>A Redis-compatible cache that says what it can do.</h1>
-    <p class="lead">Written in cancho: no <code>Ffi</code>, no <code>unsafe</code>, and an authority report, checked in CI, that says it never touches the filesystem or foreign code. <code>redis-cli</code>, <code>redis-py</code> and <code>ioredis</code> connect and work.</p>
+    <p class="lead">Written in cancho: no <code>Ffi</code>, no <code>unsafe</code>, and an authority report, checked in CI, that names the one file it reads (<code>/dev/urandom</code>, for the hash seed) and no foreign code. <code>redis-cli</code>, <code>redis-py</code>, <code>ioredis</code>, <code>node-redis</code> and <code>redis-rs</code> connect and work.</p>
     <div class="cta"><a class="btn primary" href="#start">Try it</a><a class="btn ghost" href="#proof">See the evidence</a></div>
   </div>
   <div class="term" role="img" aria-label="A redis-cli session and the authority report"><div class="bar"><i></i><i></i><i></i></div>
@@ -148,13 +148,13 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
 
 <span class="c">$</span> cancho authority src/*.cho --std
 <span class="b">performs:</span> args, clock, conn_accept, conn_read,
-  conn_write, err_write, heap, net_in(""), poll
-<span class="g">never touches:</span> the filesystem, foreign code</pre>
+  conn_write, err_write, fs_read("/dev/urandom"), heap, net_in(""), poll
+<span class="g">never touches:</span> foreign code</pre>
   </div>
 </div>
 
 <div class="three">
-  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 334 differential cases, four framings each. RESP2 and RESP3 over TCP.</p></div>
+  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 515 differential cases, four framings each. RESP2 and RESP3 over TCP.</p></div>
   <div><h3>A fixed arena</h3><p>Sized at start; nothing is allocated afterwards. Expiry, an approximate LRU, and a compaction whose worst pause is a slice of work, not the arena.</p></div>
   <div><h3>An authority you can read</h3><p>The report lists exactly what the program may do. It is checked in CI, not assumed.</p></div>
 </div>
@@ -165,8 +165,8 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <div class="fitwrap"><table class="fit">
     <thead><tr><th>Question</th><th>What cancho-cache does</th></tr></thead>
     <tbody>
-      <tr><th>Can it read my files, or call into C?</th><td>No, and the authority report says so. Adding persistence later will name one directory in that report, not hide it.</td></tr>
-      <tr><th>Will a client library work?</th><td>The three tested ones connect and run a session; the handshake they send (<code>HELLO</code>, <code>INFO</code>, <code>CLIENT</code>) is answered the way Redis answers it.</td></tr>
+      <tr><th>Can it read my files, or call into C?</th><td>One file, named in the authority report: <code>/dev/urandom</code>, read once at start for the hash seed, so a client cannot pre-compute colliding keys. No foreign code, and nothing else is read. Adding persistence later will name one directory in that report, not hide it.</td></tr>
+      <tr><th>Will a client library work?</th><td>The five tested ones connect and run a session; the handshake they send (<code>HELLO</code>, <code>INFO</code>, <code>CLIENT</code>) is answered the way Redis answers it, and the compatibility matrix is checked against the README in CI.</td></tr>
       <tr><th>Is it faster than Redis?</th><td>On one core it measures 1.07 to 2.00 times Redis's throughput on the pre-registered cells, while doing much less. It is not a claim about Redis with the same features.</td></tr>
       <tr><th>What happens when memory is full?</th><td><code>noeviction</code> refuses with Redis's own error; <code>allkeys-lru</code> evicts, with the same hit rate as Redis at the same resident memory.</td></tr>
     </tbody>
@@ -179,8 +179,8 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <div class="stats">
     <div><b>1.07&ndash;2.00&times;</b><span>Redis's throughput on one core, pre-registered cells, medians of five interleaved rounds</span></div>
     <div><b>3&ndash;8 ms</b><span>worst-case pause (a compaction slice), measured on a noisy VM; 115 ms before it was sliced</span></div>
-    <div><b>334</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
-    <div><b>54 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
+    <div><b>515</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
+    <div><b>69 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
   </div>
   <p class="note"><a href="https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md">The design document</a> holds the gate, every measurement and its caveats, and each mutant the harnesses were checked against.</p>
 </section>
@@ -189,12 +189,12 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <h2>Where it fits.</h2>
   <div class="cols">
     <div><h3>Use it for</h3><ul>
-      <li>A string cache with expiry and an eviction policy</li>
+      <li>A string and hash cache with expiry and an eviction policy</li>
       <li>A host where the program's authority must be small and readable</li>
       <li>Local development and tests against a Redis-shaped server</li>
     </ul></div>
     <div class="no"><h3>Not yet</h3><ul>
-      <li>Data structures beyond strings; pub/sub; scripting</li>
+      <li>Lists, sets and sorted sets; pub/sub; scripting</li>
       <li>Persistence, replication, cluster, TLS</li>
             <li>One database; 256 connections; a 16 KiB command</li>
     </ul></div>
@@ -213,13 +213,13 @@ mkdir -p build
 $CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
 build/cache 6379 &amp;
 redis-cli -p 6379 PING     # PONG</pre>
-  <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru]]]</code>. Sizes are fixed at start.</p>
+  <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru] [&lt;seed&gt;]]]</code>. Sizes are fixed at start; without a seed argument the hash seed is read from <code>/dev/urandom</code>.</p>
 </section>
 
 <section class="status" id="status" style="padding:1.3rem 1.5rem">
   <h2>Status: alpha</h2>
   <ul>
-    <li>A string cache, step C2. The gaps to pairing with Redis, each with its design question and gate, are tracked in <a href="https://github.com/alpibrusl/cancho-cache/issues/8">the epic</a>.</li>
+    <li>Strings and hashes (15 <code>H*</code> commands), transactions, expiry and eviction. The gaps to pairing with Redis, each with its design question and gate, are tracked in <a href="https://github.com/alpibrusl/cancho-cache/issues/8">the epic</a>.</li>
     <li>Not a Redis replacement: see "Not yet" above, and the Limitations in the README.</li>
   </ul>
 </section>

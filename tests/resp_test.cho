@@ -87,7 +87,8 @@ fn test_each_way_of_not_being_the_protocol() -> [] int {
     test.assert_eq(parsed("*64\r\n"), 0);
     test.assert_eq(parsed("*2049\r\n"), resp.error_too_many_arguments());
     test.assert_eq(parsed("*1234567890\r\n"), resp.error_array_length());
-    test.assert_eq(parsed("*1\r\n$999999999\r\n"), 0);
+    test.assert_eq(parsed("*1\r\n$999999999\r\n"), resp.error_bulk_length());
+    test.assert_eq(parsed("*1\r\n$536870913\r\n"), resp.error_bulk_length());
     return 0;
 }
 
@@ -168,6 +169,26 @@ fn test_no_string_up_to_six_bytes_traps_or_lies() -> [] int {
     while length <= 6 {
         sweep(length);
         length = length + 1;
+    }
+    return 0;
+}
+
+fn test_a_last_argument_too_long_for_a_block_is_streamed() -> [] int {
+    region a {
+        let table = alloc_slice[a](resp.slots(), 0);
+        // The header is all there; none of the bytes need be.
+        let head = "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$100000\r\n";
+        test.assert_eq(resp.parse(head, table), resp.streaming());
+        test.assert_eq(table[0], 3);
+        test.assert_eq(table[5], len(head));
+        test.assert_eq(table[6], 100000);
+        // The header cut short is "not all here yet".
+        test.assert_eq(resp.parse("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1000", table), 0);
+        // Just under what a block holds is waited for, just over is streamed.
+        test.assert_eq(resp.parse("*1\r\n$16370\r\n", table), 0);
+        test.assert_eq(resp.parse("*1\r\n$16371\r\n", table), resp.streaming());
+        // Only the last argument is streamed: an earlier one that long is waited for, as it always was.
+        test.assert_eq(resp.parse("*2\r\n$20000\r\n", table), 0);
     }
     return 0;
 }

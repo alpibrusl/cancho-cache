@@ -29,7 +29,13 @@ valid = [cmd("PING"), cmd("PING", "x"), cmd("ECHO", "hello"), cmd("ECHO", bytes(
          cmd("MGET", "a", "b", "c"), cmd("GETSET", "k", "v"), cmd("SETEX", "k", "1", "v"), cmd("DEL", "a", "b"), cmd("FLUSHALL"),
          cmd("HELLO", "3", "AUTH", "default", "x", "SETNAME", "n"), cmd("HELLO", "2"), cmd("HELLO", "9999999999999999999"), cmd("AUTH", "a", "b"), cmd("CLIENT", "SETNAME", "x" * 200),
          cmd("CLIENT", "GETNAME"), cmd("CLIENT", "ID"), cmd("INFO"), cmd("INFO", "memory"), cmd("CONFIG", "GET", "*"), cmd("CONFIG", "GET", "a", "b", "c", "max*", "[", "?"),
-         cmd("COMMAND"), cmd("COMMAND", "LIST"), cmd("COMMAND", "COUNT"), cmd("RESET"), cmd("QUIT")]
+         cmd("COMMAND"), cmd("COMMAND", "LIST"), cmd("COMMAND", "COUNT"), cmd("RESET"), cmd("QUIT"),
+         # Values larger than a block (docs/design.md section 22): whole, cut anywhere by `sample`, with a bulk header of 2^40 or one byte over what Redis
+         # allows, and a `GET` of what they stored (which the connection then abandons).
+         cmd("SET", "big", bytes(rnd.randrange(256) for _ in range(20000))), cmd("SETEX", "big", "100", b"v" * 70000), cmd("PSETEX", "big", "1", b"v" * 17000),
+         cmd("GET", "big"), cmd("GETSET", "big", "x"), cmd("APPEND", "big", "x"), cmd("MGET", "big", "big"),
+         b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1099511627776\r\n", b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$536870913\r\n", b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$16384\r\n",
+         b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$100000\r\n" + b"x" * 5000, b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$20000\r\n" + b"x" * 20000 + b"\r\n"]
 
 
 def sample():

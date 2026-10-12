@@ -1105,3 +1105,158 @@ fn test_the_walk_sees_the_keys_that_are_there_and_not_the_rest[&h](heap: &!h Hea
     store.close(heap, st);
     return 0;
 }
+
+// Reserve a staged value of `n` bytes under key `k<key>`; answers the entry, or -1 if refused.
+fn stage[&b](st: &!b store.Store, key: int, n: int) -> [] int {
+    var entry = 0 - 1;
+    region a {
+        let kb = alloc_slice[a](24, byte_of(0));
+        let k = key_into(kb, key);
+        let (code, e) = store.reserve(st, kb[0..k], n);
+        if code == 0 {
+            entry = e;
+        }
+    }
+    return entry;
+}
+
+fn fill_entry[&b](st: &!b store.Store, e: int, from: int, c: int, length: int) -> [] int {
+    var answer = 0;
+    region a {
+        let vb = alloc_slice[a](length + 1, byte_of(0));
+        fill_with(vb, c, length);
+        answer = store.fill(st, e, from, vb[0..length]);
+    }
+    return answer;
+}
+
+fn test_a_staged_value_is_nobodys_until_it_is_committed[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 10), 0);
+        let e = stage(w, 2, 1000);
+        test.assert(e >= 0);
+        test.assert_eq(store.audit(w), 0);
+        // Not a key: not found, not counted, not visible.
+        test.assert_eq(look(w, 2), 0 - 1);
+        test.assert_eq(store.live(w), 1);
+        test.assert(!store.visible(w, e));
+        // Filled in two pieces, then committed: it is a key, with no copy.
+        test.assert_eq(fill_entry(w, e, 0, 'x', 600), 0);
+        test.assert_eq(fill_entry(w, e, 600, 'x', 400), 0);
+        test.assert_eq(fill_entry(w, e, 600, 'x', 401), 1);
+        test.assert_eq(store.commit(w, e, 0), e);
+        test.assert_eq(store.audit(w), 0);
+        test.assert_eq(look(w, 2), 1000 * 1000 + 'x');
+        test.assert_eq(store.live(w), 2);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_a_committed_value_replaces_the_old_one_and_gives_back_its_record[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 500), 0);
+        let before = store.used(w);
+        let e = stage(w, 1, 700);
+        test.assert(e >= 0);
+        test.assert_eq(fill_entry(w, e, 0, 'z', 700), 0);
+        let kept = store.commit(w, e, 0);
+        test.assert_eq(store.audit(w), 0);
+        test.assert_eq(look(w, 1), 700 * 1000 + 'z');
+        test.assert_eq(store.live(w), 1);
+        test.assert(kept != e);
+        // The staged entry's number is free again: the next new key takes it.
+        test.assert_eq(put(w, 2, 'b', 5), 0);
+        test.assert_eq(look(w, 2), 5 * 1000 + 'b');
+        test.assert_eq(store.audit(w), 0);
+        test.assert(store.used(w) >= before);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_an_abandoned_value_leaves_nothing[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        var i = 0;
+        while i < 30 {
+            let e = stage(w, 5, 3000);
+            test.assert(e >= 0);
+            test.assert_eq(store.audit(w), 0);
+            store.abort(w, e);
+            test.assert_eq(store.audit(w), 0);
+            i = i + 1;
+        }
+        test.assert_eq(store.live(w), 0);
+        test.assert_eq(look(w, 5), 0 - 1);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_a_staged_value_is_not_evicted_and_survives_compaction[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 40, 0, store.evict_lru());
+    borrow mut st as &!w in {
+        var i = 0;
+        while i < 10 {
+            test.assert_eq(put(w, i, 'q', 100), 0);
+            i = i + 1;
+        }
+        let e = stage(w, 50, 1500);
+        test.assert(e >= 0);
+        test.assert_eq(fill_entry(w, e, 0, 'm', 1500), 0);
+        // Churn that compacts and evicts around it.
+        i = 0;
+        while i < 400 {
+            test.assert_eq(put(w, 100 + i % 7, 'c', 120), 0);
+            test.assert_eq(store.audit(w), 0);
+            i = i + 1;
+        }
+        test.assert_eq(store.commit(w, e, 0), e);
+        test.assert_eq(look(w, 50), 1500 * 1000 + 'm');
+        test.assert_eq(store.audit(w), 0);
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_a_value_that_cannot_fit_is_refused_and_changes_nothing[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 2048, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 1500), 0);
+        test.assert_eq(stage(w, 2, 1500), 0 - 1);
+        test.assert_eq(stage(w, 3, 1 << 30), 0 - 1);
+        test.assert_eq(store.audit(w), 0);
+        test.assert_eq(look(w, 1), 1500 * 1000 + 'a');
+    }
+    store.close(heap, st);
+    return 0;
+}
+
+fn test_a_stamp_changes_when_the_value_is_written[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 10, 0, store.evict_none());
+    borrow mut st as &!w in {
+        test.assert_eq(put(w, 1, 'a', 10), 0);
+        region a {
+            let kb = alloc_slice[a](24, byte_of(0));
+            let k = key_into(kb, 1);
+            let key = kb[0..k];
+            let e = store.find(w, key, store.hash_of(w, key));
+            let first = store.stamp_of(w, e);
+            test.assert(store.unchanged(w, e, first));
+            // Reads and expiry leave it; a write does not.
+            store.find(w, key, store.hash_of(w, key));
+            store.set_expiry(w, e, 99999);
+            test.assert(store.unchanged(w, e, first));
+            test.assert_eq(put(w, 1, 'b', 10), 0);
+            test.assert(!store.unchanged(w, e, first));
+            let second = store.stamp_of(w, e);
+            test.assert_eq(drop_key(w, 1), 1);
+            test.assert(!store.unchanged(w, e, second));
+        }
+    }
+    store.close(heap, st);
+    return 0;
+}

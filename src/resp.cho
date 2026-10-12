@@ -31,6 +31,17 @@ fn max_args() -> [] int {
     return 2048;
 }
 
+// The most a command can take when it must arrive whole: the size of the cache's input block (`cache.input_size`). A last argument that would carry the
+// command past it can never be had in one piece, and `parse` says so (`streaming`) instead of waiting for what cannot come.
+pub fn block() -> [] int {
+    return 16384;
+}
+
+// The longest a bulk string may be: Redis's `proto-max-bulk-len`, 512 MiB. A longer one is `error_bulk_length`, as in Redis.
+pub fn max_bulk() -> [] int {
+    return 536870912;
+}
+
 pub fn slots() -> [] int {
     return 1 + 2 * max_args();
 }
@@ -58,6 +69,13 @@ pub fn error_missing_terminator() -> [] int {
 
 pub fn error_too_many_arguments() -> [] int {
     return 0 - 6;
+}
+
+// Not an error: the command's last argument is a bulk string too long for the block (and not longer than `max_bulk`). `table` holds the arguments, the
+// last one's `start` being where its bytes begin in the data (which is as far as the header reached) and its length how many are to come; nothing
+// of its bytes or the CRLF after them is looked at. The caller decides whether the command is one that can take its value in pieces (`docs/design.md` section 22).
+pub fn streaming() -> [] int {
+    return 0 - 7;
 }
 
 // A decimal number at `data[at..]` and the CRLF after it. Answers `(value, next)` where `next` is the
@@ -148,8 +166,13 @@ pub fn parse[&d, &t](data: &d [byte], table: &!t [int]) -> [] int {
         if size == 0 - 1 {
             return 0;
         }
-        if size == 0 - 2 {
+        if size == 0 - 2 || size > max_bulk() {
             return error_bulk_length();
+        }
+        if k == argc - 1 && start + size + 2 > block() {
+            table[1 + 2 * k] = start;
+            table[2 + 2 * k] = size;
+            return streaming();
         }
         if start + size + 2 > len(data) {
             return 0;

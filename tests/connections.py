@@ -240,7 +240,7 @@ def queue_exhaustion(p):
 
 
 def output_exhaustion(p):
-    c = connect()
+    c = connect(timeout=60)
     c.sendall(cmd("SET", "big", "v" * 16000))
     read_until(c, 5)
     one = cmd("GET", "big")

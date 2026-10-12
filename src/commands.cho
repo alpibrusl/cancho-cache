@@ -36,7 +36,7 @@ pub fn reserve() -> [] int {
 
 // When an expiry `amount` (in seconds if `seconds`, else milliseconds) from now is, in the store's milliseconds: `(0,
 // when)`, or `(1, 0)` if the amount does not fit.
-fn expire_at(amount: int, seconds: bool, now: int) -> [] (int, int) {
+pub fn expire_at(amount: int, seconds: bool, now: int) -> [] (int, int) {
     var ms = amount;
     if seconds {
         if amount > reply.max_int() / 1000 || amount < reply.min_int() / 1000 {
@@ -110,6 +110,9 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
     var o = at;
     if get {
         if e >= 0 {
+            if len(store.value(st, e)) > max_string() {
+                return too_large(sc, at);
+            }
             o = reply.put_bulk(sc, at, store.value(st, e));
         } else {
             o = reply.put_null(sc, at, proto);
@@ -134,8 +137,14 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
 // `reserve()` is `MGET` of the most keys with values this long, and a value any longer would overrun the buffer an answer is built in
 // (a `GET` of 4 MB killed the server when `APPEND` and `SETRANGE` could build one). Redis's limit is 512 MiB (`proto-max-bulk-len`) and
 // answers a longer result in the words used here; issue #11 lifts this one properly, with answers that are written in pieces.
-fn max_string() -> [] int {
+pub fn max_string() -> [] int {
     return 16384;
+}
+
+// The answer of a command that builds its reply in a buffer and finds a value too long for one (`docs/design.md` section 22). Redis has no such limit; `GET` and
+// `SET` carry values of any size, in pieces, and everything that would copy one into an answer says this instead of overrunning the buffer.
+fn too_large[&b](sc: &!b [byte], at: int) -> [] int {
+    return reply.put(sc, at, "-ERR value too large for this command (see docs/design.md section 22)\r\n");
 }
 
 fn too_long[&b](sc: &!b [byte], at: int) -> [] int {
@@ -242,6 +251,9 @@ fn command_getrange[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [b
     if start > end || size == 0 {
         return reply.put(sc, at, "$0\r\n\r\n");
     }
+    if end + 1 - start > max_string() {
+        return too_large(sc, at);
+    }
     return reply.put_bulk(sc, at, value[start..end + 1]);
 }
 
@@ -295,6 +307,9 @@ fn command_getex[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte
         when = at_when;
     }
     // The value goes into the answer before the key can be removed.
+    if len(store.value(st, e)) > max_string() {
+        return too_large(sc, at);
+    }
     let o = reply.put_bulk(sc, at, store.value(st, e));
     if kind != 0 {
         if when <= store.now_of(st) {
@@ -466,6 +481,9 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         if store.kind_of(st, e) == store.kind_hash() {
             return reply.wrong_type(sc, at);
         }
+        if len(store.value(st, e)) > max_string() {
+            return too_large(sc, at);
+        }
         return reply.put_bulk(sc, at, store.value(st, e));
     }
     if reply.is_word(name, "SET") {
@@ -598,6 +616,9 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_type(sc, at);
         }
         var o = at;
+        if e >= 0 && len(store.value(st, e)) > max_string() {
+            return too_large(sc, at);
+        }
         if e >= 0 {
             o = reply.put_bulk(sc, at, store.value(st, e));
         } else {
@@ -620,6 +641,9 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         if store.kind_of(st, e) == store.kind_hash() {
             return reply.wrong_type(sc, at);
+        }
+        if len(store.value(st, e)) > max_string() {
+            return too_large(sc, at);
         }
         let o = reply.put_bulk(sc, at, store.value(st, e));
         store.delete(st, key, h);
@@ -644,6 +668,9 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             if e < 0 || store.kind_of(st, e) == store.kind_hash() {
                 // A key that is not there, or holds a hash: Redis answers nil for both (MGET never says WRONGTYPE).
                 o = reply.put_null(sc, o, link[3]);
+            } else if len(store.value(st, e)) > max_string() {
+                // An error as an element keeps the array the shape it was promised.
+                o = too_large(sc, o);
             } else {
                 o = reply.put_bulk(sc, o, store.value(st, e));
             }

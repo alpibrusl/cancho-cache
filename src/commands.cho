@@ -641,10 +641,8 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         while k < argc && o + max_string() + 32 <= at + piece() {
             let key = reply.arg_of(view, table, k);
             let e = store.find(st, key, store.hash_of(st, key));
-            if e >= 0 && store.kind_of(st, e) == store.kind_hash() {
-                return reply.wrong_type(sc, at);
-            }
-            if e < 0 {
+            if e < 0 || store.kind_of(st, e) == store.kind_hash() {
+                // A key that is not there, or holds a hash: Redis answers nil for both (MGET never says WRONGTYPE).
                 o = reply.put_null(sc, o, link[3]);
             } else {
                 o = reply.put_bulk(sc, o, store.value(st, e));
@@ -842,8 +840,8 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         var set = command_hset(view, table, sc, at, st, tmp, false);
-        if set != at {
-            // A WRONGTYPE or OOM reply: pass it through.
+        if set != at && int_of(sc[at]) == '-' {
+            // A WRONGTYPE or OOM reply: pass it through. (Anything else is the integer `HSET` answers, which `HMSET` replaces with +OK.)
             return set;
         }
         return reply.put(sc, at, "+OK\r\n");
@@ -1130,7 +1128,11 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
                 let used = alloc_slice[a](n, 0);
                 var i = 0;
                 while i < take {
-                    var which = store.random_below(st, n);
+                    // Asking for every pair (count >= the hash's size) is not random in Redis: all of them, in the order they are stored.
+                    var which = i;
+                    if take < n {
+                        which = store.random_below(st, n);
+                    }
                     while used[which] != 0 {
                         which = which + 1;
                         if which >= n {
@@ -1207,9 +1209,18 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         let packed = store.value(st, e);
         // The cursor is a pair number: the call looks at `COUNT` pairs from there, answers the ones
         // that match, and says where to go on from (0: done).
+        // Redis keeps a small hash as a listpack, and scans one whole, whatever the cursor and `COUNT` say (a hash of more than 128 pairs it
+        // pages, in an order of its own). So does this, for the same size: the cache does not track Redis's other limit (a field or value of
+        // more than 64 bytes makes Redis page a smaller hash too).
+        var from = cursor;
+        var limit = count;
+        if hash_len(packed) <= 128 {
+            from = 0;
+            limit = 1000000;
+        }
         var spot = 0;
         var pairs = 0;
-        while pairs < cursor && spot + pair_header() <= len(packed) {
+        while pairs < from && spot + pair_header() <= len(packed) {
             spot = spot + pair_header() + get_len(packed, spot) + get_len(packed, spot + 4);
             pairs = pairs + 1;
         }
@@ -1217,7 +1228,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         var found = 0;
         var bytes = 0;
         var going = true;
-        while going && spot + pair_header() <= len(packed) && looked < count {
+        while going && spot + pair_header() <= len(packed) && looked < limit {
             let flen = get_len(packed, spot);
             let vlen = get_len(packed, spot + 4);
             let field = packed[spot + pair_header()..spot + pair_header() + flen];

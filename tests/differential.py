@@ -140,10 +140,10 @@ cases = [
     ("hash key and the keyspace", cmd("HSET", "d:hk", "f", "v") + cmd("EXISTS", "d:hk") + cmd("DEL", "d:hk") + cmd("HGET", "d:hk", "f") + cmd("HSET", "d:hk", "f", "v") + cmd("EXPIRE", "d:hk", "100") + cmd("TTL", "d:hk") + cmd("PERSIST", "d:hk")),
     ("SCAN TYPE hash and string", cmd("HSET", "d:sh", "f", "v") + cmd("SET", "d:ss", "x") + cmd("SCAN", "0", "TYPE", "hash") + cmd("SCAN", "0", "TYPE", "string") + cmd("SCAN", "0", "TYPE", "none") + cmd("SCAN", "0", "TYPE", "list")),
     ("WRONGTYPE on every string command", cmd("HSET", "d:wt", "f", "v") + cmd("APPEND", "d:wt", "x") + cmd("SETRANGE", "d:wt", "0", "x") + cmd("GETRANGE", "d:wt", "0", "1") + cmd("STRLEN", "d:wt") + cmd("GETEX", "d:wt") + cmd("GETDEL", "d:wt") + cmd("GETSET", "d:wt", "x") + cmd("INCR", "d:wt") + cmd("DECR", "d:wt") + cmd("INCRBY", "d:wt", "1") + cmd("DECRBY", "d:wt", "1") + cmd("MGET", "d:other", "d:wt") + cmd("SUBSTR", "d:wt", "0", "1")),
-    ("HSCAN", cmd("HSET", "d:hs", "a", "1", "b", "2", "c", "3", "d", "4") + cmd("HSCAN", "d:hs", "0") + cmd("HSCAN", "d:hs", "0", "COUNT", "2") + cmd("HSCAN", "d:hs", "2", "COUNT", "10") + cmd("HSCAN", "d:hs", "0", "MATCH", "a*") + cmd("HSCAN", "d:hs", "0", "NOVALUES")),
+    ("HSCAN", cmd("HSET", "d:hs", "a", "1", "b", "2", "c", "3", "d", "4") + cmd("HSCAN", "d:hs", "0") + cmd("HSCAN", "d:hs", "0", "COUNT", "2") + cmd("HSCAN", "d:hs", "2", "COUNT", "10") + cmd("HSCAN", "d:hs", "0", "MATCH", "a*")),
     ("HSCAN on a missing key and a string", cmd("HSCAN", "d:none", "0") + cmd("SET", "d:str", "v") + cmd("HSCAN", "d:str", "0")),
     ("HSCAN errors", cmd("HSCAN", "d:hs") + cmd("HSCAN", "d:hs", "xyz") + cmd("HSCAN", "d:hs", "0", "COUNT", "0") + cmd("HSCAN", "d:hs", "0", "NOPE")),
-    ("HRANDFIELD count and WITHVALUES", cmd("HSET", "d:hr", "a", "1", "b", "2", "c", "3") + cmd("HRANDFIELD", "d:hr", "0") + cmd("HRANDFIELD", "d:hr", "10") + cmd("HRANDFIELD", "d:hr", "10", "WITHVALUES") + cmd("HRANDFIELD", "d:hr", "-10", "WITHVALUES") + cmd("HRANDFIELD", "d:none") + cmd("HRANDFIELD", "d:none", "3") + cmd("SET", "d:hrs", "x") + cmd("HRANDFIELD", "d:hrs")),
+    ("HRANDFIELD count and WITHVALUES (a negative count and a count below the size are random in Redis, so only the deterministic calls are compared)", cmd("HSET", "d:hr", "a", "1", "b", "2", "c", "3") + cmd("HRANDFIELD", "d:hr", "0") + cmd("HRANDFIELD", "d:hr", "10") + cmd("HRANDFIELD", "d:hr", "10", "WITHVALUES") + cmd("HRANDFIELD", "d:none") + cmd("HRANDFIELD", "d:none", "3") + cmd("SET", "d:hrs", "x") + cmd("HRANDFIELD", "d:hrs")),
     ("HRANDFIELD errors", cmd("HRANDFIELD", "d:hr", "abc") + cmd("HRANDFIELD", "d:hr", "1", "NOPE") + cmd("HRANDFIELD")),
     ("hash argument errors", cmd("HSET", "d:h") + cmd("HSET", "d:h", "f") + cmd("HSET", "d:h", "f", "v", "dangling") + cmd("HGET") + cmd("HGET", "d:h") + cmd("HGET", "d:h", "f", "x") + cmd("HGETALL") + cmd("HLEN") + cmd("HDEL", "d:h") + cmd("HINCRBY", "d:h", "f") + cmd("HINCRBY", "d:h", "f", "abc")),
     ("SET grows then shrinks", cmd("SET", "d:g", "a") + cmd("SET", "d:g", "b" * 300) + cmd("SET", "d:g", "c") + cmd("GET", "d:g")),
@@ -248,6 +248,7 @@ cases = [
 
 # Where the cache is deliberately not Redis, and why. Each is run and must still differ.
 known = [
+    ("HSCAN NOVALUES", cmd("HSET", "d:hsn", "a", "1") + cmd("HSCAN", "d:hsn", "0", "NOVALUES"), "NOVALUES is Redis 7.4's; the oracle is 7.0.15, which answers a syntax error, and the cache answers the fields alone"),
     ("inline PING", b"PING\r\n", "inline commands (typed into telnet) are not supported: design.md section 4"),
     ("bulk not followed by CRLF", b"*1\r\n$3\r\nabcde\r\n", "Redis skips two bytes after a bulk without checking them; the cache refuses (a request-smuggling-shaped ambiguity)"),
     ("SET with EXAT", cmd("SET", "k:exat", "1", "EXAT", "99999999999"), "EXAT, PXAT, EXPIREAT and PEXPIREAT name a time of day, and the cache has a monotonic clock and no calendar"),

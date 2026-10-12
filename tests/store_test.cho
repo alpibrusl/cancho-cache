@@ -340,6 +340,32 @@ fn test_the_pinned_collision_pair_is_a_seed_zero_artifact[&h](heap: &!h Heap) ->
     return 0;
 }
 
+// A key made after a hash was deleted, or flushed away, is a string: the entry it reuses must not keep the hash's kind
+// (found by the differential: HRANDFIELD on a string key made after FLUSHALL read it as a packed hash and killed the server).
+fn test_a_new_key_is_a_string_whatever_entry_it_reuses[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 4096, 4, 0, store.evict_none());
+    borrow mut st as &!w in {
+        let h0 = store.hash_of(w, "h");
+        test.assert_eq(store.set(w, "h", h0, "x", 0 - 1), 0);
+        let e = store.find(w, "h", h0);
+        test.assert_eq(store.set_kind(w, e, store.kind_hash()), 0);
+        test.assert_eq(store.clear(w), 0);
+        let s0 = store.hash_of(w, "s");
+        test.assert_eq(store.set(w, "s", s0, "y", 0 - 1), 0);
+        test.assert_eq(store.kind_of(w, store.find(w, "s", s0)), store.kind_string());
+        test.assert_eq(store.delete(w, "s", s0), 1);
+        let h1 = store.hash_of(w, "t");
+        test.assert_eq(store.set(w, "t", h1, "z", 0 - 1), 0);
+        let t = store.find(w, "t", h1);
+        test.assert_eq(store.set_kind(w, t, store.kind_hash()), 0);
+        test.assert_eq(store.delete(w, "t", h1), 1);
+        test.assert_eq(store.set(w, "u", store.hash_of(w, "u"), "w", 0 - 1), 0);
+        test.assert_eq(store.kind_of(w, store.find(w, "u", store.hash_of(w, "u"))), store.kind_string());
+    }
+    store.close(heap, st);
+    return 0;
+}
+
 // Issue #14, `value_splice` (docs/design.md section 19.3): the one primitive the hash commands mutate a packed
 // record through. Checked against a model kept in plain arrays: an insert at the end, an overwrite of the same
 // length, a grow that shifts the tail inside the room, a shrink that closes the gap, a delete that empties the

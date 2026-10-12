@@ -13,6 +13,9 @@ on:
       - tests/string_mutants.py
       - tests/mutlib.py
       - tests/keyspace_mutants.py
+      - tests/pieces_mutants.py
+      - tests/limits.py
+      - src/resp.cho
       - tests/keyspace.py
       - src/glob.cho
       - src/commands.cho
@@ -62,11 +65,15 @@ jobs:
       - name: Every mutant still applies to the source, exactly once (fast)
         working-directory: cache
         run: |
-          for f in txn string keyspace; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
+          for f in txn string keyspace pieces; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
 
       - name: Every transaction mutant is caught
         working-directory: cache
         run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/txn_mutants.py
+
+      - name: Every mutant of the answers in pieces is caught
+        working-directory: cache
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/pieces_mutants.py
 
       - name: Every keyspace mutant is caught
         working-directory: cache

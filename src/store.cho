@@ -600,6 +600,8 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
     meta[m + 5] = h;
     meta[m + 6] = 0 - 2;
     meta[m + 7] = st.now;
+    // A new key is a string until a command says otherwise: the entry may be one a deleted or flushed hash left, and its kind with it.
+    meta[m + 8] = kind_string();
     if expiry > 0 {
         put_expiry(st, m, expiry);
     }

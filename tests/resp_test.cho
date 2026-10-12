@@ -85,7 +85,7 @@ fn test_each_way_of_not_being_the_protocol() -> [] int {
     test.assert_eq(parsed("*1\r\n$-1\r\n"), resp.error_bulk_length());
     test.assert_eq(parsed("*1\r\n$3\r\nabcde\r\n"), resp.error_missing_terminator());
     test.assert_eq(parsed("*64\r\n"), 0);
-    test.assert_eq(parsed("*65\r\n"), resp.error_too_many_arguments());
+    test.assert_eq(parsed("*2049\r\n"), resp.error_too_many_arguments());
     test.assert_eq(parsed("*1234567890\r\n"), resp.error_array_length());
     test.assert_eq(parsed("*1\r\n$999999999\r\n"), 0);
     return 0;

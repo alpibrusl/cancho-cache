@@ -9,7 +9,7 @@ env:
   # The compiler these sources are built and tested with: part of the contract, since a source file does not
   # record which `std` it was written against. This is the commit of cancho #186 (`copy_within`); it moves to
   # cancho's main once that is merged.
-  CANCHO_REV: f4ead824f33b291a0ad7620a34a0c1346a7abe4f
+  CANCHO_REV: 471b8e9334e021123286db4b1cb9feaeba2677c5
 
 jobs:
   test:
@@ -37,7 +37,7 @@ jobs:
       - name: Build cancho
         if: steps.compiler.outputs.cache-hit != 'true'
         working-directory: cancho
-        run: cargo build --release -p cancho
+        run: scripts/install.sh "$(git rev-parse HEAD)" "$RUNNER_TEMP/cancho-release" && mkdir -p target/release && cp "$RUNNER_TEMP/cancho-release/bin/cancho" target/release/cancho
 
       - name: Redis, the oracle of the differential test
         run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server

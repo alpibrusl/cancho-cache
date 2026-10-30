@@ -9,7 +9,7 @@ env:
   # The compiler these sources are built and tested with: part of the contract, since a source file does not
   # record which `std` it was written against. This is the commit of cancho #186 (`copy_within`); it moves to
   # cancho's main once that is merged.
-  CANCHO_REV: dcf6751951590aa7f3427001eca3bef0d6677f3b
+  CANCHO_REV: 2bd251f7f9354fe43d48055b3d9fe4d4af007a5c
 
 jobs:
   test:

@@ -25,7 +25,7 @@ on:
       - tests/differential.py
 
 env:
-  CANCHO_REV: dcf6751951590aa7f3427001eca3bef0d6677f3b
+  CANCHO_REV: 2bd251f7f9354fe43d48055b3d9fe4d4af007a5c
 
 jobs:
   mutants:

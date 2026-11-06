@@ -2,6 +2,7 @@ edition 5;
 
 module session;
 
+import cmdinfo;
 import reply;
 import store;
 
@@ -20,11 +21,6 @@ import store;
 // Not here: authentication that does anything (the default user has no password, as in Redis's default configuration, and any
 // other user is refused), RESP3 (`HELLO 3` is refused with Redis's own text for an unsupported version), `CLIENT LIST`/`KILL`/...,
 // `CONFIG SET`, and `INFO` sections beyond the five printed.
-
-// How many commands `COMMAND COUNT` says and `COMMAND LIST` lists: `tests/session_test.py` checks that every one is answered.
-pub fn supported() -> [] int {
-    return 54;
-}
 
 // The most bytes a client name may have here.
 fn name_room() -> [] int {
@@ -515,78 +511,40 @@ pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byt
 }
 
 // The commands this server answers, as `COMMAND LIST` gives them (lower case, one bulk string each): 54 of them.
-fn put_command_names[&b](sc: &!b [byte], at: int) -> [] int {
-    var o = reply.put_bulk(sc, at, "get");
-    o = reply.put_bulk(sc, o, "set");
-    o = reply.put_bulk(sc, o, "ping");
-    o = reply.put_bulk(sc, o, "echo");
-    o = reply.put_bulk(sc, o, "del");
-    o = reply.put_bulk(sc, o, "unlink");
-    o = reply.put_bulk(sc, o, "exists");
-    o = reply.put_bulk(sc, o, "touch");
-    o = reply.put_bulk(sc, o, "incr");
-    o = reply.put_bulk(sc, o, "decr");
-    o = reply.put_bulk(sc, o, "incrby");
-    o = reply.put_bulk(sc, o, "decrby");
-    o = reply.put_bulk(sc, o, "expire");
-    o = reply.put_bulk(sc, o, "pexpire");
-    o = reply.put_bulk(sc, o, "ttl");
-    o = reply.put_bulk(sc, o, "pttl");
-    o = reply.put_bulk(sc, o, "persist");
-    o = reply.put_bulk(sc, o, "setnx");
-    o = reply.put_bulk(sc, o, "setex");
-    o = reply.put_bulk(sc, o, "psetex");
-    o = reply.put_bulk(sc, o, "getset");
-    o = reply.put_bulk(sc, o, "getdel");
-    o = reply.put_bulk(sc, o, "mget");
-    o = reply.put_bulk(sc, o, "mset");
-    o = reply.put_bulk(sc, o, "strlen");
-    o = reply.put_bulk(sc, o, "type");
-    o = reply.put_bulk(sc, o, "dbsize");
-    o = reply.put_bulk(sc, o, "flushall");
-    o = reply.put_bulk(sc, o, "flushdb");
-    o = reply.put_bulk(sc, o, "select");
-    o = reply.put_bulk(sc, o, "hello");
-    o = reply.put_bulk(sc, o, "auth");
-    o = reply.put_bulk(sc, o, "client");
-    o = reply.put_bulk(sc, o, "info");
-    o = reply.put_bulk(sc, o, "config");
-    o = reply.put_bulk(sc, o, "command");
-    o = reply.put_bulk(sc, o, "quit");
-    o = reply.put_bulk(sc, o, "multi");
-    o = reply.put_bulk(sc, o, "exec");
-    o = reply.put_bulk(sc, o, "discard");
-    o = reply.put_bulk(sc, o, "watch");
-    o = reply.put_bulk(sc, o, "unwatch");
-    o = reply.put_bulk(sc, o, "append");
-    o = reply.put_bulk(sc, o, "setrange");
-    o = reply.put_bulk(sc, o, "getrange");
-    o = reply.put_bulk(sc, o, "substr");
-    o = reply.put_bulk(sc, o, "getex");
-    o = reply.put_bulk(sc, o, "msetnx");
-    o = reply.put_bulk(sc, o, "keys");
-    o = reply.put_bulk(sc, o, "scan");
-    o = reply.put_bulk(sc, o, "randomkey");
-    o = reply.put_bulk(sc, o, "rename");
-    o = reply.put_bulk(sc, o, "renamenx");
-    return reply.put_bulk(sc, o, "reset");
-}
-
-// `COMMAND`, `COMMAND COUNT`, `COMMAND LIST`. The full table Redis answers `COMMAND` with (flags, arity, key positions) is not kept:
-// clients that read it get an empty one, and `COMMAND DOCS` and `COMMAND INFO` the same.
-pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int) -> [] int {
+// `COMMAND`, `COMMAND COUNT`, `COMMAND LIST`, `COMMAND INFO [name ...]` (`docs/design.md` section 26). The entries are Redis 7.0's own for every command
+// this cache implements (`cmdinfo`, generated from the oracle), so a client that reads arity, flags and key positions to find the keys of a command
+// gets what Redis would tell it. `COMMAND DOCS` is still empty, and `COMMAND GETKEYS` and `COMMAND INFO` of a subcommand (`config|get`) are not built.
+pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, proto: int) -> [] int {
     let argc = table[0];
+    let resp3 = proto == 3;
     if argc == 1 {
-        return reply.put(sc, at, "*0\r\n");
+        return cmdinfo.put_all(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), cmdinfo.count()), "\r\n"), resp3);
     }
     let sub = reply.arg_of(view, table, 1);
     if reply.is_word(sub, "COUNT") && argc == 2 {
-        return reply.put_integer(sc, at, supported());
+        return reply.put_integer(sc, at, cmdinfo.count());
     }
     if reply.is_word(sub, "LIST") && argc == 2 {
-        return put_command_names(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), supported()), "\r\n"));
+        return cmdinfo.put_names(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), cmdinfo.count()), "\r\n"));
     }
-    if reply.is_word(sub, "DOCS") || reply.is_word(sub, "INFO") {
+    if reply.is_word(sub, "INFO") {
+        if argc == 2 {
+            return cmdinfo.put_all(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), cmdinfo.count()), "\r\n"), resp3);
+        }
+        var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), argc - 2), "\r\n");
+        var i = 2;
+        while i < argc {
+            let (found, end) = cmdinfo.put_entry(reply.arg_of(view, table, i), sc, o, resp3);
+            if found {
+                o = end;
+            } else {
+                o = reply.put_null(sc, o, proto);
+            }
+            i = i + 1;
+        }
+        return o;
+    }
+    if reply.is_word(sub, "DOCS") {
         return reply.put(sc, at, "*0\r\n");
     }
     var shown = len(sub);

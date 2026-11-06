@@ -255,8 +255,8 @@ known = [
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
     ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
-    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "54 commands, not 240"),
-    ("COMMAND", cmd("COMMAND"), "the command table (flags, arity, key positions) is not kept"),
+    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "the commands this cache implements, not Redis's 240"),
+    ("COMMAND", cmd("COMMAND"), "the table holds the commands this cache implements, not all 240 of Redis's"),
 ]
 
 
@@ -488,6 +488,19 @@ cases += [
     ("MSET of 300 pairs", seq(("FLUSHALL",), ("MSET", *[x for i in range(300) for x in ("w:%d" % i, "v%d" % i)]), ("DBSIZE",), ("GET", "w:299"))),
     ("MSETNX of 300 pairs, one of them there", seq(("FLUSHALL",), ("SET", "w:150", "old"), ("MSETNX", *[x for i in range(300) for x in ("w:%d" % i, "v%d" % i)]), ("DBSIZE",), ("GET", "w:150"))),
     ("MGET of 500 keys in MULTI", seq(("FLUSHALL",), ("SET", "w:1", "x"), M, ("MGET", *["w:%d" % i for i in range(500)]), ("DEL", *["w:%d" % i for i in range(500)]), X)),
+]
+# COMMAND INFO (docs/design.md section 26): every command the cache implements answers what Redis does, in RESP2 and in RESP3. The names are the ones the source
+# dispatches on, the list tests/gen_cmdinfo.py also reads, so a command added without regenerating src/cmdinfo.cho is found here.
+import glob as _glob
+_names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "..", "src", "*.cho")) if not f.endswith("cmdinfo.cho") for n in re.findall(r'is_word\(name, "([A-Z]+)"\)', open(f).read())})
+for _n in _names:
+    cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
+    cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
+cases += [
+    ("COMMAND INFO of several names, in any case, with unknown ones", seq(("COMMAND", "INFO", "GeT", "nosuchcommand", "SET", "hset", "x|y"))),
+    ("COMMAND INFO of several names, RESP3", seq(("HELLO", "3"), ("COMMAND", "INFO", "get", "nosuchcommand", "expireat"))),
+    ("COMMAND INFO of an unknown name", seq(("COMMAND", "INFO", "nosuchcommand"))),
+    ("COMMAND INFO in MULTI", seq(M, ("COMMAND", "INFO", "get"), X)),
 ]
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,

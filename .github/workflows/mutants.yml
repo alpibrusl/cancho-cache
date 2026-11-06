@@ -20,6 +20,8 @@ on:
       - src/glob.cho
       - src/pool.cho
       - src/stream.cho
+      - src/cmdinfo.cho
+      - tests/gen_cmdinfo.py
       - src/commands.cho
       - tests/transactions.py
       - tests/differential.py

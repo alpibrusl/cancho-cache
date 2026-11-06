@@ -958,7 +958,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         return session.config(view, table, sc, at, st, world, link[3]);
     }
     if reply.is_word(name, "COMMAND") {
-        return session.command(view, table, sc, at);
+        return session.command(view, table, sc, at, link[3]);
     }
     if reply.is_word(name, "QUIT") {
         return session.quit(sc, at, link);

@@ -32,8 +32,9 @@ git clone https://github.com/alpibrusl/cancho
 git clone https://github.com/alpibrusl/cancho-cache && cd cancho-cache
 
 REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision CI uses
-(cd ../cancho && git checkout "$REV" && cargo build --release -p cancho)
-export CANCHO=$PWD/../cancho/target/release/cancho
+# the compiler written in cancho, built from its seed by clang (no Rust); it must reproduce itself byte for byte
+(cd ../cancho && git checkout "$REV" && sh scripts/build-standalone.sh --out "$PWD/standalone" --rev "$REV" --seed)
+export CANCHO=$PWD/../cancho/standalone/cancho
 
 mkdir -p build
 $CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho -o build/cache

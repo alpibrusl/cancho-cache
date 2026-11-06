@@ -37,7 +37,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision
 export CANCHO=$PWD/../cancho/standalone/cancho
 
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, noeviction | allkeys-lru
 redis-cli -p 6379 PING                 # PONG
@@ -79,7 +79,7 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho --std
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho --std
 # performs: args, clock, conn_accept, conn_read, conn_write, err_write, fs_read("/dev/urandom"), heap, net_in(""), poll
 # never touches: foreign code
 
@@ -170,6 +170,7 @@ src/glob.cho       the pattern matcher of KEYS and SCAN MATCH
 src/pool.cho       pools of fixed buffer blocks lent to connections
 src/stream.cho     the commands that carry a value too long for a block in pieces (SET, SETEX, PSETEX in; GET out)
 src/cmdinfo.cho    GENERATED: what COMMAND INFO answers for each command, copied from Redis 7.0 (tests/gen_cmdinfo.py)
+src/cmddocs.cho    GENERATED: what COMMAND DOCS answers (the same generator)
 src/reply.cho      reply helpers shared by the two
 src/store.cho      the memory: arena, key table, expiry, eviction, compaction
 tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)

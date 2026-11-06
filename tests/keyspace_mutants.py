@@ -43,6 +43,7 @@ MUTANTS = [
     ("COMMAND COUNT is one more than the list", "session.cho", "        return reply.put_integer(sc, at, cmdinfo.count());", "        return reply.put_integer(sc, at, cmdinfo.count() + 1);", ("py", "session.py")),
     ("COMMAND GETKEYS answers the first key only", "session.cho", "        i = i + step;\n    }\n    return o;", "        i = i + step + n;\n    }\n    return o;", ("diff", "COMMAND GETKEYS, several keys")),
     ("COMMAND GETKEYS looks at the arity before the keys", "session.cho", "    if first == 0 {\n        return reply.put(sc, at, \"-ERR The command has no key arguments\\r\\n\");\n    }\n    if arity > 0", "    if arity > 0", ("diff", "COMMAND GETKEYS, commands without keys")),
+    ("COMMAND DOCS answers every name asked, known or not", "session.cho", "                if cmdinfo.known(reply.arg_of(view, table, k)) {\n                    found = found + 1;\n                }", "                found = found + 1;", ("diff", "COMMAND DOCS of several names")),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]
 

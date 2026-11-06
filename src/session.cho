@@ -2,6 +2,7 @@ edition 5;
 
 module session;
 
+import cmddocs;
 import cmdinfo;
 import reply;
 import store;
@@ -554,7 +555,7 @@ fn getkeys[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int
 
 // `COMMAND`, `COMMAND COUNT`, `COMMAND LIST`, `COMMAND INFO [name ...]` (`docs/design.md` section 26). The entries are Redis 7.0's own for every command
 // this cache implements (`cmdinfo`, generated from the oracle), so a client that reads arity, flags and key positions to find the keys of a command
-// gets what Redis would tell it. `COMMAND DOCS` is still empty, and `COMMAND INFO` of a subcommand (`config|get`) is not built.
+// gets what Redis would tell it. `COMMAND INFO` and `COMMAND DOCS` of a subcommand by name (`config|get`) are not built.
 pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, proto: int) -> [] int {
     let argc = table[0];
     let resp3 = proto == 3;
@@ -589,7 +590,35 @@ pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at:
         return getkeys(view, table, sc, at);
     }
     if reply.is_word(sub, "DOCS") {
-        return reply.put(sc, at, "*0\r\n");
+        var found = cmdinfo.count();
+        if argc > 2 {
+            found = 0;
+            var k = 2;
+            while k < argc {
+                if cmdinfo.known(reply.arg_of(view, table, k)) {
+                    found = found + 1;
+                }
+                k = k + 1;
+            }
+        }
+        // A map of name to docs: RESP3's own type, and in RESP2 an array of twice as many.
+        var head = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "%"), found), "\r\n");
+        if !resp3 {
+            head = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), 2 * found), "\r\n");
+        }
+        if argc == 2 {
+            return cmddocs.put_all_docs(sc, head, resp3);
+        }
+        var o = head;
+        var i = 2;
+        while i < argc {
+            let (hit, end) = cmddocs.put_docs(reply.arg_of(view, table, i), sc, o, resp3);
+            if hit {
+                o = end;
+            }
+            i = i + 1;
+        }
+        return o;
     }
     var shown = len(sub);
     if shown > 128 {

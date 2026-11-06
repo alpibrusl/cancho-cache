@@ -797,6 +797,236 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
     return (false, 0, 0, 0, 0);
 }
 
+// Whether `name` (any case) is a command in the table.
+pub fn known[&w](name: &w [byte]) -> [] bool {
+    if reply.is_word(name, "APPEND") {
+        return true;
+    }
+    if reply.is_word(name, "AUTH") {
+        return true;
+    }
+    if reply.is_word(name, "CLIENT") {
+        return true;
+    }
+    if reply.is_word(name, "COMMAND") {
+        return true;
+    }
+    if reply.is_word(name, "CONFIG") {
+        return true;
+    }
+    if reply.is_word(name, "COPY") {
+        return true;
+    }
+    if reply.is_word(name, "DBSIZE") {
+        return true;
+    }
+    if reply.is_word(name, "DECR") {
+        return true;
+    }
+    if reply.is_word(name, "DECRBY") {
+        return true;
+    }
+    if reply.is_word(name, "DEL") {
+        return true;
+    }
+    if reply.is_word(name, "DISCARD") {
+        return true;
+    }
+    if reply.is_word(name, "ECHO") {
+        return true;
+    }
+    if reply.is_word(name, "EXEC") {
+        return true;
+    }
+    if reply.is_word(name, "EXISTS") {
+        return true;
+    }
+    if reply.is_word(name, "EXPIRE") {
+        return true;
+    }
+    if reply.is_word(name, "EXPIREAT") {
+        return true;
+    }
+    if reply.is_word(name, "EXPIRETIME") {
+        return true;
+    }
+    if reply.is_word(name, "FLUSHALL") {
+        return true;
+    }
+    if reply.is_word(name, "FLUSHDB") {
+        return true;
+    }
+    if reply.is_word(name, "GET") {
+        return true;
+    }
+    if reply.is_word(name, "GETDEL") {
+        return true;
+    }
+    if reply.is_word(name, "GETEX") {
+        return true;
+    }
+    if reply.is_word(name, "GETRANGE") {
+        return true;
+    }
+    if reply.is_word(name, "GETSET") {
+        return true;
+    }
+    if reply.is_word(name, "HDEL") {
+        return true;
+    }
+    if reply.is_word(name, "HELLO") {
+        return true;
+    }
+    if reply.is_word(name, "HEXISTS") {
+        return true;
+    }
+    if reply.is_word(name, "HGET") {
+        return true;
+    }
+    if reply.is_word(name, "HGETALL") {
+        return true;
+    }
+    if reply.is_word(name, "HINCRBY") {
+        return true;
+    }
+    if reply.is_word(name, "HKEYS") {
+        return true;
+    }
+    if reply.is_word(name, "HLEN") {
+        return true;
+    }
+    if reply.is_word(name, "HMGET") {
+        return true;
+    }
+    if reply.is_word(name, "HMSET") {
+        return true;
+    }
+    if reply.is_word(name, "HRANDFIELD") {
+        return true;
+    }
+    if reply.is_word(name, "HSCAN") {
+        return true;
+    }
+    if reply.is_word(name, "HSET") {
+        return true;
+    }
+    if reply.is_word(name, "HSETNX") {
+        return true;
+    }
+    if reply.is_word(name, "HSTRLEN") {
+        return true;
+    }
+    if reply.is_word(name, "HVALS") {
+        return true;
+    }
+    if reply.is_word(name, "INCR") {
+        return true;
+    }
+    if reply.is_word(name, "INCRBY") {
+        return true;
+    }
+    if reply.is_word(name, "INFO") {
+        return true;
+    }
+    if reply.is_word(name, "KEYS") {
+        return true;
+    }
+    if reply.is_word(name, "MGET") {
+        return true;
+    }
+    if reply.is_word(name, "MSET") {
+        return true;
+    }
+    if reply.is_word(name, "MSETNX") {
+        return true;
+    }
+    if reply.is_word(name, "MULTI") {
+        return true;
+    }
+    if reply.is_word(name, "OBJECT") {
+        return true;
+    }
+    if reply.is_word(name, "PERSIST") {
+        return true;
+    }
+    if reply.is_word(name, "PEXPIRE") {
+        return true;
+    }
+    if reply.is_word(name, "PEXPIREAT") {
+        return true;
+    }
+    if reply.is_word(name, "PEXPIRETIME") {
+        return true;
+    }
+    if reply.is_word(name, "PING") {
+        return true;
+    }
+    if reply.is_word(name, "PSETEX") {
+        return true;
+    }
+    if reply.is_word(name, "PTTL") {
+        return true;
+    }
+    if reply.is_word(name, "QUIT") {
+        return true;
+    }
+    if reply.is_word(name, "RANDOMKEY") {
+        return true;
+    }
+    if reply.is_word(name, "RENAME") {
+        return true;
+    }
+    if reply.is_word(name, "RENAMENX") {
+        return true;
+    }
+    if reply.is_word(name, "RESET") {
+        return true;
+    }
+    if reply.is_word(name, "SCAN") {
+        return true;
+    }
+    if reply.is_word(name, "SELECT") {
+        return true;
+    }
+    if reply.is_word(name, "SET") {
+        return true;
+    }
+    if reply.is_word(name, "SETEX") {
+        return true;
+    }
+    if reply.is_word(name, "SETNX") {
+        return true;
+    }
+    if reply.is_word(name, "SETRANGE") {
+        return true;
+    }
+    if reply.is_word(name, "STRLEN") {
+        return true;
+    }
+    if reply.is_word(name, "SUBSTR") {
+        return true;
+    }
+    if reply.is_word(name, "TOUCH") {
+        return true;
+    }
+    if reply.is_word(name, "TTL") {
+        return true;
+    }
+    if reply.is_word(name, "TYPE") {
+        return true;
+    }
+    if reply.is_word(name, "UNLINK") {
+        return true;
+    }
+    if reply.is_word(name, "UNWATCH") {
+        return true;
+    }
+    if reply.is_word(name, "WATCH") {
+        return true;
+    }
+    return false;
+}
+
 // The names, lower case, as `COMMAND LIST` gives them.
 pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     var o = at;

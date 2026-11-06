@@ -497,11 +497,17 @@ _names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "
 for _n in [n for n in _names if n not in ("CLIENT", "COMMAND", "CONFIG", "OBJECT")]:
     cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
     cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
+    cases.append(("COMMAND DOCS %s" % _n.lower(), seq(("COMMAND", "DOCS", _n.lower()))))
+    cases.append(("COMMAND DOCS %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "DOCS", _n))))
 cases += [
     ("COMMAND INFO of several names, in any case, with unknown ones", seq(("COMMAND", "INFO", "GeT", "nosuchcommand", "SET", "hset", "x|y"))),
     ("COMMAND INFO of several names, RESP3", seq(("HELLO", "3"), ("COMMAND", "INFO", "get", "nosuchcommand", "expireat"))),
     ("COMMAND INFO of an unknown name", seq(("COMMAND", "INFO", "nosuchcommand"))),
     ("COMMAND INFO in MULTI", seq(M, ("COMMAND", "INFO", "get"), X)),
+    ("COMMAND DOCS of several names, an unknown one left out", seq(("COMMAND", "DOCS", "GeT", "nosuchcommand", "SET", "get"))),
+    ("COMMAND DOCS of several names, RESP3", seq(("HELLO", "3"), ("COMMAND", "DOCS", "get", "nosuchcommand", "expireat"))),
+    ("COMMAND DOCS of an unknown name", seq(("COMMAND", "DOCS", "nosuchcommand"), ("HELLO", "3"), ("COMMAND", "DOCS", "nosuchcommand"))),
+    ("COMMAND DOCS in MULTI", seq(M, ("COMMAND", "DOCS", "get"), X)),
 ]
 # COMMAND GETKEYS (docs/design.md section 26): the keys of a command line, and the refusals, in Redis's order.
 _gk = [

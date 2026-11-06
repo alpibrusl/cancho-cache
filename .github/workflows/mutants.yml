@@ -21,6 +21,7 @@ on:
       - src/pool.cho
       - src/stream.cho
       - src/cmdinfo.cho
+      - src/cmddocs.cho
       - tests/gen_cmdinfo.py
       - src/commands.cho
       - tests/transactions.py

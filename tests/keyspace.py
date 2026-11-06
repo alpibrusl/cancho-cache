@@ -119,6 +119,21 @@ try:
     def sorted_subs(entry):
         return entry[:9] + [sorted(entry[9], key=lambda e: e[0])]
 
+    def sorted_docs(docs):
+        # `COMMAND DOCS name`: [name, [k, v, k, v ...]]; the value of "subcommands" is a flat list of name, docs pairs.
+        out = []
+        for name, body in zip(docs[::2], docs[1::2]):
+            body = list(body)
+            for i in range(0, len(body), 2):
+                if body[i] == b"subcommands":
+                    sub = body[i + 1]
+                    body[i + 1] = sorted(zip(sub[::2], [repr(x) for x in sub[1::2]]))
+            out.append((name, body))
+        return out
+
+    for name in ("client", "command", "config", "object"):
+        want, got = r.ask("COMMAND", "DOCS", name), c.ask("COMMAND", "DOCS", name)
+        check("COMMAND DOCS %s agrees with Redis, subcommands in any order" % name, want and got and sorted_docs(want) == sorted_docs(got), repr(got)[:200])
     for name in ("client", "command", "config", "object"):
         want, got = r.ask("COMMAND", "INFO", name), c.ask("COMMAND", "INFO", name)
         check("COMMAND INFO %s agrees with Redis, subcommands in any order" % name, want is not None and got is not None and [sorted_subs(e) for e in want] == [sorted_subs(e) for e in got], repr(got)[:200])

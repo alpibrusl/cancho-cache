@@ -113,6 +113,16 @@ try:
     rnd = random.Random(20261007)
     alphabet = "ab-c*?[]\\^"
 
+    # --- COMMAND INFO of the commands that have subcommands: Redis lists the subcommands in the order of a dictionary that differs from one
+    # process to the next, so the entries are compared with the subcommands sorted by name (the other commands are compared byte for byte
+    # by tests/differential.py).
+    def sorted_subs(entry):
+        return entry[:9] + [sorted(entry[9], key=lambda e: e[0])]
+
+    for name in ("client", "command", "config", "object"):
+        want, got = r.ask("COMMAND", "INFO", name), c.ask("COMMAND", "INFO", name)
+        check("COMMAND INFO %s agrees with Redis, subcommands in any order" % name, want is not None and got is not None and [sorted_subs(e) for e in want] == [sorted_subs(e) for e in got], repr(got)[:200])
+
     # --- KEYS: random patterns over random keys, the sets compared with Redis
     keys = set()
     while len(keys) < 400:

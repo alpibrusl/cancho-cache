@@ -44,6 +44,12 @@ jobs:
       - name: Redis, the oracle of the differential test
         run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server
 
+      - name: src/cmdinfo.cho is what the generator writes from the oracle
+        working-directory: cache
+        run: |
+          python3 tests/gen_cmdinfo.py /tmp/cmdinfo.cho
+          diff /tmp/cmdinfo.cho src/cmdinfo.cho
+
       - name: Parser tests (every string up to six bytes)
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/resp_test.cho src/resp.cho --std

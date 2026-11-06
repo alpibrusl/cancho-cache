@@ -493,7 +493,8 @@ cases += [
 # dispatches on, the list tests/gen_cmdinfo.py also reads, so a command added without regenerating src/cmdinfo.cho is found here.
 import glob as _glob
 _names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "..", "src", "*.cho")) if not f.endswith("cmdinfo.cho") for n in re.findall(r'is_word\(name, "([A-Z]+)"\)', open(f).read())})
-for _n in _names:
+# Not these: Redis lists their subcommands in a different order in each process; tests/keyspace.py compares them with the subcommands sorted.
+for _n in [n for n in _names if n not in ("CLIENT", "COMMAND", "CONFIG", "OBJECT")]:
     cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
     cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
 cases += [

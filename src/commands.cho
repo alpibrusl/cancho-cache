@@ -520,7 +520,13 @@ fn command_expiretime[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b 
         return reply.put_integer(sc, at, 0 - 1);
     }
     if seconds {
-        return reply.put_integer(sc, at, (expiry + store.wall_of(st) + 500) / 1000);
+        // Rounded to the nearest second without adding to a time that may be the largest int (`PEXPIREAT key 9223372036854775807`).
+        let whole = expiry + store.wall_of(st);
+        var secs = whole / 1000;
+        if whole % 1000 >= 500 {
+            secs = secs + 1;
+        }
+        return reply.put_integer(sc, at, secs);
     }
     return reply.put_integer(sc, at, expiry + store.wall_of(st));
 }
@@ -1737,16 +1743,12 @@ fn hash_is_listpack[&d](data: &d [byte]) -> [] bool {
     return n <= 512;
 }
 
-// `OBJECT ENCODING key`, `OBJECT IDLETIME key`, `OBJECT FREQ key` (docs/design.md section 24). The encoding is worked out from the value, as
-// Redis's would be for a value set whole: `int` for a string that is a whole 64-bit integer, `embstr` up to 44 bytes, `raw` above; `listpack` for a
-// small hash and `hashtable` for a larger one.
-fn command_object[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
+// The refusal of an `OBJECT` command line whose subcommand is not one this server has, or has the wrong number of words: the error written at `at`
+// (and so an end past `at`), or `at` itself if the line is fine. A transaction asks this when it queues the command, as Redis does.
+pub fn object_check[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int) -> [] int {
     let argc = table[0];
     let sub = reply.arg_of(view, table, 1);
-    let is_enc = reply.is_word(sub, "ENCODING");
-    let is_idle = reply.is_word(sub, "IDLETIME");
-    let is_freq = reply.is_word(sub, "FREQ");
-    if !is_enc && !is_idle && !is_freq {
+    if !reply.is_word(sub, "ENCODING") && !reply.is_word(sub, "IDLETIME") && !reply.is_word(sub, "FREQ") {
         return reply.put(sc, reply.put(sc, reply.put(sc, at, "-ERR unknown subcommand '"), sub), "'. Try OBJECT HELP.\r\n");
     }
     if argc != 3 {
@@ -1757,6 +1759,21 @@ fn command_object[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byt
             i = i + 1;
         }
         return reply.put(sc, o, "' command\r\n");
+    }
+    return at;
+}
+
+// `OBJECT ENCODING key`, `OBJECT IDLETIME key`, `OBJECT FREQ key` (docs/design.md section 24). The encoding is worked out from the value, as
+// Redis's would be for a value set whole: `int` for a string that is a whole 64-bit integer, `embstr` up to 44 bytes, `raw` above; `listpack` for a
+// small hash and `hashtable` for a larger one.
+fn command_object[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
+    let argc = table[0];
+    let sub = reply.arg_of(view, table, 1);
+    let is_idle = reply.is_word(sub, "IDLETIME");
+    let is_freq = reply.is_word(sub, "FREQ");
+    let refusal = object_check(view, table, sc, at);
+    if refusal != at {
+        return refusal;
     }
     let key = reply.arg_of(view, table, 2);
     let e = store.peek(st, key, store.hash_of(st, key));

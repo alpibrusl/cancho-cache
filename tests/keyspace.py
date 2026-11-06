@@ -105,8 +105,9 @@ def scan_all(c, *options, count=10):
 
 
 redis_proc = start(["redis-server", "--port", str(REDIS_PORT), "--save", "", "--appendonly", "no", "--protected-mode", "no"], REDIS_PORT)
-cache_proc = start([CACHE, str(CACHE_PORT)], CACHE_PORT)
-small_proc = start([CACHE, str(SMALL_PORT), "1", "200"], SMALL_PORT)
+# A fixed hash seed: a random one (the default) decides whether a stale hash of a renamed key ever matters, so a mutant of RENAME was caught in some runs and not others.
+cache_proc = start([CACHE, str(CACHE_PORT), "64", "1000000", "noeviction", "--seed", "1"], CACHE_PORT)
+small_proc = start([CACHE, str(SMALL_PORT), "1", "200", "noeviction", "--seed", "1"], SMALL_PORT)
 try:
     r, c = Client(REDIS_PORT), Client(CACHE_PORT)
     rnd = random.Random(20261007)

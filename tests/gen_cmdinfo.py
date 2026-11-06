@@ -31,6 +31,54 @@ def cmd(*args):
     return out
 
 
+def parse(raw, i=0):
+    """One RESP value from raw[i:]: answers (node, next). A leaf is its bytes; an aggregate is (head, children), head being its first line."""
+    j = raw.index(b"\r\n", i) + 2
+    head = raw[i:j]
+    t = head[:1]
+    if t in (b"+", b"-", b":", b"_", b","):
+        return raw[i:j], j
+    if t == b"$":
+        n = int(head[1:-2])
+        if n < 0:
+            return raw[i:j], j
+        return raw[i:j + n + 2], j + n + 2
+    if t in (b"*", b"~", b">"):
+        n, kids = int(head[1:-2]), []
+        for _ in range(n):
+            kid, j = parse(raw, j)
+            kids.append(kid)
+        return (head, kids), j
+    if t == b"%":
+        n, kids = int(head[1:-2]), []
+        for _ in range(2 * n):
+            kid, j = parse(raw, j)
+            kids.append(kid)
+        return (head, kids), j
+    raise SystemExit("cannot parse %r" % raw[i:i + 20])
+
+
+def emit(node):
+    if isinstance(node, bytes):
+        return node
+    return node[0] + b"".join(emit(k) for k in node[1])
+
+
+def name_of(entry):
+    leaf = entry[1][0]
+    return leaf.split(b"\r\n", 1)[1][:-2]
+
+
+def canonical(raw):
+    """Redis lists a container command's subcommands in the order of a dictionary that differs from one process to the next, so the table
+    (which CI regenerates and compares) lists them sorted by name."""
+    node, end = parse(raw)
+    assert end == len(raw), "trailing bytes after an entry"
+    subs = node[1][9]
+    subs[1].sort(key=name_of)
+    return emit(node)
+
+
 def talk(sock, data, quiet=0.15):
     sock.sendall(data)
     sock.settimeout(quiet)
@@ -69,7 +117,7 @@ def main():
                 raw = talk(s, cmd("COMMAND", "INFO", name))
                 if not raw.startswith(b"*1\r\n"):
                     raise SystemExit("Redis does not know %s: %r" % (name, raw[:40]))
-                table[name] = raw[4:]
+                table[name] = canonical(raw[4:])
             entries.append(table)
             s.close()
         lines = []

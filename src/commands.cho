@@ -50,6 +50,26 @@ pub fn expire_at(amount: int, seconds: bool, now: int) -> [] (int, int) {
     return (0, ms + now);
 }
 
+// When a time of day `amount` (unix seconds if `seconds`, else milliseconds) is, in the store's milliseconds: `(0, when)`, or `(1, 0)` if
+// the amount does not fit. A time that has already passed comes back as the store's `now`, which every caller treats as over (Redis too
+// takes a negative time of day; it only deletes the key).
+pub fn expire_abs(amount: int, seconds: bool, wall: int, now: int) -> [] (int, int) {
+    var ms = amount;
+    if seconds {
+        if amount > reply.max_int() / 1000 || amount < reply.min_int() / 1000 {
+            return (1, 0);
+        }
+        ms = amount * 1000;
+    }
+    if ms <= now + wall {
+        if now < 1 {
+            return (0, 1);
+        }
+        return (0, now);
+    }
+    return (0, ms - wall);
+}
+
 // `SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | KEEPTTL]`
 fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
     let argc = table[0];
@@ -57,7 +77,7 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
     var xx = false;
     var get = false;
     var keepttl = false;
-    // 0 none, 1 EX, 2 PX; and where its argument is.
+    // 0 none, 1 EX, 2 PX, 3 EXAT, 4 PXAT; and where its argument is.
     var kind = 0;
     var amount_at = 0;
     var i = 3;
@@ -71,12 +91,20 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
             get = true;
         } else if reply.is_word(opt, "KEEPTTL") && kind == 0 {
             keepttl = true;
-        } else if reply.is_word(opt, "EX") && !keepttl && kind != 2 && i + 1 < argc {
+        } else if reply.is_word(opt, "EX") && !keepttl && (kind == 0 || kind == 1) && i + 1 < argc {
             kind = 1;
             amount_at = i + 1;
             i = i + 1;
-        } else if reply.is_word(opt, "PX") && !keepttl && kind != 1 && i + 1 < argc {
+        } else if reply.is_word(opt, "PX") && !keepttl && (kind == 0 || kind == 2) && i + 1 < argc {
             kind = 2;
+            amount_at = i + 1;
+            i = i + 1;
+        } else if reply.is_word(opt, "EXAT") && !keepttl && (kind == 0 || kind == 3) && i + 1 < argc {
+            kind = 3;
+            amount_at = i + 1;
+            i = i + 1;
+        } else if reply.is_word(opt, "PXAT") && !keepttl && (kind == 0 || kind == 4) && i + 1 < argc {
+            kind = 4;
             amount_at = i + 1;
             i = i + 1;
         } else {
@@ -96,7 +124,17 @@ fn command_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
         if amount <= 0 {
             return reply.put(sc, at, "-ERR invalid expire time in 'set' command\r\n");
         }
-        let (bad, when) = expire_at(amount, kind == 1, store.now_of(st));
+        var bad = 0;
+        var when = 0;
+        if kind >= 3 {
+            let (b2, w2) = expire_abs(amount, kind == 3, store.wall_of(st), store.now_of(st));
+            bad = b2;
+            when = w2;
+        } else {
+            let (b2, w2) = expire_at(amount, kind == 1, store.now_of(st));
+            bad = b2;
+            when = w2;
+        }
         if bad != 0 {
             return reply.put(sc, at, "-ERR invalid expire time in 'set' command\r\n");
         }
@@ -261,7 +299,7 @@ fn command_getrange[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [b
 fn command_getex[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
     let argc = table[0];
     var persist = false;
-    // 0 none, 1 EX, 2 PX; and where its argument is.
+    // 0 none, 1 EX, 2 PX, 3 EXAT, 4 PXAT; and where its argument is.
     var kind = 0;
     var amount_at = 0;
     var i = 2;
@@ -269,12 +307,20 @@ fn command_getex[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte
         let opt = reply.arg_of(view, table, i);
         if reply.is_word(opt, "PERSIST") && kind == 0 {
             persist = true;
-        } else if reply.is_word(opt, "EX") && !persist && kind != 2 && i + 1 < argc {
+        } else if reply.is_word(opt, "EX") && !persist && (kind == 0 || kind == 1) && i + 1 < argc {
             kind = 1;
             amount_at = i + 1;
             i = i + 1;
-        } else if reply.is_word(opt, "PX") && !persist && kind != 1 && i + 1 < argc {
+        } else if reply.is_word(opt, "PX") && !persist && (kind == 0 || kind == 2) && i + 1 < argc {
             kind = 2;
+            amount_at = i + 1;
+            i = i + 1;
+        } else if reply.is_word(opt, "EXAT") && !persist && (kind == 0 || kind == 3) && i + 1 < argc {
+            kind = 3;
+            amount_at = i + 1;
+            i = i + 1;
+        } else if reply.is_word(opt, "PXAT") && !persist && (kind == 0 || kind == 4) && i + 1 < argc {
+            kind = 4;
             amount_at = i + 1;
             i = i + 1;
         } else {
@@ -300,7 +346,17 @@ fn command_getex[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte
         if amount <= 0 {
             return reply.put(sc, at, "-ERR invalid expire time in 'getex' command\r\n");
         }
-        let (bad, at_when) = expire_at(amount, kind == 1, store.now_of(st));
+        var bad = 0;
+        var at_when = 0;
+        if kind >= 3 {
+            let (b2, w2) = expire_abs(amount, kind == 3, store.wall_of(st), store.now_of(st));
+            bad = b2;
+            at_when = w2;
+        } else {
+            let (b2, w2) = expire_at(amount, kind == 1, store.now_of(st));
+            bad = b2;
+            at_when = w2;
+        }
         if bad != 0 {
             return reply.put(sc, at, "-ERR invalid expire time in 'getex' command\r\n");
         }
@@ -350,7 +406,7 @@ fn add_to[&k, &b, &s, &t](key: &k [byte], delta: int, sc: &!b [byte], at: int, s
 }
 
 // `EXPIRE key seconds [NX | XX | GT | LT]` and `PEXPIRE key milliseconds [...]`.
-fn command_expire[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, seconds: bool) -> [] int {
+fn command_expire[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, seconds: bool, absolute: bool) -> [] int {
     let argc = table[0];
     let (status, amount) = reply.parse_int(reply.arg_of(view, table, 2));
     if status != 0 {
@@ -383,8 +439,24 @@ fn command_expire[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byt
         return reply.put(sc, at, "-ERR GT and LT options at the same time are not compatible\r\n");
     }
     let now = store.now_of(st);
-    let (bad, when) = expire_at(amount, seconds, now);
+    var bad = 0;
+    var when = 0;
+    if absolute {
+        let (b2, w2) = expire_abs(amount, seconds, store.wall_of(st), now);
+        bad = b2;
+        when = w2;
+    } else {
+        let (b2, w2) = expire_at(amount, seconds, now);
+        bad = b2;
+        when = w2;
+    }
     if bad != 0 {
+        if absolute && seconds {
+            return reply.put(sc, at, "-ERR invalid expire time in 'expireat' command\r\n");
+        }
+        if absolute {
+            return reply.put(sc, at, "-ERR invalid expire time in 'pexpireat' command\r\n");
+        }
         if seconds {
             return reply.put(sc, at, "-ERR invalid expire time in 'expire' command\r\n");
         }
@@ -434,6 +506,23 @@ fn command_ttl[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
         return reply.put_integer(sc, at, (left + 500) / 1000);
     }
     return reply.put_integer(sc, at, left);
+}
+
+// `EXPIRETIME key` (unix seconds) and `PEXPIRETIME key` (unix milliseconds): -2 if there is no such key, -1 if it has no expiry.
+fn command_expiretime[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, seconds: bool) -> [] int {
+    let key = reply.arg_of(view, table, 1);
+    let e = store.find(st, key, store.hash_of(st, key));
+    if e < 0 {
+        return reply.put_integer(sc, at, 0 - 2);
+    }
+    let expiry = store.expiry_of(st, e);
+    if expiry == 0 {
+        return reply.put_integer(sc, at, 0 - 1);
+    }
+    if seconds {
+        return reply.put_integer(sc, at, (expiry + store.wall_of(st) + 500) / 1000);
+    }
+    return reply.put_integer(sc, at, expiry + store.wall_of(st));
 }
 
 // `SETEX key seconds value` and `PSETEX key milliseconds value`.
@@ -561,11 +650,17 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return add_to(reply.arg_of(view, table, 1), n, sc, at, st, tmp);
     }
-    if reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") {
+    if reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "EXPIREAT") || reply.is_word(name, "PEXPIREAT") {
         if argc < 3 {
             return reply.wrong_arguments(sc, at, name);
         }
-        return command_expire(view, table, sc, at, st, reply.is_word(name, "EXPIRE"));
+        return command_expire(view, table, sc, at, st, reply.is_word(name, "EXPIRE") || reply.is_word(name, "EXPIREAT"), reply.is_word(name, "EXPIREAT") || reply.is_word(name, "PEXPIREAT"));
+    }
+    if reply.is_word(name, "EXPIRETIME") || reply.is_word(name, "PEXPIRETIME") {
+        if argc != 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_expiretime(view, table, sc, at, st, reply.is_word(name, "EXPIRETIME"));
     }
     if reply.is_word(name, "TTL") || reply.is_word(name, "PTTL") {
         if argc != 2 {
@@ -1889,7 +1984,7 @@ fn command_hset[&v, &t, &b, &s, &x](view: &v [byte], table: &t [int], sc: &!b [b
 // does not know. These are Redis 7.0's, and `tests/differential.py` checks every one against Redis by queueing the command with one word
 // too few, exactly enough and one too many.
 pub fn arity[&w](name: &w [byte]) -> [] int {
-    if reply.is_word(name, "GET") || reply.is_word(name, "ECHO") || reply.is_word(name, "INCR") || reply.is_word(name, "DECR") || reply.is_word(name, "TTL") || reply.is_word(name, "PTTL") || reply.is_word(name, "PERSIST") || reply.is_word(name, "GETDEL") || reply.is_word(name, "STRLEN") || reply.is_word(name, "TYPE") || reply.is_word(name, "SELECT") || reply.is_word(name, "KEYS") {
+    if reply.is_word(name, "GET") || reply.is_word(name, "ECHO") || reply.is_word(name, "INCR") || reply.is_word(name, "DECR") || reply.is_word(name, "TTL") || reply.is_word(name, "PTTL") || reply.is_word(name, "EXPIRETIME") || reply.is_word(name, "PEXPIRETIME") || reply.is_word(name, "PERSIST") || reply.is_word(name, "GETDEL") || reply.is_word(name, "STRLEN") || reply.is_word(name, "TYPE") || reply.is_word(name, "SELECT") || reply.is_word(name, "KEYS") {
         return 2;
     }
     if reply.is_word(name, "INCRBY") || reply.is_word(name, "DECRBY") || reply.is_word(name, "SETNX") || reply.is_word(name, "GETSET") || reply.is_word(name, "RENAME") || reply.is_word(name, "RENAMENX") {
@@ -1928,7 +2023,7 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") {
         return 0 - 2;
     }
-    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") || reply.is_word(name, "COPY") {
+    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "EXPIREAT") || reply.is_word(name, "PEXPIREAT") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") || reply.is_word(name, "COPY") {
         return 0 - 3;
     }
     return 0;

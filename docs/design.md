@@ -406,7 +406,7 @@ Status: **built** (49 commands). The design, then what building it found.
 
 **Semantics taken from Redis's source, each with a differential case:** `SETRANGE` with no bytes to write answers the length and creates nothing; the string is limited, with Redis's error text, before the arena is asked (to 512 MiB (`proto-max-bulk-len`) in Redis; **here to 16 KiB, see 15.1**); `GETRANGE` converts negative indexes, answers an empty string when both are negative and the start is past the end (without that check a pair that both reach before the start would answer the first byte, which a mutant showed the first set of cases did not distinguish), and clamps; `GETEX` parses its options first (`EX`, `PX`, `PERSIST`, no combination of them), then looks the key up (a missing key answers null whatever the expiry argument is), then validates the number, and deletes the key if the new time has already passed; `MSETNX` looks at every key before writing any.
 
-**Not built, and why:** `GETEX ... EXAT|PXAT` and `SET ... EXAT|PXAT` name a time of day, and the cache has a monotonic clock and no calendar (the same known divergence as `EXPIREAT`); they answer `-ERR syntax error`.
+**Not built, and why:** `GETEX ... EXAT|PXAT` and `SET ... EXAT|PXAT` name a time of day, and the cache had a monotonic clock and no calendar; they answered `-ERR syntax error`. *Corrected in §25: cancho has `clock_unix_ms`, and they are built.*
 
 **Differences from Redis, stated:**
 
@@ -755,7 +755,7 @@ Issue #11 is three limits: arguments (a command took 64, so `MGET` of a hundred 
 
 **A deliberate difference.** There is one database, so `DB 0` is accepted and any other number answers `-ERR DB index is out of range`. Redis has 16 and takes `DB 1`; the check `COPY a b DB 1` is therefore not in the differential, and this is the same difference `SELECT 1` has (§12).
 
-**Not built:** `OBJECT`, `MEMORY USAGE`, `INCRBYFLOAT`, `LCS`, `COMMAND INFO/DOCS/GETKEYS`, and the absolute-time commands (`EXPIREAT` and kin: no calendar, §15) remain open in issue #10.
+**Not built:** `OBJECT` (built in §24), `MEMORY USAGE`, `INCRBYFLOAT`, `LCS`, `COMMAND INFO/DOCS/GETKEYS` remain open in issue #10. *(The absolute-time commands were listed here as blocked by there being no calendar; that was wrong, see §25.)*
 
 ## 24. `OBJECT ENCODING`, `IDLETIME`, `FREQ` (epic #8, issue #10, slice 4)
 
@@ -764,3 +764,13 @@ Issue #11 is three limits: arguments (a command took 64, so `MGET` of a hundred 
 **How.** The encoding is worked out from the bytes when asked, not recorded. `IDLETIME` needs the key's last-use stamp (`meta` slot 7) as it was, and `find` sets it to now, so `store.peek` is `find` without the stamp and `find` is `peek` plus the stamp. Redis's `OBJECT` does not touch the key either.
 
 **Where it differs, said first.** (1) Redis records an encoding when the value is written: a string made by `APPEND` or `SETRANGE` is `raw` however short, a hash that once grew past a limit stays `hashtable` after it shrinks, and a hash of 129 fields it was converted from stays so. This cache answers from what the value is now, so those cases differ. The differential does not do them. (2) `OBJECT REFCOUNT` and `OBJECT HELP` are not built and answer `unknown subcommand`. (3) `IDLETIME` counts the cache's millisecond clock, Redis's 1-second LRU clock; both read 0 for a key just written.
+
+## 25. Times of day: `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `EXAT`, `PXAT` (epic #8, issue #10, slice 5)
+
+**A claim corrected.** §15 and the first version of §23 said these could not be built because the cache has a monotonic clock and no calendar. The compiler has `clock_unix_ms(&Clock)` (`docs/native-sockets.md` §10.5 in the cancho repository), on the same `clock` capability the cache already holds, so the authority report does not widen.
+
+**How.** The store keeps expiries in its own milliseconds (`tick`'s monotonic clock). At start the cache reads the wall clock once and the store keeps the difference (`wall`: unix milliseconds minus monotonic ones). A time of day goes in as `T - wall` and `EXPIRETIME`/`PEXPIRETIME` add `wall` back, so a time given comes out as the same number, to the millisecond. A time at or before now is the store's `now`, which every caller already treats as over: `EXPIREAT` deletes the key (Redis does too, and answers 1), `GETEX` deletes it, `SET` stores a key that is gone at its next read. `EXAT 0`, `-5` and a time of day in seconds too large to be milliseconds are `invalid expire time in '<command>' command`, as in Redis. `EX`/`PX`/`EXAT`/`PXAT`/`KEEPTTL` exclude each other as before, and an option given twice, the last wins.
+
+**What it costs, said first.** The offset is read once, so the cache's idea of the date drifts from the machine's by however far the two clocks drift apart in the life of the process (and a clock step on the host is not followed): a key given `EXPIREAT` for a moment ahead may live a little longer or shorter than on Redis, which reads the wall clock every time. A key with a *relative* expiry is not affected. `TTL` of a key set by `EXPIREAT` is computed from the monotonic clock, so it stays correct across a clock step, and `EXPIRETIME` does not.
+
+**Gate**, fixed before the code: the differential cases for these commands have 0 differences (they use a time of day far ahead, 4102444800, and far behind, so that the answer does not depend on when the test runs, and `TTL` is not compared for them), the mutants for the offset, the seconds-to-milliseconds step, the past time and `SET`'s absolute branch are caught, and the arity sweep includes the four commands. The two known divergences for `SET … EXAT` and `EXPIREAT` in `tests/differential.py` are gone.

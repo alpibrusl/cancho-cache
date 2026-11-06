@@ -251,8 +251,6 @@ known = [
     ("HSCAN NOVALUES", cmd("HSET", "d:hsn", "a", "1") + cmd("HSCAN", "d:hsn", "0", "NOVALUES"), "NOVALUES is Redis 7.4's; the oracle is 7.0.15, which answers a syntax error, and the cache answers the fields alone"),
     ("inline PING", b"PING\r\n", "inline commands (typed into telnet) are not supported: design.md section 4"),
     ("bulk not followed by CRLF", b"*1\r\n$3\r\nabcde\r\n", "Redis skips two bytes after a bulk without checking them; the cache refuses (a request-smuggling-shaped ambiguity)"),
-    ("SET with EXAT", cmd("SET", "k:exat", "1", "EXAT", "99999999999"), "EXAT, PXAT, EXPIREAT and PEXPIREAT name a time of day, and the cache has a monotonic clock and no calendar"),
-    ("EXPIREAT", cmd("EXPIREAT", "k:exat", "99999999999"), "the same"),
     ("WATCH of nine keys", cmd("WATCH", *["w:%d" % i for i in range(9)]), "the cache follows at most eight watched keys per connection (design.md 14.3); Redis has no limit"),
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
@@ -444,6 +442,16 @@ cases += [
     ("OBJECT IDLETIME and FREQ", seq(("FLUSHALL",), ("SET", "o:a", "x"), ("OBJECT", "IDLETIME", "o:a"), ("OBJECT", "FREQ", "o:a"), ("OBJECT", "idletime", "o:a"))),
     ("OBJECT errors", seq(("OBJECT",), ("OBJECT", "FOO"), ("OBJECT", "Foo", "a"), ("OBJECT", "FOO", "a", "b", "c"), ("OBJECT", "ENCODING"), ("OBJECT", "ENCODING", "a", "b"), ("OBJECT", "IdleTime"), ("OBJECT", "FREQ", "a", "b"))),
     ("OBJECT in MULTI", seq(("FLUSHALL",), ("SET", "o:a", "7"), M, ("OBJECT", "ENCODING", "o:a"), ("OBJECT",), ("OBJECT", "ENCODING"), X)),
+    ("EXPIREAT, EXPIRETIME and PEXPIRETIME", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("EXPIRETIME", "t:a"), ("EXPIREAT", "t:a", "4102444800"), ("EXPIRETIME", "t:a"), ("PEXPIRETIME", "t:a"), ("EXISTS", "t:a"), ("PERSIST", "t:a"), ("EXPIRETIME", "t:a"))),
+    ("PEXPIREAT keeps its milliseconds", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("PEXPIREAT", "t:a", "4102444800123"), ("PEXPIRETIME", "t:a"), ("EXPIRETIME", "t:a"), ("PEXPIREAT", "t:a", "4102444800500"), ("EXPIRETIME", "t:a"))),
+    ("EXPIREAT in the past deletes", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("EXPIREAT", "t:a", "1000"), ("EXISTS", "t:a"), ("SET", "t:b", "x"), ("PEXPIREAT", "t:b", "-5"), ("GET", "t:b"), ("EXPIREAT", "t:zz", "1000"))),
+    ("EXPIREAT options and errors", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("EXPIREAT", "t:a", "x"), ("EXPIREAT", "t:a", "9999999999999999"), ("PEXPIREAT", "t:a", "9223372036854775807"), ("EXPIREAT", "t:a", "4102444800", "NX"), ("EXPIREAT", "t:a", "4102444800", "NX"), ("EXPIREAT", "t:a", "4102444801", "GT"), ("EXPIRETIME", "t:a"), ("EXPIREAT", "t:a", "4102444802", "LT"), ("EXPIREAT", "t:a", "4102444800", "NX", "XX"), ("EXPIREAT", "t:a", "1", "BOGUS"), ("EXPIREAT",), ("EXPIRETIME",), ("PEXPIRETIME", "a", "b"))),
+    ("EXPIRETIME of a missing key", seq(("FLUSHALL",), ("EXPIRETIME", "t:x"), ("PEXPIRETIME", "t:x"))),
+    ("SET with EXAT and PXAT", seq(("FLUSHALL",), ("SET", "t:a", "x", "EXAT", "4102444800"), ("EXPIRETIME", "t:a"), ("SET", "t:b", "x", "PXAT", "4102444800500"), ("PEXPIRETIME", "t:b"), ("SET", "t:c", "x", "EXAT", "4102444800", "GET"), ("SET", "t:c", "y", "PXAT", "4102444800999", "XX"), ("PEXPIRETIME", "t:c"))),
+    ("SET with EXAT in the past, zero and too large", seq(("FLUSHALL",), ("SET", "t:a", "x", "EXAT", "1000"), ("GET", "t:a"), ("SET", "t:a", "x", "EXAT", "0"), ("SET", "t:a", "x", "EXAT", "-5"), ("SET", "t:a", "x", "EXAT", "9999999999999999"), ("SET", "t:a", "x", "PXAT", "0"), ("EXISTS", "t:a"))),
+    ("SET with clashing expiry options", seq(("FLUSHALL",), ("SET", "t:a", "x", "EXAT", "5", "PXAT", "5"), ("SET", "t:a", "x", "EX", "5", "EXAT", "4102444800"), ("SET", "t:a", "x", "PX", "5", "PXAT", "4102444800"), ("SET", "t:a", "x", "KEEPTTL", "EXAT", "4102444800"), ("SET", "t:a", "x", "EXAT", "4102444800", "KEEPTTL"), ("SET", "t:a", "x", "EXAT"), ("SET", "t:a", "x", "EXAT", "4102444800", "EXAT", "4102444900"), ("EXPIRETIME", "t:a"))),
+    ("GETEX with EXAT and PXAT", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("GETEX", "t:a", "EXAT", "4102444800"), ("EXPIRETIME", "t:a"), ("GETEX", "t:a", "PXAT", "4102444800500"), ("PEXPIRETIME", "t:a"), ("GETEX", "t:a", "EXAT", "1000"), ("EXISTS", "t:a"), ("SET", "t:b", "x"), ("GETEX", "t:b", "EXAT", "0"), ("GETEX", "t:b", "EXAT", "4102444800", "PX", "5"), ("GETEX", "t:b", "PERSIST", "EXAT", "4102444800"), ("GETEX", "t:b", "EXAT", "9999999999999999"))),
+    ("EXPIREAT and EXAT in MULTI", seq(("FLUSHALL",), ("SET", "t:a", "x"), M, ("EXPIREAT", "t:a", "4102444800"), ("EXPIRETIME", "t:a"), ("SET", "t:b", "x", "EXAT", "4102444800"), ("EXPIRETIME", "t:b"), X)),
     ("RENAME in MULTI", seq(("FLUSHALL",), ("SET", "r:a", "x"), M, ("RENAME", "r:a", "r:b"), ("GET", "r:b"), ("RENAMENX", "r:b", "r:c"), ("RENAME", "r:zz", "r:y"), X, ("GET", "r:c"))),
     ("RENAME dirties both names for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:b"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
     ("RENAME dirties the old name for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:a"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
@@ -483,9 +491,9 @@ cases += [
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT", "EXPIREAT", "PEXPIREAT", "EXPIRETIME", "PEXPIRETIME"]:
     for given in range(0, 5):
-        numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "SETEX", "PSETEX")
+        numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]
         cases.append(("arity of %s with %d words, queued" % (name, given), seq(M, (name, *args), X)))
 for name in ("CLIENT", "CONFIG", "AUTH", "SELECT", "NOSUCH"):

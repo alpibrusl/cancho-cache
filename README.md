@@ -6,7 +6,7 @@
 
 **A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that names the one file it reads (`/dev/urandom`, for the hash seed) and no other, and no foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis`, `node-redis` and `redis-rs` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha, a string-and-hash cache and not a Redis replacement.** It answers 71 of Redis 7.0's 240 commands; the data structures are strings and hashes (15 `H*` commands), no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+**Status: alpha, a string-and-hash cache and not a Redis replacement.** It answers 75 of Redis 7.0's 240 commands; the data structures are strings and hashes (15 `H*` commands), no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## What you get
 

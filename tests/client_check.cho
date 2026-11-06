@@ -1,0 +1,232 @@
+edition 5;
+
+import std.buffer;
+import std.bytes;
+import std.io;
+import client;
+import client_wire;
+
+// `client` against a real server (tests/client_check.sh starts one): the address and port are arguments.
+//
+//     client_check <ip> <port> [silent]       `silent` is a server that accepts and never answers: the deadline test
+
+fn say[&i, &t](io: &!i Io, text: &t [byte]) -> [io_write] int {
+    return io.write_all(io, text);
+}
+
+fn mark[&i](io: &!i Io, good: bool, name: &static [byte]) -> [io_write] int {
+    if good {
+        say(io, "ok   ");
+        say(io, name);
+        say(io, "\n");
+        return 0;
+    }
+    say(io, "FAIL ");
+    say(io, name);
+    say(io, "\n");
+    return 1;
+}
+
+fn number_of[&t](text: &t [byte]) -> [] int {
+    var v = 0;
+    var i = 0;
+    while i < len(text) {
+        v = v * 10 + int_of(text[i]) - 48;
+        i = i + 1;
+    }
+    return v;
+}
+
+// One command of one, two or three arguments, its reply bytes.
+fn ask[&h, &c, &k](heap: &!h Heap, cl: &!c client.Client, clock: &k Clock, a: &static [byte], b: &static [byte], c3: &static [byte], argc: int) -> [heap, poll, clock, conn_read, conn_write] (int, buffer.Buffer) {
+    var req = client_wire.command(heap, argc);
+    req = client_wire.add_arg(heap, req, a);
+    if argc > 1 {
+        req = client_wire.add_arg(heap, req, b);
+    }
+    if argc > 2 {
+        req = client_wire.add_arg(heap, req, c3);
+    }
+    var code = 0;
+    var data = buffer.empty(heap, 1);
+    borrow req as &rb in {
+        let (cd, dt) = client.call(heap, cl, clock, buffer.bytes(rb), 1, 100000, 2000);
+        code = cd;
+        buffer.drop(heap, data);
+        data = dt;
+    }
+    buffer.drop(heap, req);
+    return (code, data);
+}
+
+fn is[&b](reply: &b [byte], text: &static [byte]) -> [] bool {
+    return bytes.equal(reply, text);
+}
+
+fn run[&h, &n, &k, &i, &g](heap: &!h Heap, net: &n Net(""), clock: &k Clock, io: &!i Io, args: &g Args) -> [heap, args, net_out(""), poll, clock, conn_read, conn_write, io_write] int {
+    if arg_count(args) < 3 {
+        say(io, "usage: client_check <ip> <port> [silent]\n");
+        return 2;
+    }
+    var fails = 0;
+    match client.open_to(heap, net, clock, arg(args, 1), number_of(arg(args, 2)), 2000, 65536) {
+        client.Linked::Down(code) => {
+            fails = fails + mark(io, false, "connected");
+            return 1;
+        }
+        client.Linked::Up(c) => {
+            var cl = c;
+            fails = fails + mark(io, true, "connected");
+            if arg_count(args) > 3 {
+                borrow mut cl as &!cw in {
+                    // a server that never answers: the call ends at its deadline, and the connection is down
+                    var req = client_wire.command(heap, 1);
+                    req = client_wire.add_arg(heap, req, "PING");
+                    var code = 0;
+                    var t0 = clock_ms(clock);
+                    borrow req as &rb in {
+                        let (cd, out) = client.call(heap, cw, clock, buffer.bytes(rb), 1, 1000, 300);
+                        code = cd;
+                        buffer.drop(heap, out);
+                    }
+                    buffer.drop(heap, req);
+                    let took = clock_ms(clock) - t0;
+                    fails = fails + mark(io, code == client.timed_out(), "a server that never answers: timed out");
+                    fails = fails + mark(io, took >= 290 && took < 1000, "after about the deadline, not much later");
+                    var up = true;
+                    up = client.is_up(cw);
+                    fails = fails + mark(io, !up, "and the connection is down");
+                    let (c2, o2) = ask(heap, cw, clock, "PING", "", "", 1);
+                    fails = fails + mark(io, c2 == client.closed(), "a call on a down connection says so");
+                    buffer.drop(heap, o2);
+                }
+                client.close(heap, cl);
+                return fails;
+            }
+            borrow mut cl as &!cw in {
+                let (c1, r1) = ask(heap, cw, clock, "PING", "", "", 1);
+                borrow r1 as &r1b in {
+                    fails = fails + mark(io, c1 == 0 && is(buffer.bytes(r1b), "+PONG\r\n"), "PING answers +PONG");
+                }
+                buffer.drop(heap, r1);
+                let (c2, r2) = ask(heap, cw, clock, "SET", "ck", "v1", 3);
+                borrow r2 as &r2b in {
+                    fails = fails + mark(io, c2 == 0 && is(buffer.bytes(r2b), "+OK\r\n"), "SET");
+                }
+                buffer.drop(heap, r2);
+                let (c3, r3) = ask(heap, cw, clock, "GET", "ck", "", 2);
+                borrow r3 as &r3b in {
+                    fails = fails + mark(io, c3 == 0 && is(buffer.bytes(r3b), "$2\r\nv1\r\n"), "GET gives the bulk");
+                }
+                buffer.drop(heap, r3);
+                let (c4, r4) = ask(heap, cw, clock, "GET", "nokey", "", 2);
+                borrow r4 as &r4b in {
+                    fails = fails + mark(io, c4 == 0 && is(buffer.bytes(r4b), "$-1\r\n"), "a miss is a null, not an empty string");
+                }
+                buffer.drop(heap, r4);
+                let (c5, r5) = ask(heap, cw, clock, "INCR", "cnt", "", 2);
+                borrow r5 as &r5b in {
+                    fails = fails + mark(io, c5 == 0 && is(buffer.bytes(r5b), ":1\r\n"), "INCR");
+                }
+                buffer.drop(heap, r5);
+                let (c6, r6) = ask(heap, cw, clock, "NOSUCHCMD", "ck", "x", 3);
+                borrow r6 as &r6b in {
+                    fails = fails + mark(io, c6 == 0 && is(buffer.bytes(r6b), "-ERR unknown command 'NOSUCHCMD', with args beginning with: 'ck' 'x' \r\n"), "an error reply is a reply, and its text is the server's");
+                }
+                buffer.drop(heap, r6);
+                // a pipeline: three commands written together, three replies read in order
+                var pipe = client_wire.command(heap, 3);
+                pipe = client_wire.add_arg(heap, pipe, "SET");
+                pipe = client_wire.add_arg(heap, pipe, "p1");
+                pipe = client_wire.add_arg(heap, pipe, "one");
+                var second = client_wire.command(heap, 2);
+                second = client_wire.add_arg(heap, second, "GET");
+                second = client_wire.add_arg(heap, second, "p1");
+                var third = client_wire.command(heap, 2);
+                third = client_wire.add_arg(heap, third, "INCR");
+                third = client_wire.add_arg(heap, third, "cnt");
+                borrow second as &sb in {
+                    pipe = buffer.append(heap, pipe, buffer.bytes(sb));
+                }
+                borrow third as &tb in {
+                    pipe = buffer.append(heap, pipe, buffer.bytes(tb));
+                }
+                buffer.drop(heap, second);
+                buffer.drop(heap, third);
+                borrow pipe as &pb in {
+                    let (cp, rp) = client.call(heap, cw, clock, buffer.bytes(pb), 3, 100000, 2000);
+                    borrow rp as &rpb in {
+                        fails = fails + mark(io, cp == 0 && is(buffer.bytes(rpb), "+OK\r\n$3\r\none\r\n:2\r\n"), "a pipeline of three: three replies, in order");
+                    }
+                    buffer.drop(heap, rp);
+                }
+                buffer.drop(heap, pipe);
+                // a value of 8000 bytes comes back whole
+                var big = buffer.empty(heap, 8100);
+                var j = 0;
+                while j < 8000 {
+                    big = buffer.push(heap, big, byte_of(97 + j % 26));
+                    j = j + 1;
+                }
+                var setreq = client_wire.command(heap, 3);
+                setreq = client_wire.add_arg(heap, setreq, "SET");
+                setreq = client_wire.add_arg(heap, setreq, "big");
+                borrow big as &bgb in {
+                    setreq = client_wire.add_arg(heap, setreq, buffer.bytes(bgb));
+                }
+                borrow setreq as &srb in {
+                    let (cs, rs) = client.call(heap, cw, clock, buffer.bytes(srb), 1, 100000, 2000);
+                    buffer.drop(heap, rs);
+                    fails = fails + mark(io, cs == 0, "SET of 8000 bytes");
+                }
+                buffer.drop(heap, setreq);
+                let (cg, rg) = ask(heap, cw, clock, "GET", "big", "", 2);
+                borrow rg as &rgb in {
+                    borrow big as &bgb2 in {
+                        fails = fails + mark(io, cg == 0 && len(buffer.bytes(rgb)) == 8000 + 9 && bytes.equal(buffer.bytes(rgb)[7..7 + 8000], buffer.bytes(bgb2)), "GET of 8000 bytes comes back byte for byte");
+                    }
+                }
+                buffer.drop(heap, rg);
+                buffer.drop(heap, big);
+                // a reply larger than the caller allows is a protocol error
+                var greq = client_wire.command(heap, 2);
+                greq = client_wire.add_arg(heap, greq, "GET");
+                greq = client_wire.add_arg(heap, greq, "big");
+                borrow greq as &gb in {
+                    let (cl2, rl2) = client.call(heap, cw, clock, buffer.bytes(gb), 1, 100, 2000);
+                    buffer.drop(heap, rl2);
+                    fails = fails + mark(io, cl2 == client.protocol(), "a reply over the caller's bound is a protocol error");
+                }
+                buffer.drop(heap, greq);
+            }
+            client.close(heap, cl);
+            return fails;
+        }
+    }
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock } = split(world);
+    release(ffi);
+    release(fs);
+    var console = io;
+    var h = heap;
+    var rc = 1;
+    borrow args as &g in {
+        borrow net as &n in {
+            borrow clock as &c in {
+                borrow mut console as &!i in {
+                    borrow mut h as &!hh in {
+                        rc = run(hh, n, c, i, g);
+                    }
+                }
+            }
+        }
+    }
+    release(net);
+    release(clock);
+    release(console);
+    release(h);
+    release(args);
+    return rc;
+}

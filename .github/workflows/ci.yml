@@ -66,6 +66,18 @@ jobs:
         working-directory: cache
         run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho -o build/cache
 
+      - name: Client against a real cache, a real Redis, and a server that never answers
+        working-directory: cache
+        run: CANCHO=../cancho/target/release/cancho bash tests/client_check.sh
+
+      - name: Client authority touches no file and no foreign code (the network is the address it is given)
+        working-directory: cache
+        run: |
+          ../cancho/target/release/cancho authority tests/client_check.cho src/client.cho src/client_wire.cho --std > /tmp/client_authority.txt
+          cat /tmp/client_authority.txt
+          sed -n '/^never touches/,/^unbounded/p' /tmp/client_authority.txt | grep -q 'the filesystem'
+          sed -n '/^never touches/,/^unbounded/p' /tmp/client_authority.txt | grep -q 'foreign code'
+
       - name: Authority has no ffi, and reads only /dev/urandom (the hash seed)
         working-directory: cache
         run: |

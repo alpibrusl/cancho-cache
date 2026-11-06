@@ -210,7 +210,7 @@ fn value[&d, &t](data: &d [byte], table: &!t [int], at: int, k: int, depth: int,
         return (after, k + 1, 0);
     }
     if t == '#' {
-        if e != at + 2 || (int_of(data[at + 1]) != 't' && int_of(data[at + 1]) != 'f') {
+        if e != at + 2 || int_of(data[at + 1]) != 't' && int_of(data[at + 1]) != 'f' {
             return (at, k, e_syntax());
         }
         table[b] = k_bool();
@@ -225,7 +225,7 @@ fn value[&d, &t](data: &d [byte], table: &!t [int], at: int, k: int, depth: int,
     }
     if t == '$' || t == '!' || t == '=' {
         let n = digits(data, at + 1, e);
-        if n == 0 - 999999999999 || n < 0 - 1 || (n == 0 - 1 && t != '$') {
+        if n == 0 - 999999999999 || n < 0 - 1 || n == 0 - 1 && t != '$' {
             return (at, k, e_syntax());
         }
         if n == 0 - 1 {
@@ -263,7 +263,7 @@ fn value[&d, &t](data: &d [byte], table: &!t [int], at: int, k: int, depth: int,
     }
     if t == '*' || t == '~' || t == '>' || t == '%' || t == '|' {
         let n = digits(data, at + 1, e);
-        if n == 0 - 999999999999 || n < 0 - 1 || (n == 0 - 1 && t != '*') {
+        if n == 0 - 999999999999 || n < 0 - 1 || n == 0 - 1 && t != '*' {
             return (at, k, e_syntax());
         }
         if n == 0 - 1 {

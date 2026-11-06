@@ -1,0 +1,222 @@
+edition 5;
+
+module client;
+
+import std.buffer;
+import std.conns;
+import std.io;
+import client_wire;
+
+// `client` -- a blocking client for a Redis-compatible server over `std.conns` and one poller (issue #44), the driver of `client_wire`: connect, send one command or several, read that
+// many replies, each call bounded by a deadline the caller names. One connection, owned by the caller; no pool; no reconnect and no retry (a retried `INCR` counts twice), so a call
+// that ends in `closed()` tells the caller exactly that and leaves what to do next to it. Plain TCP only (TLS waits for the server's, issue #16).
+//
+// Authority: `net_out` for the one address it is given, `conn_read`, `conn_write`, `poll`, `clock`. No file, no `Ffi`.
+
+pub fn ok() -> [] int {
+    return 0;
+}
+
+// The connection ended, or never began: the peer closed it, the connect failed, a read or write failed.
+pub fn closed() -> [] int {
+    return 1;
+}
+
+// The deadline passed.
+pub fn timed_out() -> [] int {
+    return 2;
+}
+
+// What the server sent is not a reply, or is larger than the caller allows.
+pub fn protocol() -> [] int {
+    return 3;
+}
+
+// The most nodes (see `client_wire`) one reply may have, and the room kept for them.
+fn max_nodes() -> [] int {
+    return 1024;
+}
+
+pub res struct Client {
+    poller: Poller,
+    tab: conns.Table,
+    slot: int,
+    up: bool,
+    // what has been read and not yet taken as a reply: `inbox[0..fill]`; the box is as big as the most the caller will take in at once
+    fill: int,
+    inbox: Box[[byte]],
+    events: Box[[int]],
+    nodes: Box[[int]],
+}
+
+pub enum Linked {
+    Up(Client),
+    Down(int),
+}
+
+// Wait until the connection is ready for `want` (1 read, 2 write) or the deadline: ok, `timed_out()` or `closed()`.
+fn wait[&p, &t, &e, &k](poller: &!p Poller, tab: &!t conns.Table, events: &!e [int], slot: int, clock: &k Clock, want: int, deadline: int) -> [poll, clock] int {
+    let left = deadline - clock_ms(clock);
+    if left <= 0 {
+        return timed_out();
+    }
+    if conns.rewatch(tab, poller, slot, 1, want) != 0 {
+        return closed();
+    }
+    let n = poller_wait(poller, events, left);
+    if n < 0 {
+        return closed();
+    }
+    if n == 0 {
+        return timed_out();
+    }
+    return ok();
+}
+
+// Connect to `ip` (an IPv4 literal) and `port`, within `timeout_ms`. `inbox_bytes` is the most the connection will hold of what the server has sent and the caller has not yet taken: the replies of one call, whole.
+pub fn open_to[&h, &n, &k, &a](heap: &!h Heap, net: &n Net(""), clock: &k Clock, ip: &a [byte], port: int, timeout_ms: int, inbox_bytes: int) -> [heap, net_out(""), poll, clock] Linked {
+    let deadline = clock_ms(clock) + timeout_ms;
+    match poller_new() {
+        Polling::Failed(e) => {
+            return Linked::Down(closed());
+        }
+        Polling::Ok(p) => {
+            var poller = p;
+            match tcp_connect_start(net, ip, port) {
+                Dialed::Failed(e) => {
+                    poller_close(poller);
+                    return Linked::Down(closed());
+                }
+                Dialed::Ok(conn) => {
+                    let (grown, slot) = conns.put(heap, conns.empty(heap, 4), conn);
+                    var tab = grown;
+                    var events = box_slice(heap, 8, 0);
+                    var code = closed();
+                    if slot >= 0 {
+                        borrow mut tab as &!tw in {
+                            borrow mut poller as &!pw in {
+                                borrow mut events as &!evw in {
+                                    if conns.watch(tw, pw, slot, 1, 2) == 0 {
+                                        code = wait(pw, tw, contents(evw), slot, clock, 2, deadline);
+                                        if code == ok() {
+                                            if conns.connect_status(tw, slot) != 0 {
+                                                code = closed();
+                                            } else {
+                                                conns.nodelay(tw, slot);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if code != ok() {
+                        if slot >= 0 {
+                            borrow mut tab as &!tw2 in {
+                                conns.close(tw2, slot);
+                            }
+                        }
+                        conns.drop(heap, tab);
+                        poller_close(poller);
+                        unbox_slice(heap, events);
+                        return Linked::Down(code);
+                    }
+                    return Linked::Up(Client { poller: poller, tab: tab, slot: slot, up: true, fill: 0, inbox: box_slice(heap, inbox_bytes, byte_of(0)), events: events, nodes: box_slice(heap, 4 * (max_nodes() + 1), 0) });
+                }
+            }
+        }
+    }
+}
+
+// Is the connection still up (a call that ended in anything but `ok()` or `protocol()` has ended it)?
+pub fn is_up[&c](cl: &c Client) -> [] bool {
+    return cl.up;
+}
+
+// Send `request` (one command, or several written one after another) and read `replies` replies, in order, within `timeout_ms` from now. Answers (code, the bytes of exactly those
+// replies); a reply is read with `client_wire.parse`. A reply of more than `max_reply` bytes in one string, or more than 1024 nodes, is a `protocol()` error. After `closed()` or
+// `timed_out()` the connection is down: the replies of whatever was sent are lost, and the caller may not tell if the server acted. Bytes read beyond the last reply are kept for the next call.
+pub fn call[&h, &c, &k, &q](heap: &!h Heap, cl: &!c Client, clock: &k Clock, request: &q [byte], replies: int, max_reply: int, timeout_ms: int) -> [heap, poll, clock, conn_read, conn_write] (int, buffer.Buffer) {
+    if !cl.up {
+        return (closed(), buffer.empty(heap, 1));
+    }
+    let deadline = clock_ms(clock) + timeout_ms;
+    var code = ok();
+    var sent = 0;
+    while code == ok() && sent < len(request) {
+        match conns.write(cl.tab, cl.slot, request[sent..len(request)]) {
+            Sent::Wrote(n) => {
+                sent = sent + n;
+            }
+            Sent::Again => {
+                code = wait(cl.poller, cl.tab, contents(cl.events), cl.slot, clock, 2, deadline);
+            }
+            Sent::Failed(e) => {
+                code = closed();
+            }
+        }
+    }
+    var got = 0;
+    var consumed = 0;
+    while code == ok() && got < replies {
+        let data = contents(cl.inbox)[consumed..cl.fill];
+        let r = client_wire.parse(data, contents(cl.nodes), max_reply, max_nodes());
+        if r > 0 {
+            consumed = consumed + r;
+            got = got + 1;
+        } else if r < 0 {
+            code = protocol();
+        } else if cl.fill >= len(contents(cl.inbox)) && consumed == 0 {
+            // the reply is not all here and there is no room for more
+            code = protocol();
+        } else if consumed > 0 && cl.fill >= len(contents(cl.inbox)) {
+            // make room: the replies already taken are gone from the front
+            code = protocol();
+        } else {
+            match conns.read(cl.tab, cl.slot, contents(cl.inbox)[cl.fill..len(contents(cl.inbox))]) {
+                Received::Data(n) => {
+                    cl.fill = cl.fill + n;
+                }
+                Received::End => {
+                    code = closed();
+                }
+                Received::Again => {
+                    code = wait(cl.poller, cl.tab, contents(cl.events), cl.slot, clock, 1, deadline);
+                }
+                Received::Failed(e) => {
+                    code = closed();
+                }
+            }
+        }
+    }
+    if code == closed() || code == timed_out() {
+        cl.up = false;
+    }
+    var out = buffer.empty(heap, 16);
+    if code == ok() {
+        out = buffer.append(heap, out, contents(cl.inbox)[0..consumed]);
+        // what was read beyond the last reply moves to the front for the next call
+        var i = 0;
+        while i < cl.fill - consumed {
+            contents(cl.inbox)[i] = contents(cl.inbox)[consumed + i];
+            i = i + 1;
+        }
+        cl.fill = cl.fill - consumed;
+    }
+    return (code, out);
+}
+
+// Close the connection and free everything. Always call it, whatever the state.
+pub fn close[&h](heap: &!h Heap, cl: Client) -> [heap] int {
+    let Client { poller, tab, slot, up, fill, inbox, events, nodes } = cl;
+    var t = tab;
+    borrow mut t as &!tw in {
+        conns.close(tw, slot);
+    }
+    conns.drop(heap, t);
+    poller_close(poller);
+    unbox_slice(heap, inbox);
+    unbox_slice(heap, events);
+    unbox_slice(heap, nodes);
+    return 0;
+}

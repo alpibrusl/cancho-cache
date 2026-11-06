@@ -9,143 +9,148 @@ fn parse_in[&t](data: &static [byte], table: &!t [int]) -> [] int {
 
 fn test_the_scalar_replies() -> [] int {
     region a {
-    let t = alloc_slice[a](24, 0);
-    test.assert_eq(parse_in("+OK\r\n", t), 5);
-    test.assert_eq(t[0], client_wire.k_simple());
-    test.assert(bytes.equal("+OK\r\n"[t[1]..t[2]], "OK"));
-    test.assert_eq(parse_in("-ERR no\r\n", t), 9);
-    test.assert_eq(t[0], client_wire.k_error());
-    test.assert(bytes.equal("-ERR no\r\n"[t[1]..t[2]], "ERR no"));
-    test.assert_eq(parse_in(":-42\r\n", t), 6);
-    test.assert_eq(t[0], client_wire.k_integer());
-    test.assert_eq(client_wire.int_value(":-42\r\n", t, 0), 0 - 42);
-    test.assert_eq(parse_in("$5\r\nhello\r\n", t), 11);
-    test.assert_eq(t[0], client_wire.k_bulk());
-    test.assert(bytes.equal("$5\r\nhello\r\n"[t[1]..t[2]], "hello"));
-    test.assert_eq(parse_in("$0\r\n\r\n", t), 6);
-    test.assert_eq(t[0], client_wire.k_bulk());
-    test.assert_eq(t[2] - t[1], 0);
-    test.assert_eq(parse_in("$-1\r\n", t), 5);
-    test.assert_eq(t[0], client_wire.k_null());
-    test.assert_eq(parse_in("*-1\r\n", t), 5);
-    test.assert_eq(t[0], client_wire.k_null());
-    test.assert_eq(parse_in("_\r\n", t), 3);
-    test.assert_eq(t[0], client_wire.k_null());
+        let t = alloc_slice[a](24, 0);
+        test.assert_eq(parse_in("+OK\r\n", t), 5);
+        test.assert_eq(t[0], client_wire.k_simple());
+        test.assert(bytes.equal("+OK\r\n"[t[1]..t[2]], "OK"));
+        test.assert_eq(parse_in("-ERR no\r\n", t), 9);
+        test.assert_eq(t[0], client_wire.k_error());
+        test.assert(bytes.equal("-ERR no\r\n"[t[1]..t[2]], "ERR no"));
+        test.assert_eq(parse_in(":-42\r\n", t), 6);
+        test.assert_eq(t[0], client_wire.k_integer());
+        test.assert_eq(client_wire.int_value(":-42\r\n", t, 0), 0 - 42);
+        test.assert_eq(parse_in("$5\r\nhello\r\n", t), 11);
+        test.assert_eq(t[0], client_wire.k_bulk());
+        test.assert(bytes.equal("$5\r\nhello\r\n"[t[1]..t[2]], "hello"));
+        test.assert_eq(parse_in("$0\r\n\r\n", t), 6);
+        test.assert_eq(t[0], client_wire.k_bulk());
+        test.assert_eq(t[2] - t[1], 0);
+        test.assert_eq(parse_in("$-1\r\n", t), 5);
+        test.assert_eq(t[0], client_wire.k_null());
+        test.assert_eq(parse_in("*-1\r\n", t), 5);
+        test.assert_eq(t[0], client_wire.k_null());
+        test.assert_eq(parse_in("_\r\n", t), 3);
+        test.assert_eq(t[0], client_wire.k_null());
     }
     return 0;
 }
 
 fn test_the_resp3_scalars() -> [] int {
     region a {
-    let t = alloc_slice[a](24, 0);
-    test.assert_eq(parse_in("#t\r\n", t), 4);
-    test.assert_eq(t[0], client_wire.k_bool());
-    test.assert_eq(t[3], 1);
-    test.assert_eq(parse_in("#f\r\n", t), 4);
-    test.assert_eq(t[3], 0);
-    test.assert_eq(parse_in(",1.5\r\n", t), 6);
-    test.assert_eq(t[0], client_wire.k_double());
-    test.assert(bytes.equal(",1.5\r\n"[t[1]..t[2]], "1.5"));
-    test.assert_eq(parse_in("(12345678901234567890\r\n", t), 23);
-    test.assert_eq(t[0], client_wire.k_bignum());
-    test.assert_eq(parse_in("!5\r\nOops!\r\n", t), 11);
-    test.assert_eq(t[0], client_wire.k_bulk_error());
-    test.assert(bytes.equal("!5\r\nOops!\r\n"[t[1]..t[2]], "Oops!"));
-    test.assert_eq(parse_in("=9\r\ntxt:hello\r\n", t), 15);
-    test.assert_eq(t[0], client_wire.k_verbatim());
-    test.assert(bytes.equal("=9\r\ntxt:hello\r\n"[t[1]..t[2]], "hello"));
+        let t = alloc_slice[a](24, 0);
+        test.assert_eq(parse_in("#t\r\n", t), 4);
+        test.assert_eq(t[0], client_wire.k_bool());
+        test.assert_eq(t[3], 1);
+        test.assert_eq(parse_in("#f\r\n", t), 4);
+        test.assert_eq(t[3], 0);
+        test.assert_eq(parse_in(",1.5\r\n", t), 6);
+        test.assert_eq(t[0], client_wire.k_double());
+        test.assert(bytes.equal(",1.5\r\n"[t[1]..t[2]], "1.5"));
+        test.assert_eq(parse_in("(12345678901234567890\r\n", t), 23);
+        test.assert_eq(t[0], client_wire.k_bignum());
+        test.assert_eq(parse_in("!5\r\nOops!\r\n", t), 11);
+        test.assert_eq(t[0], client_wire.k_bulk_error());
+        test.assert(bytes.equal("!5\r\nOops!\r\n"[t[1]..t[2]], "Oops!"));
+        test.assert_eq(parse_in("=9\r\ntxt:hello\r\n", t), 15);
+        test.assert_eq(t[0], client_wire.k_verbatim());
+        test.assert(bytes.equal("=9\r\ntxt:hello\r\n"[t[1]..t[2]], "hello"));
     }
     return 0;
 }
 
 fn test_aggregates_nest() -> [] int {
     region a {
-    let t = alloc_slice[a](40, 0);
-    let a = "*3\r\n:1\r\n*2\r\n$1\r\nx\r\n_\r\n+end\r\n";
-    test.assert_eq(parse_in(a, t), len(a));
-    test.assert_eq(t[0], client_wire.k_array());
-    test.assert_eq(t[3], 3);
-    test.assert_eq(t[4], client_wire.k_integer());
-    test.assert_eq(t[8], client_wire.k_array());
-    test.assert_eq(t[12], client_wire.k_bulk());
-    test.assert_eq(t[16], client_wire.k_null());
-    test.assert_eq(t[20], client_wire.k_simple());
-    test.assert_eq(client_wire.skip(t, 0), 6);
-    test.assert_eq(client_wire.skip(t, 2), 5);
-    let m = "%2\r\n+a\r\n:1\r\n+b\r\n#t\r\n";
-    test.assert_eq(parse_in(m, t), len(m));
-    test.assert_eq(t[0], client_wire.k_map());
-    test.assert_eq(t[3], 2);
-    test.assert_eq(client_wire.skip(t, 0), 5);
-    let s = "~2\r\n:1\r\n:2\r\n";
-    test.assert_eq(parse_in(s, t), len(s));
-    test.assert_eq(t[0], client_wire.k_set());
-    let p = ">2\r\n+message\r\n+hi\r\n";
-    test.assert_eq(parse_in(p, t), len(p));
-    test.assert_eq(t[0], client_wire.k_push());
-    test.assert_eq(parse_in("*0\r\n", t), 4);
-    test.assert_eq(t[0], client_wire.k_array());
-    test.assert_eq(t[3], 0);
+        let t = alloc_slice[a](40, 0);
+        let a = "*3\r\n:1\r\n*2\r\n$1\r\nx\r\n_\r\n+end\r\n";
+        test.assert_eq(parse_in(a, t), len(a));
+        test.assert_eq(t[0], client_wire.k_array());
+        test.assert_eq(t[3], 3);
+        test.assert_eq(t[4], client_wire.k_integer());
+        test.assert_eq(t[8], client_wire.k_array());
+        test.assert_eq(t[12], client_wire.k_bulk());
+        test.assert_eq(t[16], client_wire.k_null());
+        test.assert_eq(t[20], client_wire.k_simple());
+        test.assert_eq(client_wire.skip(t, 0), 6);
+        test.assert_eq(client_wire.skip(t, 2), 5);
+        let m = "%2\r\n+a\r\n:1\r\n+b\r\n#t\r\n";
+        test.assert_eq(parse_in(m, t), len(m));
+        test.assert_eq(t[0], client_wire.k_map());
+        test.assert_eq(t[3], 2);
+        test.assert_eq(client_wire.skip(t, 0), 5);
+        let s = "~2\r\n:1\r\n:2\r\n";
+        test.assert_eq(parse_in(s, t), len(s));
+        test.assert_eq(t[0], client_wire.k_set());
+        let p = ">2\r\n+message\r\n+hi\r\n";
+        test.assert_eq(parse_in(p, t), len(p));
+        test.assert_eq(t[0], client_wire.k_push());
+        test.assert_eq(parse_in("*0\r\n", t), 4);
+        test.assert_eq(t[0], client_wire.k_array());
+        test.assert_eq(t[3], 0);
     }
     return 0;
 }
 
 fn test_an_attribute_is_left_out_and_the_value_after_it_is_the_reply() -> [] int {
     region a {
-    let t = alloc_slice[a](16, 0);
-    let a = "|1\r\n+ttl\r\n:3\r\n+value\r\n";
-    test.assert_eq(parse_in(a, t), len(a));
-    test.assert_eq(t[0], client_wire.k_simple());
+        let t = alloc_slice[a](16, 0);
+        let a = "|1\r\n+ttl\r\n:3\r\n+value\r\n";
+        test.assert_eq(parse_in(a, t), len(a));
+        test.assert_eq(t[0], client_wire.k_simple());
+        test.assert(bytes.equal(a[t[1]..t[2]], "value"));
     }
     return 0;
 }
 
 fn test_a_reply_that_has_not_all_arrived_is_not_one() -> [] int {
     region a {
-    let t = alloc_slice[a](24, 0);
-    let full = "*2\r\n$5\r\nhello\r\n:7\r\n";
-    var n = 0;
-    while n < len(full) {
-        test.assert_eq(client_wire.parse(full[0..n], t, 1000, 100), 0);
-        n = n + 1;
-    }
-    test.assert_eq(client_wire.parse(full, t, 1000, 100), len(full));
+        let t = alloc_slice[a](24, 0);
+        let full = "*2\r\n$5\r\nhello\r\n:7\r\n";
+        var n = 0;
+        while n < len(full) {
+            test.assert_eq(client_wire.parse(full[0..n], t, 1000, 100), 0);
+            n = n + 1;
+        }
+        test.assert_eq(client_wire.parse(full, t, 1000, 100), len(full));
     }
     return 0;
 }
 
 fn test_what_will_never_be_a_reply() -> [] int {
     region a {
-    let t = alloc_slice[a](24, 0);
-    test.assert_eq(parse_in("?x\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("+a\nb\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("+a\rb\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in(":12a\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in(":\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("$3\r\nabcde\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("$-2\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("!-1\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("#x\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("_x\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("=3\r\nabc\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("=5\r\ntxtxx\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("~-1\r\n", t), client_wire.e_syntax());
-    test.assert_eq(parse_in("$1234567890123456789012\r\n", t), client_wire.e_syntax());
+        let t = alloc_slice[a](24, 0);
+        test.assert_eq(parse_in("?x\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("+a\nb\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("+a\rb\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in(":12a\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in(":\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("$3\r\nabcde\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("$-2\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("!-1\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("#x\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("_x\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("=3\r\nabc\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("=5\r\ntxtxx\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("~-1\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in("$1234567890123456789012\r\n", t), client_wire.e_syntax());
+        // a bulk's terminator is both bytes; an integer has at most 18 digits
+        test.assert_eq(parse_in("$3\r\nabc\rx\r\n", t), client_wire.e_syntax());
+        test.assert_eq(parse_in(":123456789012345678\r\n", t), 21);
+        test.assert_eq(parse_in(":1234567890123456789\r\n", t), client_wire.e_syntax());
     }
     return 0;
 }
 
 fn test_every_bound_is_kept() -> [] int {
     region a {
-    let t = alloc_slice[a](24, 0);
-    test.assert_eq(client_wire.parse("$5\r\nhello\r\n", t, 4, 100), client_wire.e_too_big());
-    test.assert_eq(client_wire.parse("$5\r\nhello\r\n", t, 5, 100), 11);
-    test.assert_eq(client_wire.parse("$99999\r\n", t, 1000, 100), client_wire.e_too_big());
-    test.assert_eq(client_wire.parse("*3\r\n:1\r\n:2\r\n:3\r\n", t, 1000, 2), client_wire.e_too_big());
-    test.assert_eq(client_wire.parse("*3\r\n:1\r\n:2\r\n:3\r\n", t, 1000, 3), 16);
-    // more nodes than the table has room for: this table holds 6 (24 ints, 4 a node)
-    test.assert_eq(client_wire.parse("*6\r\n:1\r\n:2\r\n:3\r\n:4\r\n:5\r\n:6\r\n", t, 1000, 100), client_wire.e_too_many());
-    test.assert_eq(client_wire.parse("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n:5\r\n", t, 1000, 100), 24);
+        let t = alloc_slice[a](24, 0);
+        test.assert_eq(client_wire.parse("$5\r\nhello\r\n", t, 4, 100), client_wire.e_too_big());
+        test.assert_eq(client_wire.parse("$5\r\nhello\r\n", t, 5, 100), 11);
+        test.assert_eq(client_wire.parse("$99999\r\n", t, 1000, 100), client_wire.e_too_big());
+        test.assert_eq(client_wire.parse("*3\r\n:1\r\n:2\r\n:3\r\n", t, 1000, 2), client_wire.e_too_big());
+        test.assert_eq(client_wire.parse("*3\r\n:1\r\n:2\r\n:3\r\n", t, 1000, 3), 16);
+        // more nodes than the table has room for: this table holds 6 (24 ints, 4 a node)
+        test.assert_eq(client_wire.parse("*6\r\n:1\r\n:2\r\n:3\r\n:4\r\n:5\r\n:6\r\n", t, 1000, 100), client_wire.e_too_many());
+        test.assert_eq(client_wire.parse("*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n:5\r\n", t, 1000, 100), 24);
     }
     return 0;
 }
@@ -229,12 +234,12 @@ fn test_no_byte_string_makes_the_parser_trap[&h](heap: &!h Heap) -> [heap] int {
             var round = 0;
             while round < 300000 {
                 x = (x * 1103515245 + 12345) % 2147483648;
-                let n2 = 5 + (x / 7) % 8;
+                let n2 = 5 + x / 7 % 8;
                 var j2 = 0;
                 var y = x;
                 while j2 < n2 {
                     y = (y * 1103515245 + 12345) % 2147483648;
-                    b[j2] = alphabet[(y / 5) % len(alphabet)];
+                    b[j2] = alphabet[y / 5 % len(alphabet)];
                     j2 = j2 + 1;
                 }
                 let r2 = client_wire.parse(b[0..n2], t, 8, 3);

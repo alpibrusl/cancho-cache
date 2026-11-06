@@ -251,8 +251,6 @@ known = [
     ("HSCAN NOVALUES", cmd("HSET", "d:hsn", "a", "1") + cmd("HSCAN", "d:hsn", "0", "NOVALUES"), "NOVALUES is Redis 7.4's; the oracle is 7.0.15, which answers a syntax error, and the cache answers the fields alone"),
     ("inline PING", b"PING\r\n", "inline commands (typed into telnet) are not supported: design.md section 4"),
     ("bulk not followed by CRLF", b"*1\r\n$3\r\nabcde\r\n", "Redis skips two bytes after a bulk without checking them; the cache refuses (a request-smuggling-shaped ambiguity)"),
-    ("SET with EXAT", cmd("SET", "k:exat", "1", "EXAT", "99999999999"), "EXAT, PXAT, EXPIREAT and PEXPIREAT name a time of day, and the cache has a monotonic clock and no calendar"),
-    ("EXPIREAT", cmd("EXPIREAT", "k:exat", "99999999999"), "the same"),
     ("WATCH of nine keys", cmd("WATCH", *["w:%d" % i for i in range(9)]), "the cache follows at most eight watched keys per connection (design.md 14.3); Redis has no limit"),
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
@@ -424,6 +422,38 @@ cases += [
     ("RENAMENX onto an existing key", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("SET", "r:b", "y"), ("RENAMENX", "r:a", "r:b"), ("GET", "r:a"), ("GET", "r:b"))),
     ("RENAMENX of a missing key", seq(("FLUSHALL",), ("RENAMENX", "r:a", "r:b"), ("SET", "r:b", "y"), ("RENAMENX", "r:a", "r:b"))),
     ("RENAMENX of a key to itself", seq(("FLUSHALL",), ("RENAMENX", "r:a", "r:a"), ("SET", "r:a", "x"), ("RENAMENX", "r:a", "r:a"))),
+    ("COPY arity", seq(("COPY",), ("COPY", "a"))),
+    ("COPY a string", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("COPY", "c:a", "c:b"), ("GET", "c:a"), ("GET", "c:b"), ("DBSIZE",))),
+    ("COPY keeps the expiry", seq(("FLUSHALL",), ("SET", "c:a", "x", "EX", "100"), ("COPY", "c:a", "c:b"), ("TTL", "c:b"), ("TTL", "c:a"))),
+    ("COPY of a missing key", seq(("FLUSHALL",), ("COPY", "c:a", "c:b"), ("EXISTS", "c:b"))),
+    ("COPY onto an existing key", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("SET", "c:b", "y"), ("COPY", "c:a", "c:b"), ("GET", "c:b"))),
+    ("COPY REPLACE onto an existing key", seq(("FLUSHALL",), ("SET", "c:a", "x", "EX", "100"), ("SET", "c:b", "y"), ("COPY", "c:a", "c:b", "REPLACE"), ("GET", "c:b"), ("TTL", "c:b"))),
+    ("COPY REPLACE drops the destination's expiry", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("SET", "c:b", "y", "EX", "100"), ("COPY", "c:a", "c:b", "replace"), ("TTL", "c:b"))),
+    ("COPY of a key onto itself", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("COPY", "c:a", "c:a"), ("COPY", "c:z", "c:z"), ("COPY", "c:a", "c:a", "DB", "0"))),
+    ("COPY options", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("COPY", "c:a", "c:b", "BOGUS"), ("COPY", "c:a", "c:b", "DB"), ("COPY", "c:a", "c:b", "DB", "x"), ("COPY", "c:a", "c:b", "DB", "0", "REPLACE", "REPLACE"), ("GET", "c:b"))),
+    ("COPY of a hash", seq(("FLUSHALL",), ("HSET", "c:h", "f", "v", "g", "w"), ("COPY", "c:h", "c:i"), ("TYPE", "c:i"), ("HGETALL", "c:i"), ("HSET", "c:i", "f", "z"), ("HGET", "c:h", "f"))),
+    ("COPY a string onto a hash, REPLACE", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("HSET", "c:h", "f", "v"), ("COPY", "c:a", "c:h", "REPLACE"), ("TYPE", "c:h"), ("GET", "c:h"))),
+    ("COPY in MULTI", seq(("FLUSHALL",), ("SET", "c:a", "x"), M, ("COPY", "c:a", "c:b"), ("GET", "c:b"), X)),
+    ("OBJECT ENCODING of strings", seq(("FLUSHALL",), ("SET", "o:i", "123"), ("SET", "o:n", "-5"), ("SET", "o:max", "9223372036854775807"), ("SET", "o:over", "9223372036854775808"), ("SET", "o:f", "1.5"), ("SET", "o:z", "-0"), ("SET", "o:e", ""), ("SET", "o:s", "hello"), ("SET", "o:44", "x" * 44), ("SET", "o:45", "x" * 45), *[("OBJECT", "ENCODING", "o:" + k) for k in ("i", "n", "max", "over", "f", "z", "e", "s", "44", "45")])),
+    ("OBJECT ENCODING after INCR", seq(("FLUSHALL",), ("INCR", "o:c"), ("OBJECT", "ENCODING", "o:c"))),
+    ("OBJECT ENCODING of hashes", seq(("FLUSHALL",), ("HSET", "o:h", "f", "v"), ("HSET", "o:b", "f" * 65, "v"), ("HSET", "o:c", "f", "v" * 64), ("HSET", "o:d", "f", "v" * 65), ("OBJECT", "ENCODING", "o:h"), ("OBJECT", "ENCODING", "o:b"), ("OBJECT", "ENCODING", "o:c"), ("OBJECT", "ENCODING", "o:d"))),
+    ("OBJECT ENCODING of a hash of 512 and 513 fields", seq(("FLUSHALL",), ("HSET", "o:h", *[x for i in range(512) for x in ("f%d" % i, "v")]), ("OBJECT", "ENCODING", "o:h"), ("HSET", "o:h", "f512", "v"), ("OBJECT", "ENCODING", "o:h"), ("HSET", "o:g", *[x for i in range(513) for x in ("f%d" % i, "v")]), ("OBJECT", "ENCODING", "o:g"))),
+    ("OBJECT of a missing key", seq(("FLUSHALL",), ("OBJECT", "ENCODING", "o:x"), ("OBJECT", "IDLETIME", "o:x"), ("OBJECT", "FREQ", "o:x"))),
+    ("OBJECT FREQ", seq(("FLUSHALL",), ("SET", "o:a", "x"), ("OBJECT", "FREQ", "o:a"), ("OBJECT", "freq", "o:a"))),
+    ("OBJECT errors", seq(("OBJECT",), ("OBJECT", "FOO"), ("OBJECT", "Foo", "a"), ("OBJECT", "FOO", "a", "b", "c"), ("OBJECT", "ENCODING"), ("OBJECT", "ENCODING", "a", "b"), ("OBJECT", "IdleTime"), ("OBJECT", "FREQ", "a", "b"))),
+    ("OBJECT in MULTI", seq(("FLUSHALL",), ("SET", "o:a", "7"), M, ("OBJECT", "ENCODING", "o:a"), ("OBJECT",), ("OBJECT", "ENCODING"), X)),
+    ("OBJECT in MULTI, a good one", seq(("FLUSHALL",), ("SET", "o:a", "7"), M, ("OBJECT", "ENCODING", "o:a"), ("OBJECT", "FREQ", "o:a"), X)),
+    ("OBJECT in MULTI, an unknown subcommand", seq(("FLUSHALL",), M, ("OBJECT", "FOO", "a"), ("OBJECT", "ENCODING", "a"), X)),
+    ("EXPIREAT, EXPIRETIME and PEXPIRETIME", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("EXPIRETIME", "t:a"), ("EXPIREAT", "t:a", "4102444800"), ("EXPIRETIME", "t:a"), ("PEXPIRETIME", "t:a"), ("EXISTS", "t:a"), ("PERSIST", "t:a"), ("EXPIRETIME", "t:a"))),
+    ("PEXPIREAT keeps its milliseconds", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("PEXPIREAT", "t:a", "4102444800123"), ("PEXPIRETIME", "t:a"), ("EXPIRETIME", "t:a"), ("PEXPIREAT", "t:a", "4102444800500"), ("EXPIRETIME", "t:a"))),
+    ("EXPIREAT in the past deletes", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("EXPIREAT", "t:a", "1000"), ("EXISTS", "t:a"), ("DBSIZE",), ("SET", "t:b", "x"), ("PEXPIREAT", "t:b", "-5"), ("DBSIZE",), ("GET", "t:b"), ("EXPIREAT", "t:zz", "1000"))),
+    ("EXPIREAT options and errors", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("EXPIREAT", "t:a", "x"), ("EXPIREAT", "t:a", "9999999999999999"), ("PEXPIREAT", "t:a", "9223372036854775807"), ("EXPIREAT", "t:a", "4102444800", "NX"), ("EXPIREAT", "t:a", "4102444800", "NX"), ("EXPIREAT", "t:a", "4102444801", "GT"), ("EXPIRETIME", "t:a"), ("EXPIREAT", "t:a", "4102444802", "LT"), ("EXPIREAT", "t:a", "4102444800", "NX", "XX"), ("EXPIREAT", "t:a", "1", "BOGUS"), ("EXPIREAT",), ("EXPIRETIME",), ("PEXPIRETIME", "a", "b"))),
+    ("EXPIRETIME of a missing key", seq(("FLUSHALL",), ("EXPIRETIME", "t:x"), ("PEXPIRETIME", "t:x"))),
+    ("SET with EXAT and PXAT", seq(("FLUSHALL",), ("SET", "t:a", "x", "EXAT", "4102444800"), ("EXPIRETIME", "t:a"), ("SET", "t:b", "x", "PXAT", "4102444800500"), ("PEXPIRETIME", "t:b"), ("SET", "t:c", "x", "EXAT", "4102444800", "GET"), ("SET", "t:c", "y", "PXAT", "4102444800999", "XX"), ("PEXPIRETIME", "t:c"))),
+    ("SET with EXAT in the past, zero and too large", seq(("FLUSHALL",), ("SET", "t:a", "x", "EXAT", "1000"), ("GET", "t:a"), ("SET", "t:a", "x", "EXAT", "0"), ("SET", "t:a", "x", "EXAT", "-5"), ("SET", "t:a", "x", "EXAT", "9999999999999999"), ("SET", "t:a", "x", "PXAT", "0"), ("EXISTS", "t:a"))),
+    ("SET with clashing expiry options", seq(("FLUSHALL",), ("SET", "t:a", "x", "EXAT", "5", "PXAT", "5"), ("SET", "t:a", "x", "EX", "5", "EXAT", "4102444800"), ("SET", "t:a", "x", "PX", "5", "PXAT", "4102444800"), ("SET", "t:a", "x", "KEEPTTL", "EXAT", "4102444800"), ("SET", "t:a", "x", "EXAT", "4102444800", "KEEPTTL"), ("SET", "t:a", "x", "EXAT"), ("SET", "t:a", "x", "EXAT", "4102444800", "EXAT", "4102444900"), ("EXPIRETIME", "t:a"))),
+    ("GETEX with EXAT and PXAT", seq(("FLUSHALL",), ("SET", "t:a", "x"), ("GETEX", "t:a", "EXAT", "4102444800"), ("EXPIRETIME", "t:a"), ("GETEX", "t:a", "PXAT", "4102444800500"), ("PEXPIRETIME", "t:a"), ("GETEX", "t:a", "EXAT", "1000"), ("EXISTS", "t:a"), ("SET", "t:b", "x"), ("GETEX", "t:b", "EXAT", "0"), ("GETEX", "t:b", "EXAT", "4102444800", "PX", "5"), ("GETEX", "t:b", "PERSIST", "EXAT", "4102444800"), ("GETEX", "t:b", "EXAT", "9999999999999999"))),
+    ("EXPIREAT and EXAT in MULTI", seq(("FLUSHALL",), ("SET", "t:a", "x"), M, ("EXPIREAT", "t:a", "4102444800"), ("EXPIRETIME", "t:a"), ("SET", "t:b", "x", "EXAT", "4102444800"), ("EXPIRETIME", "t:b"), X)),
     ("RENAME in MULTI", seq(("FLUSHALL",), ("SET", "r:a", "x"), M, ("RENAME", "r:a", "r:b"), ("GET", "r:b"), ("RENAMENX", "r:b", "r:c"), ("RENAME", "r:zz", "r:y"), X, ("GET", "r:c"))),
     ("RENAME dirties both names for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:b"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
     ("RENAME dirties the old name for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:a"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
@@ -463,9 +493,9 @@ cases += [
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT", "EXPIREAT", "PEXPIREAT", "EXPIRETIME", "PEXPIRETIME"]:
     for given in range(0, 5):
-        numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "SETEX", "PSETEX")
+        numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]
         cases.append(("arity of %s with %d words, queued" % (name, given), seq(M, (name, *args), X)))
 for name in ("CLIENT", "CONFIG", "AUTH", "SELECT", "NOSUCH"):

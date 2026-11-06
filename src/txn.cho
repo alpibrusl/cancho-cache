@@ -176,6 +176,14 @@ pub fn handle[&v, &t, &b, &s, &x, &q, &c](view: &v [byte], table: &t [int], sc: 
         tx[1] = 1;
         return (reply.wrong_arguments(sc, at, name), 1);
     }
+    if reply.is_word(name, "OBJECT") {
+        // The subcommand has its own arity, which Redis checks as it queues.
+        let refusal = commands.object_check(view, table, sc, at);
+        if refusal != at {
+            tx[1] = 1;
+            return (refusal, 1);
+        }
+    }
     if reply.is_word(name, "MULTI") {
         return (reply.put(sc, at, "-ERR MULTI calls can not be nested\r\n"), 1);
     }

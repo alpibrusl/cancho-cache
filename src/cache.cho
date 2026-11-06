@@ -690,6 +690,7 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 pool.fill(contents(cw.pendpool));
                 pool.fill(contents(cw.qpool));
                 store.tick(cw.store, clock_ms(clock));
+                store.set_wall(cw.store, clock_unix_ms(clock));
                 contents(cw.info)[1] = store.now_of(cw.store);
                 contents(cw.info)[4] = port;
             }

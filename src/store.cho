@@ -108,6 +108,8 @@ pub res struct Store {
     // that an answer sent in pieces can tell that the value it began with has been written since.
     staged: int,
     clock: int,
+    // Unix milliseconds minus `now` at the time the cache started (docs/design.md section 25): what turns a time of day into the store's milliseconds. 0 until set.
+    wall: int,
 }
 
 // A store with an arena of `memory` bytes and room for `max_keys` keys. `seed` is mixed into every hash; it is a
@@ -118,11 +120,11 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, meta);
@@ -334,6 +336,16 @@ fn remove_entry[&s](st: &!s Store, e: int) -> [] int {
 // The entry holding `key`, or -1. A key whose time has passed is removed here and counts as absent; a key that is
 // found is stamped as used now.
 pub fn find[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
+    let e = peek(st, key, h);
+    if e >= 0 {
+        contents(st.meta)[stride() * e + 7] = st.now;
+    }
+    return e;
+}
+
+// `find` without the stamp: the entry holding `key`, or -1, and what the key was last used at is left as it was (`OBJECT IDLETIME` asks
+// how long ago that was, and asking must not change the answer). A key whose time has passed is removed here, as in `find`.
+pub fn peek[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
     let slot = find_slot(st, key, h);
     if slot < 0 {
         return 0 - 1;
@@ -346,8 +358,12 @@ pub fn find[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
         st.expired = st.expired + 1;
         return 0 - 1;
     }
-    meta[m + 7] = st.now;
     return e;
+}
+
+// When entry `e` was last used, in `tick`'s milliseconds.
+pub fn used_at[&s](st: &s Store, e: int) -> [] int {
+    return contents(st.meta)[stride() * e + 7];
 }
 
 // The value of entry `e` (one `find` answered), as a view of the arena.
@@ -733,6 +749,36 @@ pub fn rename[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte]
     st.protect = e;
     reclaim(st, set_records());
     st.protect = 0 - 1;
+    return 0;
+}
+
+// Make `dst` a copy of `src`: the same bytes, kind and expiry, `src` untouched. A `dst` that is there goes if `replace`, and otherwise
+// stops the copy. The copy is built in a staged record (`reserve`, `commit`), so the arena needs room for a second copy of the value.
+// 0: done. 1: no room (nothing was changed). 2: no room for another key. 3: there is no `src`. 4: `dst` is there and `replace` is not set.
+pub fn copy_key[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte], hd: int, replace: bool) -> [] int {
+    let e = find(st, src, hs);
+    if e < 0 {
+        return 3;
+    }
+    if !replace && find(st, dst, hd) >= 0 {
+        return 4;
+    }
+    let vlen = contents(st.meta)[stride() * e + 2];
+    st.protect = e;
+    let (code, ne) = reserve(st, dst, vlen);
+    st.protect = 0 - 1;
+    if code != 0 {
+        return code;
+    }
+    // Nothing between `find` and here can move `e` but the room `reserve` made, which keeps `e` (it is protected) and may move its record.
+    let meta = contents(st.meta);
+    let data = contents(st.data);
+    let m = stride() * e;
+    let mn = stride() * ne;
+    copy_within(data, meta[mn] + meta[mn + 1], meta[m] + meta[m + 1], vlen);
+    let kind = meta[m + 8];
+    let w = commit(st, ne, meta[m + 4]);
+    set_kind(st, w, kind);
     return 0;
 }
 
@@ -1183,6 +1229,18 @@ pub fn clear[&s](st: &!s Store) -> [] int {
 // The time `tick` last set.
 pub fn now_of[&s](st: &s Store) -> [] int {
     return st.now;
+}
+
+// Tell the store what unix time it is: `unix_ms` is the wall clock at the moment `tick` was given `now`. Set once, at start, and never again,
+// so a time of day goes in and comes out as the same number (`EXPIRETIME` answers what `EXPIREAT` was given).
+pub fn set_wall[&s](st: &!s Store, unix_ms: int) -> [] int {
+    st.wall = unix_ms - st.now;
+    return 0;
+}
+
+// Unix milliseconds minus the store's milliseconds.
+pub fn wall_of[&s](st: &s Store) -> [] int {
+    return st.wall;
 }
 
 // Which eviction policy it was opened with.

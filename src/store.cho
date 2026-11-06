@@ -736,6 +736,36 @@ pub fn rename[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte]
     return 0;
 }
 
+// Make `dst` a copy of `src`: the same bytes, kind and expiry, `src` untouched. A `dst` that is there goes if `replace`, and otherwise
+// stops the copy. The copy is built in a staged record (`reserve`, `commit`), so the arena needs room for a second copy of the value.
+// 0: done. 1: no room (nothing was changed). 2: no room for another key. 3: there is no `src`. 4: `dst` is there and `replace` is not set.
+pub fn copy_key[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte], hd: int, replace: bool) -> [] int {
+    let e = find(st, src, hs);
+    if e < 0 {
+        return 3;
+    }
+    if !replace && find(st, dst, hd) >= 0 {
+        return 4;
+    }
+    let vlen = contents(st.meta)[stride() * e + 2];
+    st.protect = e;
+    let (code, ne) = reserve(st, dst, vlen);
+    st.protect = 0 - 1;
+    if code != 0 {
+        return code;
+    }
+    // Nothing between `find` and here can move `e` but the room `reserve` made, which keeps `e` (it is protected) and may move its record.
+    let meta = contents(st.meta);
+    let data = contents(st.data);
+    let m = stride() * e;
+    let mn = stride() * ne;
+    copy_within(data, meta[mn] + meta[mn + 1], meta[m] + meta[m + 1], vlen);
+    let kind = meta[m + 8];
+    let w = commit(st, ne, meta[m + 4]);
+    set_kind(st, w, kind);
+    return 0;
+}
+
 // Zero the arena's bytes `from..to`.
 fn zero_fill[&d](data: &!d [byte], from: int, to: int) -> [] int {
     var i = from;

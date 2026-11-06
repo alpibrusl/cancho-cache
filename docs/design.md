@@ -746,3 +746,13 @@ Issue #11 is three limits: arguments (a command took 64, so `MGET` of a hundred 
 **What it costs, said last.** `meta` is 10 ints for each key, not 9 (the stamp): 8 bytes for each of the possible keys, 8 MB at the default million. A `SET` that replaces a value needs room for both until the last byte is here. `SET key <big> EX 10` and `SET … NX` with a value over a block are refused, `SETRANGE` and `APPEND` cannot make a value over 16 KiB, and the commands in the list above refuse values over 16 KiB: Redis does none of these.
 
 **Order of work.** One PR for `SET`+`GET` streaming with the guards (they define what a big value is, so they cannot be separated), one for the configurable maximum and its README line.
+
+## 23. `COPY` (epic #8, issue #10, slice 3)
+
+**The claim.** `COPY source destination [DB db] [REPLACE]` answers byte for byte as Redis 7.0.15 does, for strings and hashes, and the copy carries the source's kind and expiry. **Gate**, fixed before the code: the differential cases in `tests/differential.py` (arity, string, expiry kept, missing source, existing destination with and without `REPLACE`, the destination's expiry dropped, a key onto itself, bad options, a hash, a string over a hash, inside `MULTI`) have 0 differences, and the arity sweep includes `COPY`.
+
+**How.** `store.copy_key` reserves a staged record for the destination (`reserve`, §22), copies the source's value into it with `copy_within`, and commits it with the source's expiry and kind (`commit` makes a string; the kind is set after). The source is protected while `reserve` makes room, so a compaction or eviction cannot take it. Nothing is visible until `commit`, so a refusal (no room: `-OOM`, as `RENAME`) leaves both keys as they were. Costs room for a second copy of the value, like `RENAME`.
+
+**A deliberate difference.** There is one database, so `DB 0` is accepted and any other number answers `-ERR DB index is out of range`. Redis has 16 and takes `DB 1`; the check `COPY a b DB 1` is therefore not in the differential, and this is the same difference `SELECT 1` has (§12).
+
+**Not built:** `OBJECT`, `MEMORY USAGE`, `INCRBYFLOAT`, `LCS`, `COMMAND INFO/DOCS/GETKEYS`, and the absolute-time commands (`EXPIREAT` and kin: no calendar, §15) remain open in issue #10.

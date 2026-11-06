@@ -424,6 +424,18 @@ cases += [
     ("RENAMENX onto an existing key", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("SET", "r:b", "y"), ("RENAMENX", "r:a", "r:b"), ("GET", "r:a"), ("GET", "r:b"))),
     ("RENAMENX of a missing key", seq(("FLUSHALL",), ("RENAMENX", "r:a", "r:b"), ("SET", "r:b", "y"), ("RENAMENX", "r:a", "r:b"))),
     ("RENAMENX of a key to itself", seq(("FLUSHALL",), ("RENAMENX", "r:a", "r:a"), ("SET", "r:a", "x"), ("RENAMENX", "r:a", "r:a"))),
+    ("COPY arity", seq(("COPY",), ("COPY", "a"))),
+    ("COPY a string", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("COPY", "c:a", "c:b"), ("GET", "c:a"), ("GET", "c:b"), ("DBSIZE",))),
+    ("COPY keeps the expiry", seq(("FLUSHALL",), ("SET", "c:a", "x", "EX", "100"), ("COPY", "c:a", "c:b"), ("TTL", "c:b"), ("TTL", "c:a"))),
+    ("COPY of a missing key", seq(("FLUSHALL",), ("COPY", "c:a", "c:b"), ("EXISTS", "c:b"))),
+    ("COPY onto an existing key", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("SET", "c:b", "y"), ("COPY", "c:a", "c:b"), ("GET", "c:b"))),
+    ("COPY REPLACE onto an existing key", seq(("FLUSHALL",), ("SET", "c:a", "x", "EX", "100"), ("SET", "c:b", "y"), ("COPY", "c:a", "c:b", "REPLACE"), ("GET", "c:b"), ("TTL", "c:b"))),
+    ("COPY REPLACE drops the destination's expiry", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("SET", "c:b", "y", "EX", "100"), ("COPY", "c:a", "c:b", "replace"), ("TTL", "c:b"))),
+    ("COPY of a key onto itself", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("COPY", "c:a", "c:a"), ("COPY", "c:z", "c:z"), ("COPY", "c:a", "c:a", "DB", "0"))),
+    ("COPY options", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("COPY", "c:a", "c:b", "BOGUS"), ("COPY", "c:a", "c:b", "DB"), ("COPY", "c:a", "c:b", "DB", "x"), ("COPY", "c:a", "c:b", "DB", "0", "REPLACE", "REPLACE"), ("GET", "c:b"))),
+    ("COPY of a hash", seq(("FLUSHALL",), ("HSET", "c:h", "f", "v", "g", "w"), ("COPY", "c:h", "c:i"), ("TYPE", "c:i"), ("HGETALL", "c:i"), ("HSET", "c:i", "f", "z"), ("HGET", "c:h", "f"))),
+    ("COPY a string onto a hash, REPLACE", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("HSET", "c:h", "f", "v"), ("COPY", "c:a", "c:h", "REPLACE"), ("TYPE", "c:h"), ("GET", "c:h"))),
+    ("COPY in MULTI", seq(("FLUSHALL",), ("SET", "c:a", "x"), M, ("COPY", "c:a", "c:b"), ("GET", "c:b"), X)),
     ("RENAME in MULTI", seq(("FLUSHALL",), ("SET", "r:a", "x"), M, ("RENAME", "r:a", "r:b"), ("GET", "r:b"), ("RENAMENX", "r:b", "r:c"), ("RENAME", "r:zz", "r:y"), X, ("GET", "r:c"))),
     ("RENAME dirties both names for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:b"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
     ("RENAME dirties the old name for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:a"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
@@ -463,7 +475,7 @@ cases += [
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY"]:
     for given in range(0, 5):
         numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]

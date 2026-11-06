@@ -771,6 +771,12 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return command_rename(view, table, sc, at, st, reply.is_word(name, "RENAMENX"));
     }
+    if reply.is_word(name, "COPY") {
+        if argc < 3 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_copy(view, table, sc, at, st);
+    }
     if reply.is_word(name, "STRLEN") {
         if argc != 2 {
             return reply.wrong_arguments(sc, at, name);
@@ -1573,6 +1579,47 @@ fn same_bytes[&x, &y](a: &x [byte], b: &y [byte]) -> [] bool {
     return true;
 }
 
+// `COPY source destination [DB destination-db] [REPLACE]`: 1 if copied, 0 if `source` is not there or `destination` is and `REPLACE` is not
+// given. There is one database, so `DB 0` is the only one that exists (Redis, with its 16, takes `DB 1`; section 23 lists that difference).
+fn command_copy[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let argc = table[0];
+    var replace = false;
+    var db = 0;
+    var i = 3;
+    while i < argc {
+        let opt = reply.arg_of(view, table, i);
+        if reply.is_word(opt, "REPLACE") {
+            replace = true;
+        } else if reply.is_word(opt, "DB") && i + 1 < argc {
+            let (status, n) = reply.parse_int(reply.arg_of(view, table, i + 1));
+            if status != 0 {
+                return reply.not_an_integer(sc, at);
+            }
+            db = n;
+            i = i + 1;
+        } else {
+            return reply.syntax_error(sc, at);
+        }
+        i = i + 1;
+    }
+    if db != 0 {
+        return reply.put(sc, at, "-ERR DB index is out of range\r\n");
+    }
+    let src = reply.arg_of(view, table, 1);
+    let dst = reply.arg_of(view, table, 2);
+    if same_bytes(src, dst) {
+        return reply.put(sc, at, "-ERR source and destination objects are the same\r\n");
+    }
+    let code = store.copy_key(st, src, store.hash_of(st, src), dst, store.hash_of(st, dst), replace);
+    if code == 0 {
+        return reply.put_integer(sc, at, 1);
+    }
+    if code == 3 || code == 4 {
+        return reply.put_integer(sc, at, 0);
+    }
+    return reply.refused(sc, at);
+}
+
 // `RENAME key newkey` and `RENAMENX key newkey` (`nx`: only if there is no `newkey`, and then 1 or 0).
 fn command_rename[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, nx: bool) -> [] int {
     let src = reply.arg_of(view, table, 1);
@@ -1810,7 +1857,7 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") {
         return 0 - 2;
     }
-    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") {
+    if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") || reply.is_word(name, "COPY") {
         return 0 - 3;
     }
     return 0;

@@ -334,6 +334,16 @@ fn remove_entry[&s](st: &!s Store, e: int) -> [] int {
 // The entry holding `key`, or -1. A key whose time has passed is removed here and counts as absent; a key that is
 // found is stamped as used now.
 pub fn find[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
+    let e = peek(st, key, h);
+    if e >= 0 {
+        contents(st.meta)[stride() * e + 7] = st.now;
+    }
+    return e;
+}
+
+// `find` without the stamp: the entry holding `key`, or -1, and what the key was last used at is left as it was (`OBJECT IDLETIME` asks
+// how long ago that was, and asking must not change the answer). A key whose time has passed is removed here, as in `find`.
+pub fn peek[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
     let slot = find_slot(st, key, h);
     if slot < 0 {
         return 0 - 1;
@@ -346,8 +356,12 @@ pub fn find[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
         st.expired = st.expired + 1;
         return 0 - 1;
     }
-    meta[m + 7] = st.now;
     return e;
+}
+
+// When entry `e` was last used, in `tick`'s milliseconds.
+pub fn used_at[&s](st: &s Store, e: int) -> [] int {
+    return contents(st.meta)[stride() * e + 7];
 }
 
 // The value of entry `e` (one `find` answered), as a view of the arena.

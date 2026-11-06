@@ -777,6 +777,12 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return command_copy(view, table, sc, at, st);
     }
+    if reply.is_word(name, "OBJECT") {
+        if argc < 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return command_object(view, table, sc, at, st, link[3]);
+    }
     if reply.is_word(name, "STRLEN") {
         if argc != 2 {
             return reply.wrong_arguments(sc, at, name);
@@ -1620,6 +1626,71 @@ fn command_copy[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte]
     return reply.refused(sc, at);
 }
 
+// Whether a string holds a hash small enough for Redis's `listpack` encoding: at most 128 fields, none (field or value) over 64 bytes.
+fn hash_is_listpack[&d](data: &d [byte]) -> [] bool {
+    var at = 0;
+    var n = 0;
+    while at + pair_header() <= len(data) {
+        let flen = get_len(data, at);
+        let vlen = get_len(data, at + 4);
+        if flen > 64 || vlen > 64 {
+            return false;
+        }
+        at = at + pair_header() + flen + vlen;
+        n = n + 1;
+    }
+    return n <= 128;
+}
+
+// `OBJECT ENCODING key`, `OBJECT IDLETIME key`, `OBJECT FREQ key` (docs/design.md section 24). The encoding is worked out from the value, as
+// Redis's would be for a value set whole: `int` for a string that is a whole 64-bit integer, `embstr` up to 44 bytes, `raw` above; `listpack` for a
+// small hash and `hashtable` for a larger one.
+fn command_object[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
+    let argc = table[0];
+    let sub = reply.arg_of(view, table, 1);
+    let is_enc = reply.is_word(sub, "ENCODING");
+    let is_idle = reply.is_word(sub, "IDLETIME");
+    let is_freq = reply.is_word(sub, "FREQ");
+    if !is_enc && !is_idle && !is_freq {
+        return reply.put(sc, reply.put(sc, reply.put(sc, at, "-ERR unknown subcommand '"), sub), "'. Try OBJECT HELP.\r\n");
+    }
+    if argc != 3 {
+        var o = reply.put(sc, at, "-ERR wrong number of arguments for 'object|");
+        var i = 0;
+        while i < len(sub) {
+            o = reply.put_byte(sc, o, reply.lower(int_of(sub[i])));
+            i = i + 1;
+        }
+        return reply.put(sc, o, "' command\r\n");
+    }
+    let key = reply.arg_of(view, table, 2);
+    let e = store.peek(st, key, store.hash_of(st, key));
+    if e < 0 {
+        return reply.put_null(sc, at, proto);
+    }
+    if is_idle {
+        return reply.put_integer(sc, at, (store.now_of(st) - store.used_at(st, e)) / 1000);
+    }
+    if is_freq {
+        return reply.put(sc, at, "-ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.\r\n");
+    }
+    let data = store.value(st, e);
+    if store.kind_of(st, e) == store.kind_hash() {
+        if hash_is_listpack(data) {
+            return reply.put_bulk(sc, at, "listpack");
+        }
+        return reply.put_bulk(sc, at, "hashtable");
+    }
+    let (status, n) = reply.parse_int(data);
+    if status == 0 {
+        return reply.put_bulk(sc, at, "int");
+    }
+    if len(data) <= 44 {
+        return reply.put_bulk(sc, at, "embstr");
+    }
+    return reply.put_bulk(sc, at, "raw");
+}
+
 // `RENAME key newkey` and `RENAMENX key newkey` (`nx`: only if there is no `newkey`, and then 1 or 0).
 fn command_rename[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, nx: bool) -> [] int {
     let src = reply.arg_of(view, table, 1);
@@ -1854,7 +1925,7 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
         return 0 - 1;
     }
-    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") {
+    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") {
         return 0 - 2;
     }
     if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") || reply.is_word(name, "COPY") {

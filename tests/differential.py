@@ -436,6 +436,14 @@ cases += [
     ("COPY of a hash", seq(("FLUSHALL",), ("HSET", "c:h", "f", "v", "g", "w"), ("COPY", "c:h", "c:i"), ("TYPE", "c:i"), ("HGETALL", "c:i"), ("HSET", "c:i", "f", "z"), ("HGET", "c:h", "f"))),
     ("COPY a string onto a hash, REPLACE", seq(("FLUSHALL",), ("SET", "c:a", "x"), ("HSET", "c:h", "f", "v"), ("COPY", "c:a", "c:h", "REPLACE"), ("TYPE", "c:h"), ("GET", "c:h"))),
     ("COPY in MULTI", seq(("FLUSHALL",), ("SET", "c:a", "x"), M, ("COPY", "c:a", "c:b"), ("GET", "c:b"), X)),
+    ("OBJECT ENCODING of strings", seq(("FLUSHALL",), ("SET", "o:i", "123"), ("SET", "o:n", "-5"), ("SET", "o:max", "9223372036854775807"), ("SET", "o:over", "9223372036854775808"), ("SET", "o:f", "1.5"), ("SET", "o:z", "-0"), ("SET", "o:e", ""), ("SET", "o:s", "hello"), ("SET", "o:44", "x" * 44), ("SET", "o:45", "x" * 45), *[("OBJECT", "ENCODING", "o:" + k) for k in ("i", "n", "max", "over", "f", "z", "e", "s", "44", "45")])),
+    ("OBJECT ENCODING after INCR", seq(("FLUSHALL",), ("INCR", "o:c"), ("OBJECT", "ENCODING", "o:c"))),
+    ("OBJECT ENCODING of hashes", seq(("FLUSHALL",), ("HSET", "o:h", "f", "v"), ("HSET", "o:b", "f" * 65, "v"), ("HSET", "o:c", "f", "v" * 64), ("HSET", "o:d", "f", "v" * 65), ("OBJECT", "ENCODING", "o:h"), ("OBJECT", "ENCODING", "o:b"), ("OBJECT", "ENCODING", "o:c"), ("OBJECT", "ENCODING", "o:d"))),
+    ("OBJECT ENCODING of a hash of 128 and 129 fields", seq(("FLUSHALL",), ("HSET", "o:h", *[x for i in range(128) for x in ("f%d" % i, "v")]), ("OBJECT", "ENCODING", "o:h"), ("HSET", "o:h", "f128", "v"), ("OBJECT", "ENCODING", "o:h"))),
+    ("OBJECT of a missing key", seq(("FLUSHALL",), ("OBJECT", "ENCODING", "o:x"), ("OBJECT", "IDLETIME", "o:x"), ("OBJECT", "FREQ", "o:x"))),
+    ("OBJECT IDLETIME and FREQ", seq(("FLUSHALL",), ("SET", "o:a", "x"), ("OBJECT", "IDLETIME", "o:a"), ("OBJECT", "FREQ", "o:a"), ("OBJECT", "idletime", "o:a"))),
+    ("OBJECT errors", seq(("OBJECT",), ("OBJECT", "FOO"), ("OBJECT", "Foo", "a"), ("OBJECT", "FOO", "a", "b", "c"), ("OBJECT", "ENCODING"), ("OBJECT", "ENCODING", "a", "b"), ("OBJECT", "IdleTime"), ("OBJECT", "FREQ", "a", "b"))),
+    ("OBJECT in MULTI", seq(("FLUSHALL",), ("SET", "o:a", "7"), M, ("OBJECT", "ENCODING", "o:a"), ("OBJECT",), ("OBJECT", "ENCODING"), X)),
     ("RENAME in MULTI", seq(("FLUSHALL",), ("SET", "r:a", "x"), M, ("RENAME", "r:a", "r:b"), ("GET", "r:b"), ("RENAMENX", "r:b", "r:c"), ("RENAME", "r:zz", "r:y"), X, ("GET", "r:c"))),
     ("RENAME dirties both names for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:b"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
     ("RENAME dirties the old name for WATCH", seq(("FLUSHALL",), ("SET", "r:a", "x"), ("WATCH", "r:a"), ("RENAME", "r:a", "r:b"), M, ("PING",), X)),
@@ -475,7 +483,7 @@ cases += [
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT"]:
     for given in range(0, 5):
         numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]

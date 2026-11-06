@@ -29,6 +29,11 @@ MUTANTS = [
     ("RENAME does not record the new hash", "store.cho", "    meta[m + 5] = hd;\n    meta[m + 7] = st.now;", "    meta[m + 7] = st.now;", ("py", "keyspace.py")),
     ("RENAME does not mark the old name for WATCH", "store.cho", "    let slot = slot_of(st, e);\n    bump(st, meta[m + 5]);\n    close_hole(st, slot);", "    let slot = slot_of(st, e);\n    close_hole(st, slot);", ("diff", "RENAME dirties the old name for WATCH")),
     ("RENAMENX renames onto an existing key", "commands.cho", "    if nx && store.find(st, dst, hd) >= 0 {\n        return reply.put_integer(sc, at, 0);\n    }", "", ("diff", "RENAMENX onto an existing key")),
+    ("COPY drops the expiry", "store.cho", "    let w = commit(st, ne, meta[m + 4]);", "    let w = commit(st, ne, 0);", ("diff", "COPY keeps the expiry")),
+    ("COPY overwrites without REPLACE", "store.cho", "    if !replace && find(st, dst, hd) >= 0 {\n        return 4;\n    }", "", ("diff", "COPY onto an existing key")),
+    ("COPY of a hash makes a string", "store.cho", "    set_kind(st, w, kind);\n    return 0;", "    return 0;", ("diff", "COPY of a hash")),
+    ("OBJECT ENCODING never says int", "commands.cho", "    if status == 0 {\n        return reply.put_bulk(sc, at, \"int\");", "    if status == 5 {\n        return reply.put_bulk(sc, at, \"int\");", ("diff", "OBJECT ENCODING of strings")),
+    ("OBJECT ENCODING lets a hash grow past 128 fields", "commands.cho", "    return n <= 128;", "    return true;", ("diff", "OBJECT ENCODING of a hash of 128")),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]
 

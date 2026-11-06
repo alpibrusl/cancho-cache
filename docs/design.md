@@ -756,3 +756,11 @@ Issue #11 is three limits: arguments (a command took 64, so `MGET` of a hundred 
 **A deliberate difference.** There is one database, so `DB 0` is accepted and any other number answers `-ERR DB index is out of range`. Redis has 16 and takes `DB 1`; the check `COPY a b DB 1` is therefore not in the differential, and this is the same difference `SELECT 1` has (§12).
 
 **Not built:** `OBJECT`, `MEMORY USAGE`, `INCRBYFLOAT`, `LCS`, `COMMAND INFO/DOCS/GETKEYS`, and the absolute-time commands (`EXPIREAT` and kin: no calendar, §15) remain open in issue #10.
+
+## 24. `OBJECT ENCODING`, `IDLETIME`, `FREQ` (epic #8, issue #10, slice 4)
+
+**The claim.** `OBJECT ENCODING key` answers what Redis 7.0.15 does for a value set whole: `int` for a string that is a whole 64-bit integer (Redis's `string2ll` rule, the one `INCR` uses), `embstr` up to 44 bytes, `raw` above that; `listpack` for a hash of at most 128 fields none of whose fields or values is over 64 bytes, `hashtable` otherwise. `OBJECT IDLETIME` is whole seconds since the key was last used; `OBJECT FREQ` answers Redis's LFU error, because no policy here is LFU. A missing key is a null, and the errors (unknown subcommand, arity per subcommand, `OBJECT` alone) are Redis's. **Gate**, fixed first: the differential cases named `OBJECT …` have 0 differences, and the mutants for the `int` rule and the 128-field limit are caught.
+
+**How.** The encoding is worked out from the bytes when asked, not recorded. `IDLETIME` needs the key's last-use stamp (`meta` slot 7) as it was, and `find` sets it to now, so `store.peek` is `find` without the stamp and `find` is `peek` plus the stamp. Redis's `OBJECT` does not touch the key either.
+
+**Where it differs, said first.** (1) Redis records an encoding when the value is written: a string made by `APPEND` or `SETRANGE` is `raw` however short, a hash that once grew past a limit stays `hashtable` after it shrinks, and a hash of 129 fields it was converted from stays so. This cache answers from what the value is now, so those cases differ. The differential does not do them. (2) `OBJECT REFCOUNT` and `OBJECT HELP` are not built and answer `unknown subcommand`. (3) `IDLETIME` counts the cache's millisecond clock, Redis's 1-second LRU clock; both read 0 for a key just written.

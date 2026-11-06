@@ -33,7 +33,7 @@ MUTANTS = [
     ("COPY overwrites without REPLACE", "store.cho", "    if !replace && find(st, dst, hd) >= 0 {\n        return 4;\n    }", "", ("diff", "COPY onto an existing key")),
     ("COPY of a hash makes a string", "store.cho", "    set_kind(st, w, kind);\n    return 0;", "    return 0;", ("diff", "COPY of a hash")),
     ("OBJECT ENCODING never says int", "commands.cho", "    if status == 0 {\n        return reply.put_bulk(sc, at, \"int\");", "    if status == 5 {\n        return reply.put_bulk(sc, at, \"int\");", ("diff", "OBJECT ENCODING of strings")),
-    ("OBJECT ENCODING lets a hash grow past 128 fields", "commands.cho", "    return n <= 128;", "    return true;", ("diff", "OBJECT ENCODING of a hash of 128")),
+    ("OBJECT ENCODING lets a hash grow past 512 fields", "commands.cho", "    return n <= 512;", "    return true;", ("diff", "OBJECT ENCODING of a hash of 512")),
     ("EXPIRETIME forgets the offset", "commands.cho", "        return reply.put_integer(sc, at, (expiry + store.wall_of(st) + 500) / 1000);", "        return reply.put_integer(sc, at, (expiry + 500) / 1000);", ("diff", "EXPIREAT, EXPIRETIME and PEXPIRETIME")),
     ("EXPIREAT treats seconds as milliseconds", "commands.cho", "        ms = amount * 1000;\n    }\n    if ms <= now + wall {", "    }\n    if ms <= now + wall {", ("diff", "EXPIREAT, EXPIRETIME and PEXPIRETIME")),
     ("EXPIREAT in the past keeps the key", "commands.cho", "    if ms <= now + wall {\n        if now < 1 {\n            return (0, 1);\n        }\n        return (0, now);\n    }", "", ("diff", "EXPIREAT in the past deletes")),

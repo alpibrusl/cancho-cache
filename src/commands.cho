@@ -1721,7 +1721,7 @@ fn command_copy[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte]
     return reply.refused(sc, at);
 }
 
-// Whether a string holds a hash small enough for Redis's `listpack` encoding: at most 128 fields, none (field or value) over 64 bytes.
+// Whether a string holds a hash small enough for Redis's `listpack` encoding: at most 512 fields, none (field or value) over 64 bytes.
 fn hash_is_listpack[&d](data: &d [byte]) -> [] bool {
     var at = 0;
     var n = 0;
@@ -1734,7 +1734,7 @@ fn hash_is_listpack[&d](data: &d [byte]) -> [] bool {
         at = at + pair_header() + flen + vlen;
         n = n + 1;
     }
-    return n <= 128;
+    return n <= 512;
 }
 
 // `OBJECT ENCODING key`, `OBJECT IDLETIME key`, `OBJECT FREQ key` (docs/design.md section 24). The encoding is worked out from the value, as

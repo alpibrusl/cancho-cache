@@ -46,6 +46,10 @@ jobs:
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/resp_test.cho src/resp.cho --std
 
+      - name: Client wire tests (every reply kind, every bound, no byte string traps)
+        working-directory: cache
+        run: ../cancho/target/release/cancho test tests/client_wire_test.cho src/client_wire.cho --std
+
       - name: Pattern matcher tests
         working-directory: cache
         run: ../cancho/target/release/cancho test tests/glob_test.cho src/glob.cho --std

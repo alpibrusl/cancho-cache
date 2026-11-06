@@ -1,0 +1,373 @@
+edition 5;
+
+module client_wire;
+
+import std.buffer;
+
+// `client_wire` -- the client side of RESP2 and RESP3, pure (issue #44): build a command, and read one reply out of the bytes that have arrived. No socket, no clock, no allocation
+// beyond the buffer a command is written into; `client` drives it over a connection. The reply parser is bounded in everything a hostile or broken server could make large (the
+// bytes of a bulk, the elements of an aggregate, the depth of nesting, the nodes in the table) and answers with a code instead of failing.
+//
+// A reply is read into a table of nodes, four ints each, in the order the reply is written (an aggregate, then its children, depth first):
+//   0 kind   1 start   2 end   3 count
+// For a text kind (simple, error, bulk, bulk error, verbatim, double, bignum) `start..end` is the text in the data (for a verbatim string the three-byte format and the colon are
+// skipped); for an integer it is the digits (read with `int_value`); for a boolean `count` is 1 or 0; for an aggregate (array, set, push: `count` elements; map: `count` pairs, so
+// 2 * count children) it is the number of them; a null has nothing. A bulk string of length -1 and an array of length -1 are null, as in RESP2.
+
+pub fn k_simple() -> [] int {
+    return 1;
+}
+
+pub fn k_error() -> [] int {
+    return 2;
+}
+
+pub fn k_integer() -> [] int {
+    return 3;
+}
+
+pub fn k_bulk() -> [] int {
+    return 4;
+}
+
+pub fn k_null() -> [] int {
+    return 5;
+}
+
+pub fn k_array() -> [] int {
+    return 6;
+}
+
+pub fn k_map() -> [] int {
+    return 7;
+}
+
+pub fn k_set() -> [] int {
+    return 8;
+}
+
+pub fn k_push() -> [] int {
+    return 9;
+}
+
+pub fn k_bool() -> [] int {
+    return 10;
+}
+
+pub fn k_double() -> [] int {
+    return 11;
+}
+
+pub fn k_bignum() -> [] int {
+    return 12;
+}
+
+pub fn k_bulk_error() -> [] int {
+    return 13;
+}
+
+pub fn k_verbatim() -> [] int {
+    return 14;
+}
+
+// What `parse` answers when it is not a length: the reply has not all arrived (call again with more), or why it will never be a reply.
+pub fn incomplete() -> [] int {
+    return 0;
+}
+
+pub fn e_syntax() -> [] int {
+    return 0 - 1;
+}
+
+pub fn e_too_big() -> [] int {
+    return 0 - 2;
+}
+
+pub fn e_too_deep() -> [] int {
+    return 0 - 3;
+}
+
+pub fn e_too_many() -> [] int {
+    return 0 - 4;
+}
+
+pub fn max_depth() -> [] int {
+    return 16;
+}
+
+pub fn stride() -> [] int {
+    return 4;
+}
+
+// Does `table` have room for `nodes` nodes?
+fn room[&t](table: &t [int], nodes: int) -> [] bool {
+    return (nodes + 1) * stride() <= len(table);
+}
+
+// The end of the line that starts at `at` (the index of its `\r`), or -1 if it has not all arrived, or -2 if a bare `\r` or `\n` shows it is not a line.
+fn line_end[&d](data: &d [byte], at: int) -> [] int {
+    var i = at;
+    while i < len(data) {
+        let c = int_of(data[i]);
+        if c == '\r' {
+            if i + 1 >= len(data) {
+                return 0 - 1;
+            }
+            if int_of(data[i + 1]) != '\n' {
+                return 0 - 2;
+            }
+            return i;
+        }
+        if c == '\n' {
+            return 0 - 2;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// The decimal number in `data[a..b]` (an optional leading `-`), or -999999999999 if it is not one or has more than 18 digits.
+fn digits[&d](data: &d [byte], a: int, b: int) -> [] int {
+    var i = a;
+    var neg = false;
+    if i < b && int_of(data[i]) == '-' {
+        neg = true;
+        i = i + 1;
+    }
+    if i >= b || b - i > 18 {
+        return 0 - 999999999999;
+    }
+    var v = 0;
+    while i < b {
+        let c = int_of(data[i]);
+        if c < '0' || c > '9' {
+            return 0 - 999999999999;
+        }
+        v = v * 10 + (c - '0');
+        i = i + 1;
+    }
+    if neg {
+        return 0 - v;
+    }
+    return v;
+}
+
+// One value at `at`, written to the table from node `k` on. Gives (the index after the value in `data`, the next free node, a code): the code is 0 for done, `incomplete()`
+// is expressed as 1 here (the caller turns it into 0), and a negative `e_*` for an error.
+fn value[&d, &t](data: &d [byte], table: &!t [int], at: int, k: int, depth: int, max_bulk: int, max_elems: int) -> [] (int, int, int) {
+    if at >= len(data) {
+        return (at, k, 1);
+    }
+    if depth > max_depth() {
+        return (at, k, e_too_deep());
+    }
+    if !room(table, k) {
+        return (at, k, e_too_many());
+    }
+    let t = int_of(data[at]);
+    let e = line_end(data, at + 1);
+    if e == 0 - 1 {
+        return (at, k, 1);
+    }
+    if e == 0 - 2 {
+        return (at, k, e_syntax());
+    }
+    let after = e + 2;
+    let b = k * stride();
+    if t == '+' || t == '-' || t == ',' || t == '(' {
+        var kind = k_simple();
+        if t == '-' {
+            kind = k_error();
+        } else if t == ',' {
+            kind = k_double();
+        } else if t == '(' {
+            kind = k_bignum();
+        }
+        table[b] = kind;
+        table[b + 1] = at + 1;
+        table[b + 2] = e;
+        table[b + 3] = 0;
+        return (after, k + 1, 0);
+    }
+    if t == ':' {
+        if digits(data, at + 1, e) == 0 - 999999999999 {
+            return (at, k, e_syntax());
+        }
+        table[b] = k_integer();
+        table[b + 1] = at + 1;
+        table[b + 2] = e;
+        table[b + 3] = 0;
+        return (after, k + 1, 0);
+    }
+    if t == '_' {
+        if e != at + 1 {
+            return (at, k, e_syntax());
+        }
+        table[b] = k_null();
+        table[b + 1] = 0;
+        table[b + 2] = 0;
+        table[b + 3] = 0;
+        return (after, k + 1, 0);
+    }
+    if t == '#' {
+        if e != at + 2 || (int_of(data[at + 1]) != 't' && int_of(data[at + 1]) != 'f') {
+            return (at, k, e_syntax());
+        }
+        table[b] = k_bool();
+        table[b + 1] = 0;
+        table[b + 2] = 0;
+        if int_of(data[at + 1]) == 't' {
+            table[b + 3] = 1;
+        } else {
+            table[b + 3] = 0;
+        }
+        return (after, k + 1, 0);
+    }
+    if t == '$' || t == '!' || t == '=' {
+        let n = digits(data, at + 1, e);
+        if n == 0 - 999999999999 || n < 0 - 1 || (n == 0 - 1 && t != '$') {
+            return (at, k, e_syntax());
+        }
+        if n == 0 - 1 {
+            table[b] = k_null();
+            table[b + 1] = 0;
+            table[b + 2] = 0;
+            table[b + 3] = 0;
+            return (after, k + 1, 0);
+        }
+        if n > max_bulk {
+            return (at, k, e_too_big());
+        }
+        if after + n + 2 > len(data) {
+            return (at, k, 1);
+        }
+        if int_of(data[after + n]) != '\r' || int_of(data[after + n + 1]) != '\n' {
+            return (at, k, e_syntax());
+        }
+        var kind = k_bulk();
+        var from = after;
+        if t == '!' {
+            kind = k_bulk_error();
+        } else if t == '=' {
+            kind = k_verbatim();
+            if n < 4 || int_of(data[after + 3]) != ':' {
+                return (at, k, e_syntax());
+            }
+            from = after + 4;
+        }
+        table[b] = kind;
+        table[b + 1] = from;
+        table[b + 2] = after + n;
+        table[b + 3] = 0;
+        return (after + n + 2, k + 1, 0);
+    }
+    if t == '*' || t == '~' || t == '>' || t == '%' || t == '|' {
+        let n = digits(data, at + 1, e);
+        if n == 0 - 999999999999 || n < 0 - 1 || (n == 0 - 1 && t != '*') {
+            return (at, k, e_syntax());
+        }
+        if n == 0 - 1 {
+            table[b] = k_null();
+            table[b + 1] = 0;
+            table[b + 2] = 0;
+            table[b + 3] = 0;
+            return (after, k + 1, 0);
+        }
+        if n > max_elems {
+            return (at, k, e_too_big());
+        }
+        var kind = k_array();
+        var kids = n;
+        if t == '~' {
+            kind = k_set();
+        } else if t == '>' {
+            kind = k_push();
+        } else if t == '%' {
+            kind = k_map();
+            kids = 2 * n;
+        } else if t == '|' {
+            // an attribute: pairs that decorate the value that follows; they are read and left out, and the value after them is the reply
+            kids = 2 * n;
+        }
+        var pos = after;
+        var next = k;
+        if t != '|' {
+            table[b] = kind;
+            table[b + 1] = 0;
+            table[b + 2] = 0;
+            table[b + 3] = n;
+            next = k + 1;
+        }
+        var i = 0;
+        while i < kids {
+            let (p2, k2, code) = value(data, table, pos, next, depth + 1, max_bulk, max_elems);
+            if code != 0 {
+                return (at, k, code);
+            }
+            pos = p2;
+            next = k2;
+            i = i + 1;
+        }
+        if t == '|' {
+            // the value the attributes belong to
+            let (p3, k3, code3) = value(data, table, pos, k, depth + 1, max_bulk, max_elems);
+            return (p3, k3, code3);
+        }
+        return (pos, next, 0);
+    }
+    return (at, k, e_syntax());
+}
+
+// Read one reply from the front of `data` into `table` (4 ints a node; room for `len(table) / 4 - 1` nodes). `max_bulk` bounds one string, `max_elems` one aggregate.
+// Answers how many bytes the reply is (and fills the table; `table[0]`... node 0 is the reply), `incomplete()` (0) if the rest has not arrived, or a negative `e_*`.
+pub fn parse[&d, &t](data: &d [byte], table: &!t [int], max_bulk: int, max_elems: int) -> [] int {
+    let (end, nodes, code) = value(data, table, 0, 0, 0, max_bulk, max_elems);
+    if code == 1 {
+        return incomplete();
+    }
+    if code < 0 {
+        return code;
+    }
+    return end;
+}
+
+// The integer a node holds (kind `k_integer`).
+pub fn int_value[&d, &t](data: &d [byte], table: &t [int], k: int) -> [] int {
+    return digits(data, table[k * stride() + 1], table[k * stride() + 2]);
+}
+
+// The node after the whole subtree at node `k`.
+pub fn skip[&t](table: &t [int], k: int) -> [] int {
+    let kind = table[k * stride()];
+    var kids = 0;
+    if kind == k_array() || kind == k_set() || kind == k_push() {
+        kids = table[k * stride() + 3];
+    } else if kind == k_map() {
+        kids = 2 * table[k * stride() + 3];
+    }
+    var next = k + 1;
+    var i = 0;
+    while i < kids {
+        next = skip(table, next);
+        i = i + 1;
+    }
+    return next;
+}
+
+// ---- commands -----------------------------------------------------------------------------------------------------------------------------------------------------
+
+// The start of a command of `argc` arguments: `*<argc>\r\n`. Add each argument with `add_arg`.
+pub fn command[&h](heap: &!h Heap, argc: int) -> [heap] buffer.Buffer {
+    var b = buffer.push(heap, buffer.empty(heap, 64), byte_of('*'));
+    b = buffer.push_nat(heap, b, argc);
+    return buffer.append(heap, b, "\r\n");
+}
+
+// One argument, binary-safe: `$<len>\r\n<bytes>\r\n`.
+pub fn add_arg[&h, &a](heap: &!h Heap, b: buffer.Buffer, text: &a [byte]) -> [heap] buffer.Buffer {
+    var o = buffer.push(heap, b, byte_of('$'));
+    o = buffer.push_nat(heap, o, len(text));
+    o = buffer.append(heap, o, "\r\n");
+    o = buffer.append(heap, o, text);
+    return buffer.append(heap, o, "\r\n");
+}

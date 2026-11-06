@@ -76,7 +76,16 @@ def canonical(raw):
     assert end == len(raw), "trailing bytes after an entry"
     subs = node[1][9]
     subs[1].sort(key=name_of)
-    return emit(node)
+    return emit(node), node
+
+
+def ints_of(entry):
+    """(arity, first key, last key, step) of a parsed entry: its elements 1, 3, 4 and 5."""
+    def num(leaf):
+        assert leaf[:1] == b":", leaf
+        return int(leaf[1:-2])
+    k = entry[1]
+    return num(k[1]), num(k[3]), num(k[4]), num(k[5])
 
 
 def talk(sock, data, quiet=0.15):
@@ -147,11 +156,33 @@ def main():
         for n in names():
             w('    if reply.is_word(name, "%s") {' % n)
             w("        if resp3 {")
-            w("            return (true, reply.put(sc, at, %s));" % lit(entries[1][n]))
+            w("            return (true, reply.put(sc, at, %s));" % lit(entries[1][n][0]))
             w("        }")
-            w("        return (true, reply.put(sc, at, %s));" % lit(entries[0][n]))
+            w("        return (true, reply.put(sc, at, %s));" % lit(entries[0][n][0]))
             w("    }")
         w("    return (false, at);")
+        w("}")
+        w("")
+        w("// What `COMMAND GETKEYS` needs of a command: `(known, arity, first key, last key, step)` as Redis 7.0 gives them. `sub` is the subcommand word of a")
+        w("// container command (`OBJECT ENCODING`), and is only read for those; an unknown name or subcommand is `(false, 0, 0, 0, 0)`.")
+        w("pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, int, int) {")
+        for n in names():
+            node = entries[0][n][1]
+            subs = node[1][9][1]
+            w('    if reply.is_word(name, "%s") {' % n)
+            if subs:
+                for sb in subs:
+                    full = name_of(sb).decode()
+                    a, f, l, st = ints_of(sb)
+                    w('        if reply.is_word(sub, "%s") {' % full.split("|")[1].upper())
+                    w("            return (true, %d, %d, %d, %d);" % (a, f, l, st))
+                    w("        }")
+                w("        return (false, 0, 0, 0, 0);")
+            else:
+                a, f, l, st = ints_of(node)
+                w("        return (true, %d, %d, %d, %d);" % (a, f, l, st))
+            w("    }")
+        w("    return (false, 0, 0, 0, 0);")
         w("}")
         w("")
         w("// The names, lower case, as `COMMAND LIST` gives them.")

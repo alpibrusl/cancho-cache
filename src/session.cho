@@ -511,9 +511,50 @@ pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byt
 }
 
 // The commands this server answers, as `COMMAND LIST` gives them (lower case, one bulk string each): 54 of them.
+// `COMMAND GETKEYS command arg ...`: the keys of that command line, found as Redis finds them for these commands, by the first key, last key and
+// step of its entry (`cmdinfo.key_spec`, generated from the oracle). The refusals are Redis's, in its order: an unknown command, a command with no keys, a wrong number of
+// words for it, and a line too short to hold the keys its entry names.
+fn getkeys[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int) -> [] int {
+    let argc = table[0];
+    if argc < 4 {
+        return reply.put(sc, at, "-ERR wrong number of arguments for 'command|getkeys' command\r\n");
+    }
+    let n = argc - 2;
+    let name = reply.arg_of(view, table, 2);
+    var word = name[0..0];
+    if n >= 2 {
+        word = reply.arg_of(view, table, 3);
+    }
+    let (known, arity, first, last, step) = cmdinfo.key_spec(name, word);
+    if !known {
+        return reply.put(sc, at, "-ERR Invalid command specified\r\n");
+    }
+    if first == 0 {
+        return reply.put(sc, at, "-ERR The command has no key arguments\r\n");
+    }
+    if arity > 0 && n != arity || arity < 0 && n < 0 - arity {
+        return reply.put(sc, at, "-ERR Invalid number of arguments specified for command\r\n");
+    }
+    var stop = last;
+    if last < 0 {
+        stop = n + last;
+    }
+    if step < 1 || first > stop || stop >= n {
+        return reply.put(sc, at, "-ERR Invalid arguments specified for command\r\n");
+    }
+    let count = (stop - first) / step + 1;
+    var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), count), "\r\n");
+    var i = first;
+    while i <= stop {
+        o = reply.put_bulk(sc, o, reply.arg_of(view, table, 2 + i));
+        i = i + step;
+    }
+    return o;
+}
+
 // `COMMAND`, `COMMAND COUNT`, `COMMAND LIST`, `COMMAND INFO [name ...]` (`docs/design.md` section 26). The entries are Redis 7.0's own for every command
 // this cache implements (`cmdinfo`, generated from the oracle), so a client that reads arity, flags and key positions to find the keys of a command
-// gets what Redis would tell it. `COMMAND DOCS` is still empty, and `COMMAND GETKEYS` and `COMMAND INFO` of a subcommand (`config|get`) are not built.
+// gets what Redis would tell it. `COMMAND DOCS` is still empty, and `COMMAND INFO` of a subcommand (`config|get`) is not built.
 pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, proto: int) -> [] int {
     let argc = table[0];
     let resp3 = proto == 3;
@@ -543,6 +584,9 @@ pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at:
             i = i + 1;
         }
         return o;
+    }
+    if reply.is_word(sub, "GETKEYS") {
+        return getkeys(view, table, sc, at);
     }
     if reply.is_word(sub, "DOCS") {
         return reply.put(sc, at, "*0\r\n");

@@ -503,6 +503,23 @@ cases += [
     ("COMMAND INFO of an unknown name", seq(("COMMAND", "INFO", "nosuchcommand"))),
     ("COMMAND INFO in MULTI", seq(M, ("COMMAND", "INFO", "get"), X)),
 ]
+# COMMAND GETKEYS (docs/design.md section 26): the keys of a command line, and the refusals, in Redis's order.
+_gk = [
+    ("string and expiry commands", [("SET", "a", "b"), ("GET", "a"), ("GETEX", "k", "EX", "1"), ("EXPIRE", "a", "1"), ("EXPIREAT", "a", "1"), ("APPEND", "k", "v"), ("INCRBY", "k", "1"), ("SETRANGE", "k", "1", "v"), ("GETRANGE", "k", "0", "1"), ("TTL", "k"), ("PEXPIRETIME", "a"), ("GETDEL", "a"), ("SETEX", "k", "1", "v"), ("PERSIST", "a")]),
+    ("several keys, any step", [("MSET", "a", "1", "b", "2"), ("MSET", "a", "1", "b"), ("MSET", "a", "1", "b", "2", "c"), ("MSETNX", "a", "1", "b", "2"), ("DEL", "a", "b", "c"), ("UNLINK", "a", "b"), ("EXISTS", "a", "b"), ("TOUCH", "a", "b"), ("MGET", "a", "b"), ("WATCH", "a", "b")]),
+    ("two keys", [("COPY", "a", "b"), ("COPY", "a", "b", "REPLACE"), ("COPY", "a", "b", "DB", "0"), ("RENAME", "a", "b"), ("RENAMENX", "a", "b")]),
+    ("hashes", [("HSET", "h", "f", "v"), ("HMGET", "h", "a", "b"), ("HGETALL", "h"), ("HDEL", "h", "a", "b"), ("HSCAN", "h", "0"), ("HRANDFIELD", "h")]),
+    ("OBJECT", [("OBJECT", "ENCODING", "a"), ("OBJECT", "FREQ", "a"), ("OBJECT", "IDLETIME", "a"), ("OBJECT", "FOO"), ("OBJECT", "HELP"), ("OBJECT", "ENCODING"), ("OBJECT", "ENCODING", "a", "b")]),
+    ("commands without keys", [("SCAN", "0"), ("KEYS", "*"), ("KEYS", "a", "b", "c"), ("SELECT", "0"), ("CLIENT", "ID"), ("CLIENT", "NOSUCH"), ("CONFIG", "GET", "x"), ("COMMAND", "INFO", "get"), ("AUTH", "x"), ("HELLO", "3"), ("ECHO", "x"), ("PING", "x"), ("DBSIZE", "x"), ("INFO", "x"), ("MULTI", "x"), ("EXEC", "x"), ("QUIT", "x")]),
+    ("refusals", [("GET", "a", "b"), ("SET", "a"), ("EXISTS", "a"), ("NOSUCH", "a"), ("NOSUCH"), ("SET", "a", "b", "c", "d")]),
+    ("any case", [("set", "a", "b"), ("Get", "a"), ("mset", "a", "1", "b", "2"), ("object", "encoding", "a")]),
+]
+for _label, _lines in _gk:
+    cases.append(("COMMAND GETKEYS, %s" % _label, seq(*[("COMMAND", "GETKEYS", *_l) for _l in _lines])))
+cases += [
+    ("COMMAND GETKEYS, too few words", seq(("COMMAND", "GETKEYS"), ("COMMAND", "GETKEYS", "GET"), ("COMMAND", "GETKEYS", "PING"), ("COMMAND", "GETKEYS", "OBJECT"), ("COMMAND", "GETKEYS", "CLIENT"))),
+    ("COMMAND GETKEYS in MULTI", seq(M, ("COMMAND", "GETKEYS", "SET", "a", "b"), ("COMMAND", "GETKEYS", "SCAN", "0"), X)),
+]
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.

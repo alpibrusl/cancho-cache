@@ -467,6 +467,336 @@ pub fn put_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) 
     return (false, at);
 }
 
+// What `COMMAND GETKEYS` needs of a command: `(known, arity, first key, last key, step)` as Redis 7.0 gives them. `sub` is the subcommand word of a
+// container command (`OBJECT ENCODING`), and is only read for those; an unknown name or subcommand is `(false, 0, 0, 0, 0)`.
+pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, int, int) {
+    if reply.is_word(name, "APPEND") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "AUTH") {
+        return (true, -2, 0, 0, 0);
+    }
+    if reply.is_word(name, "CLIENT") {
+        if reply.is_word(sub, "CACHING") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "GETNAME") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "GETREDIR") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "ID") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "INFO") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "KILL") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "LIST") {
+            return (true, -2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "NO-EVICT") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "PAUSE") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "REPLY") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SETNAME") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "TRACKING") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "TRACKINGINFO") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "UNBLOCK") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "UNPAUSE") {
+            return (true, 2, 0, 0, 0);
+        }
+        return (false, 0, 0, 0, 0);
+    }
+    if reply.is_word(name, "COMMAND") {
+        if reply.is_word(sub, "COUNT") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "DOCS") {
+            return (true, -2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "GETKEYS") {
+            return (true, -4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "GETKEYSANDFLAGS") {
+            return (true, -4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "INFO") {
+            return (true, -2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "LIST") {
+            return (true, -2, 0, 0, 0);
+        }
+        return (false, 0, 0, 0, 0);
+    }
+    if reply.is_word(name, "CONFIG") {
+        if reply.is_word(sub, "GET") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "RESETSTAT") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "REWRITE") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SET") {
+            return (true, -4, 0, 0, 0);
+        }
+        return (false, 0, 0, 0, 0);
+    }
+    if reply.is_word(name, "COPY") {
+        return (true, -3, 1, 2, 1);
+    }
+    if reply.is_word(name, "DBSIZE") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "DECR") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "DECRBY") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "DEL") {
+        return (true, -2, 1, -1, 1);
+    }
+    if reply.is_word(name, "DISCARD") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "ECHO") {
+        return (true, 2, 0, 0, 0);
+    }
+    if reply.is_word(name, "EXEC") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "EXISTS") {
+        return (true, -2, 1, -1, 1);
+    }
+    if reply.is_word(name, "EXPIRE") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "EXPIREAT") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "EXPIRETIME") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "FLUSHALL") {
+        return (true, -1, 0, 0, 0);
+    }
+    if reply.is_word(name, "FLUSHDB") {
+        return (true, -1, 0, 0, 0);
+    }
+    if reply.is_word(name, "GET") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "GETDEL") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "GETEX") {
+        return (true, -2, 1, 1, 1);
+    }
+    if reply.is_word(name, "GETRANGE") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "GETSET") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HDEL") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HELLO") {
+        return (true, -1, 0, 0, 0);
+    }
+    if reply.is_word(name, "HEXISTS") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HGET") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HGETALL") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "HINCRBY") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "HKEYS") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "HLEN") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "HMGET") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HMSET") {
+        return (true, -4, 1, 1, 1);
+    }
+    if reply.is_word(name, "HRANDFIELD") {
+        return (true, -2, 1, 1, 1);
+    }
+    if reply.is_word(name, "HSCAN") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HSET") {
+        return (true, -4, 1, 1, 1);
+    }
+    if reply.is_word(name, "HSETNX") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "HSTRLEN") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "HVALS") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "INCR") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "INCRBY") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "INFO") {
+        return (true, -1, 0, 0, 0);
+    }
+    if reply.is_word(name, "KEYS") {
+        return (true, 2, 0, 0, 0);
+    }
+    if reply.is_word(name, "MGET") {
+        return (true, -2, 1, -1, 1);
+    }
+    if reply.is_word(name, "MSET") {
+        return (true, -3, 1, -1, 2);
+    }
+    if reply.is_word(name, "MSETNX") {
+        return (true, -3, 1, -1, 2);
+    }
+    if reply.is_word(name, "MULTI") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "OBJECT") {
+        if reply.is_word(sub, "ENCODING") {
+            return (true, 3, 2, 2, 1);
+        }
+        if reply.is_word(sub, "FREQ") {
+            return (true, 3, 2, 2, 1);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "IDLETIME") {
+            return (true, 3, 2, 2, 1);
+        }
+        if reply.is_word(sub, "REFCOUNT") {
+            return (true, 3, 2, 2, 1);
+        }
+        return (false, 0, 0, 0, 0);
+    }
+    if reply.is_word(name, "PERSIST") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "PEXPIRE") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "PEXPIREAT") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "PEXPIRETIME") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "PING") {
+        return (true, -1, 0, 0, 0);
+    }
+    if reply.is_word(name, "PSETEX") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "PTTL") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "QUIT") {
+        return (true, -1, 0, 0, 0);
+    }
+    if reply.is_word(name, "RANDOMKEY") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "RENAME") {
+        return (true, 3, 1, 2, 1);
+    }
+    if reply.is_word(name, "RENAMENX") {
+        return (true, 3, 1, 2, 1);
+    }
+    if reply.is_word(name, "RESET") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "SCAN") {
+        return (true, -2, 0, 0, 0);
+    }
+    if reply.is_word(name, "SELECT") {
+        return (true, 2, 0, 0, 0);
+    }
+    if reply.is_word(name, "SET") {
+        return (true, -3, 1, 1, 1);
+    }
+    if reply.is_word(name, "SETEX") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "SETNX") {
+        return (true, 3, 1, 1, 1);
+    }
+    if reply.is_word(name, "SETRANGE") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "STRLEN") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "SUBSTR") {
+        return (true, 4, 1, 1, 1);
+    }
+    if reply.is_word(name, "TOUCH") {
+        return (true, -2, 1, -1, 1);
+    }
+    if reply.is_word(name, "TTL") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "TYPE") {
+        return (true, 2, 1, 1, 1);
+    }
+    if reply.is_word(name, "UNLINK") {
+        return (true, -2, 1, -1, 1);
+    }
+    if reply.is_word(name, "UNWATCH") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "WATCH") {
+        return (true, -2, 1, -1, 1);
+    }
+    return (false, 0, 0, 0, 0);
+}
+
 // The names, lower case, as `COMMAND LIST` gives them.
 pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     var o = at;

@@ -1,0 +1,212 @@
+edition 5;
+
+module slowlog;
+
+import reply;
+import store;
+
+// `slowlog` -- the slow log (`docs/design.md` section 31): a ring of the last commands that took longer than `slowlog-log-slower-than`, and `SLOWLOG GET`, `LEN` and
+// `RESET`. The ring is the store's (fixed at start: 128 entries, `store.slow_room()` bytes of text each); an entry's slot is its id modulo the ring's size.
+//
+// An entry in the ring's ints (`store.slow_fields()` of them): the id, the time of day it was logged (seconds), how long it took (microseconds, in whole milliseconds
+// because that is the clock's resolution), and how many bytes of text it has. The text is: how many arguments are shown (1 byte), then each as a 2-byte length and its
+// bytes; the client's address as a 1-byte length and its bytes; the client's name the same way. As in Redis, at most 32 arguments are kept (the first 31 and a
+// marker `... (N more arguments)` for the rest), each cut at 128 bytes with a marker `... (N more bytes)`, and the arguments of `AUTH` (and of `HELLO ... AUTH`) are
+// `(redacted)`.
+
+fn most_arguments() -> [] int {
+    return 32;
+}
+
+fn most_bytes() -> [] int {
+    return 128;
+}
+
+// Write the argument `data` at `o` (2-byte length, then the bytes, cut as above); answers where it ends.
+fn put_argument[&b, &d](text: &!b [byte], o: int, data: &d [byte]) -> [] int {
+    var n = len(data);
+    var extra = 0;
+    if n > most_bytes() {
+        extra = n - most_bytes();
+        n = most_bytes();
+    }
+    var end = reply.put(text, o + 2, data[0..n]);
+    if extra > 0 {
+        end = reply.put(text, reply.put_nat(text, reply.put(text, end, "... ("), extra), " more bytes)");
+    }
+    text[o] = byte_of(end - (o + 2) & 255);
+    text[o + 1] = byte_of(end - (o + 2) >> 8);
+    return end;
+}
+
+// Whether argument `i` of the line is one whose value Redis does not log: everything after `AUTH`, and the two words after `AUTH` in `HELLO`.
+fn redacted[&v, &t](view: &v [byte], table: &t [int], i: int) -> [] bool {
+    let name = reply.arg_of(view, table, 0);
+    if reply.is_word(name, "AUTH") {
+        return i >= 1;
+    }
+    if reply.is_word(name, "HELLO") && i >= 3 {
+        var j = 2;
+        while j < i {
+            if reply.is_word(reply.arg_of(view, table, j), "AUTH") && (i == j + 1 || i == j + 2) {
+                return true;
+            }
+            j = j + 1;
+        }
+    }
+    return false;
+}
+
+// The text of an entry, written at `base` in `text`: answers how many bytes it took.
+fn write_text[&b, &v, &t, &a, &n](text: &!b [byte], base: int, view: &v [byte], table: &t [int], addr: &a [byte], name: &n [byte]) -> [] int {
+    let argc = table[0];
+    var shown = argc;
+    if argc > most_arguments() {
+        shown = most_arguments() - 1;
+    }
+    var o = base;
+    var count = shown;
+    if argc > most_arguments() {
+        count = most_arguments();
+    }
+    text[o] = byte_of(count);
+    o = o + 1;
+    var i = 0;
+    while i < shown {
+        if redacted(view, table, i) {
+            o = put_argument(text, o, "(redacted)");
+        } else {
+            o = put_argument(text, o, reply.arg_of(view, table, i));
+        }
+        i = i + 1;
+    }
+    if argc > most_arguments() {
+        let marker = reply.put_nat(text, reply.put(text, o + 2, "... ("), argc - shown);
+        let end = reply.put(text, marker, " more arguments)");
+        text[o] = byte_of(end - (o + 2) & 255);
+        text[o + 1] = byte_of(end - (o + 2) >> 8);
+        o = end;
+    }
+    text[o] = byte_of(len(addr));
+    o = reply.put(text, o + 1, addr);
+    text[o] = byte_of(len(name));
+    o = reply.put(text, o + 1, name);
+    return o - base;
+}
+
+fn set_int[&s](st: &!s store.Store, i: int, value: int) -> [] int {
+    let ints = store.slow_ints(st);
+    ints[i] = value;
+    return 0;
+}
+
+fn entry_int[&s](st: &!s store.Store, i: int) -> [] int {
+    let ints = store.slow_ints(st);
+    return ints[i];
+}
+
+// Log the command line `table` describes in `view`: it took `usec` microseconds at `secs` (time of day), from the client at `addr` named `name`.
+pub fn record[&s, &v, &t, &a, &n](st: &!s store.Store, view: &v [byte], table: &t [int], secs: int, usec: int, addr: &a [byte], name: &n [byte]) -> [] int {
+    let id = store.slow_push(st);
+    let slot = id % store.slow_cap();
+    let used = write_text(store.slow_text(st), slot * store.slow_room(), view, table, addr, name);
+    set_int(st, slot * store.slow_fields(), id);
+    set_int(st, slot * store.slow_fields() + 1, secs);
+    set_int(st, slot * store.slow_fields() + 2, usec);
+    set_int(st, slot * store.slow_fields() + 3, used);
+    return id;
+}
+
+fn text_length[&b](text: &b [byte], at: int) -> [] int {
+    return int_of(text[at]) | int_of(text[at + 1]) << 8;
+}
+
+// `SLOWLOG GET [count]`: the newest `count` entries (10 by default, all for -1), each `[id, time, microseconds, [arguments], address, name]`.
+fn get_answer[&b, &s](sc: &!b [byte], at: int, st: &!s store.Store, wanted: int) -> [] int {
+    var n = store.slow_len(st);
+    if wanted >= 0 && wanted < n {
+        n = wanted;
+    }
+    let next = store.slow_next_id(st);
+    var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), n), "\r\n");
+    var k = 0;
+    while k < n {
+        let id = next - 1 - k;
+        let slot = id % store.slow_cap();
+        let base = slot * store.slow_room();
+        let secs = entry_int(st, slot * store.slow_fields() + 1);
+        let usec = entry_int(st, slot * store.slow_fields() + 2);
+        o = reply.put_nat(sc, reply.put(sc, o, "*6\r\n:"), id);
+        o = reply.put_nat(sc, reply.put(sc, o, "\r\n:"), secs);
+        o = reply.put_nat(sc, reply.put(sc, o, "\r\n:"), usec);
+        let text = store.slow_text(st);
+        var t = base;
+        let args = int_of(text[t]);
+        t = t + 1;
+        o = reply.put_nat(sc, reply.put(sc, o, "\r\n*"), args);
+        o = reply.put(sc, o, "\r\n");
+        var a = 0;
+        while a < args {
+            let length = text_length(text, t);
+            o = reply.put_bulk(sc, o, text[t + 2..t + 2 + length]);
+            t = t + 2 + length;
+            a = a + 1;
+        }
+        let addr_length = int_of(text[t]);
+        o = reply.put_bulk(sc, o, text[t + 1..t + 1 + addr_length]);
+        t = t + 1 + addr_length;
+        let name_length = int_of(text[t]);
+        o = reply.put_bulk(sc, o, text[t + 1..t + 1 + name_length]);
+        k = k + 1;
+    }
+    return o;
+}
+
+// `SLOWLOG GET [count]`, `LEN` and `RESET`, with Redis's errors: a count below -1, a wrong number of words (Redis's older text for `GET`, the newer for the others),
+// and an unknown subcommand.
+pub fn command[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let argc = table[0];
+    let sub = reply.arg_of(view, table, 1);
+    if reply.is_word(sub, "GET") {
+        if argc > 3 {
+            var o = reply.put(sc, at, "-ERR unknown subcommand or wrong number of arguments for '");
+            o = reply.put(sc, o, sub);
+            return reply.put(sc, o, "'. Try SLOWLOG HELP.\r\n");
+        }
+        var wanted = 10;
+        if argc == 3 {
+            let (status, n) = reply.parse_int(reply.arg_of(view, table, 2));
+            if status != 0 || n < 0 - 1 {
+                return reply.put(sc, at, "-ERR count should be greater than or equal to -1\r\n");
+            }
+            wanted = n;
+        }
+        return get_answer(sc, at, st, wanted);
+    }
+    if reply.is_word(sub, "LEN") || reply.is_word(sub, "RESET") {
+        if argc != 2 {
+            var o = reply.put(sc, at, "-ERR wrong number of arguments for 'slowlog|");
+            var i = 0;
+            while i < len(sub) {
+                o = reply.put_byte(sc, o, reply.lower(int_of(sub[i])));
+                i = i + 1;
+            }
+            return reply.put(sc, o, "' command\r\n");
+        }
+        if reply.is_word(sub, "LEN") {
+            return reply.put_integer(sc, at, store.slow_len(st));
+        }
+        store.slow_clear(st);
+        return reply.put(sc, at, "+OK\r\n");
+    }
+    if reply.is_word(sub, "HELP") {
+        return reply.put(sc, at, "-ERR SLOWLOG HELP is not supported by this cache (docs/design.md section 31)\r\n");
+    }
+    var shown = len(sub);
+    if shown > 128 {
+        shown = 128;
+    }
+    var o = reply.put(sc, at, "-ERR unknown subcommand '");
+    o = reply.put(sc, o, sub[0..shown]);
+    return reply.put(sc, o, "'. Try SLOWLOG HELP.\r\n");
+}

@@ -37,7 +37,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision
 export CANCHO=$PWD/../cancho/standalone/cancho
 
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, eviction policy (noeviction | allkeys-lru | allkeys-random | volatile-lru | volatile-random | volatile-ttl)
 redis-cli -p 6379 PING                 # PONG
@@ -79,7 +79,7 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho --std
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho --std
 # performs: args, clock, conn_accept, conn_read, conn_write, err_write, fs_read("/dev/urandom"), heap, net_in(""), poll
 # never touches: foreign code
 
@@ -174,7 +174,8 @@ src/cmddocs.cho    GENERATED: what COMMAND DOCS answers (the same generator)
 src/cmdkeys.cho    GENERATED: the key positions and key specs COMMAND GETKEYS and GETKEYSANDFLAGS use (the same generator)
 src/cluster.cho    cluster-lite: the slot of a key, the static slot map, redirects, the CLUSTER commands
 src/cmdnames.cho   GENERATED: the number of each command, for INFO commandstats (the same generator)
-src/stats.cho      the counters of INFO: errors by code, calls by command, the ops-per-second window
+src/stats.cho src/slowlog.cho      the counters of INFO: errors by code, calls by command, the ops-per-second window
+src/slowlog.cho    the slow log: what is kept of a slow command, and SLOWLOG GET/LEN/RESET
 src/reply.cho      reply helpers shared by the two
 src/store.cho      the memory: arena, key table, expiry, eviction, compaction
 tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)

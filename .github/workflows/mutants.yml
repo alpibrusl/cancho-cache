@@ -22,6 +22,7 @@ on:
       - src/stream.cho
       - src/cmdinfo.cho
       - src/cmddocs.cho
+      - src/cmdkeys.cho
       - tests/gen_cmdinfo.py
       - src/commands.cho
       - tests/transactions.py

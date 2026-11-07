@@ -463,6 +463,217 @@ pub fn put_docs[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -
     return (false, at);
 }
 
+// `COMMAND DOCS config|get`: the name `config|get` and the docs of that subcommand; `(false, at)` if there is none.
+pub fn put_sub_docs[&w, &s, &b](name: &w [byte], sub: &s [byte], sc: &!b [byte], at: int, resp3: bool) -> [] (bool, int) {
+    if reply.is_word(name, "CLIENT") {
+        if reply.is_word(sub, "CACHING") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nclient|caching\r\n%5\r\n$7\r\nsummary\r\n$66\r\nInstruct the server about tracking or not keys in the next request\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$4\r\nmode\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$3\r\nyes\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nYES\r\n%3\r\n$4\r\nname\r\n$2\r\nno\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nNO\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nclient|caching\r\n*10\r\n$7\r\nsummary\r\n$66\r\nInstruct the server about tracking or not keys in the next request\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$4\r\nmode\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$3\r\nyes\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nYES\r\n*6\r\n$4\r\nname\r\n$2\r\nno\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nNO\r\n"));
+        }
+        if reply.is_word(sub, "GETNAME") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nclient|getname\r\n%4\r\n$7\r\nsummary\r\n$31\r\nGet the current connection name\r\n$5\r\nsince\r\n$5\r\n2.6.9\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nclient|getname\r\n*8\r\n$7\r\nsummary\r\n$31\r\nGet the current connection name\r\n$5\r\nsince\r\n$5\r\n2.6.9\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "GETREDIR") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nclient|getredir\r\n%4\r\n$7\r\nsummary\r\n$55\r\nGet tracking notifications redirection client ID if any\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nclient|getredir\r\n*8\r\n$7\r\nsummary\r\n$55\r\nGet tracking notifications redirection client ID if any\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nclient|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nclient|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "ID") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$9\r\nclient|id\r\n%4\r\n$7\r\nsummary\r\n$48\r\nReturns the client ID for the current connection\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$9\r\nclient|id\r\n*8\r\n$7\r\nsummary\r\n$48\r\nReturns the client ID for the current connection\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "INFO") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nclient|info\r\n%4\r\n$7\r\nsummary\r\n$56\r\nReturns information about the current client connection.\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nclient|info\r\n*8\r\n$7\r\nsummary\r\n$56\r\nReturns information about the current client connection.\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "KILL") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nclient|kill\r\n%6\r\n$7\r\nsummary\r\n$31\r\nKill the connection of a client\r\n$5\r\nsince\r\n$5\r\n2.4.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$48\r\nO(N) where N is the number of client connections\r\n$7\r\nhistory\r\n~5\r\n*2\r\n$6\r\n2.8.12\r\n$24\r\nAdded new filter format.\r\n*2\r\n$6\r\n2.8.12\r\n$12\r\n`ID` option.\r\n*2\r\n$5\r\n3.2.0\r\n$41\r\nAdded `master` type in for `TYPE` option.\r\n*2\r\n$5\r\n5.0.0\r\n$91\r\nReplaced `slave` `TYPE` with `replica`. `slave` still supported for backward compatibility.\r\n*2\r\n$5\r\n6.2.0\r\n$15\r\n`LADDR` option.\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$6\r\nfilter\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$7\r\nip:port\r\n$4\r\ntype\r\n$6\r\nstring\r\n$16\r\ndeprecated_since\r\n$6\r\n2.8.12\r\n%4\r\n$4\r\nname\r\n$10\r\nnew-format\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\nflags\r\n~1\r\n+multiple\r\n$9\r\narguments\r\n*6\r\n%5\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$2\r\nID\r\n$5\r\nsince\r\n$6\r\n2.8.12\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%6\r\n$4\r\nname\r\n$26\r\nnormal_master_slave_pubsub\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\ntoken\r\n$4\r\nTYPE\r\n$5\r\nsince\r\n$6\r\n2.8.12\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$9\r\narguments\r\n*5\r\n%3\r\n$4\r\nname\r\n$6\r\nnormal\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nNORMAL\r\n%4\r\n$4\r\nname\r\n$6\r\nmaster\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nMASTER\r\n$5\r\nsince\r\n$5\r\n3.2.0\r\n%3\r\n$4\r\nname\r\n$5\r\nslave\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nSLAVE\r\n%4\r\n$4\r\nname\r\n$7\r\nreplica\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$7\r\nREPLICA\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n%3\r\n$4\r\nname\r\n$6\r\npubsub\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nPUBSUB\r\n%4\r\n$4\r\nname\r\n$8\r\nusername\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$4\r\nUSER\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$7\r\nip:port\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$4\r\nADDR\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%5\r\n$4\r\nname\r\n$7\r\nip:port\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$5\r\nLADDR\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$6\r\nyes/no\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nSKIPME\r\n$5\r\nflags\r\n~1\r\n+optional\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nclient|kill\r\n*12\r\n$7\r\nsummary\r\n$31\r\nKill the connection of a client\r\n$5\r\nsince\r\n$5\r\n2.4.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$48\r\nO(N) where N is the number of client connections\r\n$7\r\nhistory\r\n*5\r\n*2\r\n$6\r\n2.8.12\r\n$24\r\nAdded new filter format.\r\n*2\r\n$6\r\n2.8.12\r\n$12\r\n`ID` option.\r\n*2\r\n$5\r\n3.2.0\r\n$41\r\nAdded `master` type in for `TYPE` option.\r\n*2\r\n$5\r\n5.0.0\r\n$91\r\nReplaced `slave` `TYPE` with `replica`. `slave` still supported for backward compatibility.\r\n*2\r\n$5\r\n6.2.0\r\n$15\r\n`LADDR` option.\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$6\r\nfilter\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$7\r\nip:port\r\n$4\r\ntype\r\n$6\r\nstring\r\n$16\r\ndeprecated_since\r\n$6\r\n2.8.12\r\n*8\r\n$4\r\nname\r\n$10\r\nnew-format\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\nflags\r\n*1\r\n+multiple\r\n$9\r\narguments\r\n*6\r\n*10\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$2\r\nID\r\n$5\r\nsince\r\n$6\r\n2.8.12\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*12\r\n$4\r\nname\r\n$26\r\nnormal_master_slave_pubsub\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\ntoken\r\n$4\r\nTYPE\r\n$5\r\nsince\r\n$6\r\n2.8.12\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$9\r\narguments\r\n*5\r\n*6\r\n$4\r\nname\r\n$6\r\nnormal\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nNORMAL\r\n*8\r\n$4\r\nname\r\n$6\r\nmaster\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nMASTER\r\n$5\r\nsince\r\n$5\r\n3.2.0\r\n*6\r\n$4\r\nname\r\n$5\r\nslave\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nSLAVE\r\n*8\r\n$4\r\nname\r\n$7\r\nreplica\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$7\r\nREPLICA\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n*6\r\n$4\r\nname\r\n$6\r\npubsub\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nPUBSUB\r\n*8\r\n$4\r\nname\r\n$8\r\nusername\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$4\r\nUSER\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*8\r\n$4\r\nname\r\n$7\r\nip:port\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$4\r\nADDR\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*10\r\n$4\r\nname\r\n$7\r\nip:port\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$5\r\nLADDR\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*8\r\n$4\r\nname\r\n$6\r\nyes/no\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nSKIPME\r\n$5\r\nflags\r\n*1\r\n+optional\r\n"));
+        }
+        if reply.is_word(sub, "LIST") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nclient|list\r\n%6\r\n$7\r\nsummary\r\n$34\r\nGet the list of client connections\r\n$5\r\nsince\r\n$5\r\n2.4.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$48\r\nO(N) where N is the number of client connections\r\n$7\r\nhistory\r\n~6\r\n*2\r\n$6\r\n2.8.12\r\n$31\r\nAdded unique client `id` field.\r\n*2\r\n$5\r\n5.0.0\r\n$29\r\nAdded optional `TYPE` filter.\r\n*2\r\n$5\r\n6.0.0\r\n$19\r\nAdded `user` field.\r\n*2\r\n$5\r\n6.2.0\r\n$85\r\nAdded `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter.\r\n*2\r\n$5\r\n7.0.0\r\n$50\r\nAdded `resp`, `multi-mem`, `rbs` and `rbp` fields.\r\n*2\r\n$5\r\n7.0.3\r\n$19\r\nAdded `ssub` field.\r\n$9\r\narguments\r\n*2\r\n%6\r\n$4\r\nname\r\n$28\r\nnormal_master_replica_pubsub\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\ntoken\r\n$4\r\nTYPE\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$9\r\narguments\r\n*4\r\n%3\r\n$4\r\nname\r\n$6\r\nnormal\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nNORMAL\r\n%3\r\n$4\r\nname\r\n$6\r\nmaster\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nMASTER\r\n%3\r\n$4\r\nname\r\n$7\r\nreplica\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$7\r\nREPLICA\r\n%3\r\n$4\r\nname\r\n$6\r\npubsub\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nPUBSUB\r\n%6\r\n$4\r\nname\r\n$2\r\nid\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\ntoken\r\n$2\r\nID\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\nflags\r\n~1\r\n+multiple\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nclient|list\r\n*12\r\n$7\r\nsummary\r\n$34\r\nGet the list of client connections\r\n$5\r\nsince\r\n$5\r\n2.4.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$48\r\nO(N) where N is the number of client connections\r\n$7\r\nhistory\r\n*6\r\n*2\r\n$6\r\n2.8.12\r\n$31\r\nAdded unique client `id` field.\r\n*2\r\n$5\r\n5.0.0\r\n$29\r\nAdded optional `TYPE` filter.\r\n*2\r\n$5\r\n6.0.0\r\n$19\r\nAdded `user` field.\r\n*2\r\n$5\r\n6.2.0\r\n$85\r\nAdded `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter.\r\n*2\r\n$5\r\n7.0.0\r\n$50\r\nAdded `resp`, `multi-mem`, `rbs` and `rbp` fields.\r\n*2\r\n$5\r\n7.0.3\r\n$19\r\nAdded `ssub` field.\r\n$9\r\narguments\r\n*2\r\n*12\r\n$4\r\nname\r\n$28\r\nnormal_master_replica_pubsub\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\ntoken\r\n$4\r\nTYPE\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$9\r\narguments\r\n*4\r\n*6\r\n$4\r\nname\r\n$6\r\nnormal\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nNORMAL\r\n*6\r\n$4\r\nname\r\n$6\r\nmaster\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nMASTER\r\n*6\r\n$4\r\nname\r\n$7\r\nreplica\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$7\r\nREPLICA\r\n*6\r\n$4\r\nname\r\n$6\r\npubsub\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nPUBSUB\r\n*12\r\n$4\r\nname\r\n$2\r\nid\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\ntoken\r\n$2\r\nID\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\nflags\r\n*1\r\n+multiple\r\n"));
+        }
+        if reply.is_word(sub, "NO-EVICT") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nclient|no-evict\r\n%5\r\n$7\r\nsummary\r\n$51\r\nSet client eviction mode for the current connection\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$7\r\nenabled\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$2\r\non\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nON\r\n%3\r\n$4\r\nname\r\n$3\r\noff\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nOFF\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nclient|no-evict\r\n*10\r\n$7\r\nsummary\r\n$51\r\nSet client eviction mode for the current connection\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$7\r\nenabled\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$2\r\non\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nON\r\n*6\r\n$4\r\nname\r\n$3\r\noff\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nOFF\r\n"));
+        }
+        if reply.is_word(sub, "PAUSE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nclient|pause\r\n%6\r\n$7\r\nsummary\r\n$51\r\nStop processing commands from clients for some time\r\n$5\r\nsince\r\n$6\r\n2.9.50\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n6.2.0\r\n$61\r\n`CLIENT PAUSE WRITE` mode added along with the `mode` option.\r\n$9\r\narguments\r\n*2\r\n%2\r\n$4\r\nname\r\n$7\r\ntimeout\r\n$4\r\ntype\r\n$7\r\ninteger\r\n%5\r\n$4\r\nname\r\n$4\r\nmode\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$5\r\nwrite\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nWRITE\r\n%3\r\n$4\r\nname\r\n$3\r\nall\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nALL\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nclient|pause\r\n*12\r\n$7\r\nsummary\r\n$51\r\nStop processing commands from clients for some time\r\n$5\r\nsince\r\n$6\r\n2.9.50\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n6.2.0\r\n$61\r\n`CLIENT PAUSE WRITE` mode added along with the `mode` option.\r\n$9\r\narguments\r\n*2\r\n*4\r\n$4\r\nname\r\n$7\r\ntimeout\r\n$4\r\ntype\r\n$7\r\ninteger\r\n*10\r\n$4\r\nname\r\n$4\r\nmode\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$5\r\nwrite\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nWRITE\r\n*6\r\n$4\r\nname\r\n$3\r\nall\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nALL\r\n"));
+        }
+        if reply.is_word(sub, "REPLY") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nclient|reply\r\n%5\r\n$7\r\nsummary\r\n$48\r\nInstruct the server whether to reply to commands\r\n$5\r\nsince\r\n$5\r\n3.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$11\r\non_off_skip\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*3\r\n%3\r\n$4\r\nname\r\n$2\r\non\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nON\r\n%3\r\n$4\r\nname\r\n$3\r\noff\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nOFF\r\n%3\r\n$4\r\nname\r\n$4\r\nskip\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$4\r\nSKIP\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nclient|reply\r\n*10\r\n$7\r\nsummary\r\n$48\r\nInstruct the server whether to reply to commands\r\n$5\r\nsince\r\n$5\r\n3.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$11\r\non_off_skip\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*3\r\n*6\r\n$4\r\nname\r\n$2\r\non\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nON\r\n*6\r\n$4\r\nname\r\n$3\r\noff\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nOFF\r\n*6\r\n$4\r\nname\r\n$4\r\nskip\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$4\r\nSKIP\r\n"));
+        }
+        if reply.is_word(sub, "SETNAME") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nclient|setname\r\n%5\r\n$7\r\nsummary\r\n$31\r\nSet the current connection name\r\n$5\r\nsince\r\n$5\r\n2.6.9\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%2\r\n$4\r\nname\r\n$15\r\nconnection-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nclient|setname\r\n*10\r\n$7\r\nsummary\r\n$31\r\nSet the current connection name\r\n$5\r\nsince\r\n$5\r\n2.6.9\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$15\r\nconnection-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+        }
+        if reply.is_word(sub, "TRACKING") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nclient|tracking\r\n%5\r\n$7\r\nsummary\r\n$61\r\nEnable or disable server assisted client side caching support\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$55\r\nO(1). Some options may introduce additional complexity.\r\n$9\r\narguments\r\n*7\r\n%3\r\n$4\r\nname\r\n$6\r\nstatus\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$2\r\non\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nON\r\n%3\r\n$4\r\nname\r\n$3\r\noff\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nOFF\r\n%4\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$8\r\nREDIRECT\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$6\r\nprefix\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nPREFIX\r\n$5\r\nflags\r\n~3\r\n+optional\r\n+multiple\r\n+multiple_token\r\n%4\r\n$4\r\nname\r\n$5\r\nbcast\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nBCAST\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$5\r\noptin\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nOPTIN\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$6\r\noptout\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nOPTOUT\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$6\r\nnoloop\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nNOLOOP\r\n$5\r\nflags\r\n~1\r\n+optional\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nclient|tracking\r\n*10\r\n$7\r\nsummary\r\n$61\r\nEnable or disable server assisted client side caching support\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$55\r\nO(1). Some options may introduce additional complexity.\r\n$9\r\narguments\r\n*7\r\n*6\r\n$4\r\nname\r\n$6\r\nstatus\r\n$4\r\ntype\r\n$5\r\noneof\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$2\r\non\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$2\r\nON\r\n*6\r\n$4\r\nname\r\n$3\r\noff\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$3\r\nOFF\r\n*8\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$8\r\nREDIRECT\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*8\r\n$4\r\nname\r\n$6\r\nprefix\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nPREFIX\r\n$5\r\nflags\r\n*3\r\n+optional\r\n+multiple\r\n+multiple_token\r\n*8\r\n$4\r\nname\r\n$5\r\nbcast\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nBCAST\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*8\r\n$4\r\nname\r\n$5\r\noptin\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nOPTIN\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*8\r\n$4\r\nname\r\n$6\r\noptout\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nOPTOUT\r\n$5\r\nflags\r\n*1\r\n+optional\r\n*8\r\n$4\r\nname\r\n$6\r\nnoloop\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$6\r\nNOLOOP\r\n$5\r\nflags\r\n*1\r\n+optional\r\n"));
+        }
+        if reply.is_word(sub, "TRACKINGINFO") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$19\r\nclient|trackinginfo\r\n%4\r\n$7\r\nsummary\r\n$87\r\nReturn information about server assisted client side caching for the current connection\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$19\r\nclient|trackinginfo\r\n*8\r\n$7\r\nsummary\r\n$87\r\nReturn information about server assisted client side caching for the current connection\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "UNBLOCK") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nclient|unblock\r\n%5\r\n$7\r\nsummary\r\n$74\r\nUnblock a client blocked in a blocking command from a different connection\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$52\r\nO(log N) where N is the number of client connections\r\n$9\r\narguments\r\n*2\r\n%2\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n%4\r\n$4\r\nname\r\n$13\r\ntimeout_error\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$7\r\ntimeout\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$7\r\nTIMEOUT\r\n%3\r\n$4\r\nname\r\n$5\r\nerror\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nERROR\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nclient|unblock\r\n*10\r\n$7\r\nsummary\r\n$74\r\nUnblock a client blocked in a blocking command from a different connection\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$52\r\nO(log N) where N is the number of client connections\r\n$9\r\narguments\r\n*2\r\n*4\r\n$4\r\nname\r\n$9\r\nclient-id\r\n$4\r\ntype\r\n$7\r\ninteger\r\n*8\r\n$4\r\nname\r\n$13\r\ntimeout_error\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$7\r\ntimeout\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$7\r\nTIMEOUT\r\n*6\r\n$4\r\nname\r\n$5\r\nerror\r\n$4\r\ntype\r\n$10\r\npure-token\r\n$5\r\ntoken\r\n$5\r\nERROR\r\n"));
+        }
+        if reply.is_word(sub, "UNPAUSE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nclient|unpause\r\n%4\r\n$7\r\nsummary\r\n$45\r\nResume processing of clients that were paused\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$44\r\nO(N) Where N is the number of paused clients\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nclient|unpause\r\n*8\r\n$7\r\nsummary\r\n$45\r\nResume processing of clients that were paused\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$44\r\nO(N) Where N is the number of paused clients\r\n"));
+        }
+    }
+    if reply.is_word(name, "COMMAND") {
+        if reply.is_word(sub, "COUNT") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$13\r\ncommand|count\r\n%4\r\n$7\r\nsummary\r\n$34\r\nGet total number of Redis commands\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$13\r\ncommand|count\r\n*8\r\n$7\r\nsummary\r\n$34\r\nGet total number of Redis commands\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "DOCS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\ncommand|docs\r\n%5\r\n$7\r\nsummary\r\n$49\r\nGet array of specific Redis command documentation\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$49\r\nO(N) where N is the number of commands to look up\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$12\r\ncommand-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n~2\r\n+optional\r\n+multiple\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\ncommand|docs\r\n*10\r\n$7\r\nsummary\r\n$49\r\nGet array of specific Redis command documentation\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$49\r\nO(N) where N is the number of commands to look up\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$12\r\ncommand-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n*2\r\n+optional\r\n+multiple\r\n"));
+        }
+        if reply.is_word(sub, "GETKEYS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\ncommand|getkeys\r\n%4\r\n$7\r\nsummary\r\n$39\r\nExtract keys given a full Redis command\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nO(N) where N is the number of arguments to the command\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\ncommand|getkeys\r\n*8\r\n$7\r\nsummary\r\n$39\r\nExtract keys given a full Redis command\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nO(N) where N is the number of arguments to the command\r\n"));
+        }
+        if reply.is_word(sub, "GETKEYSANDFLAGS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$23\r\ncommand|getkeysandflags\r\n%4\r\n$7\r\nsummary\r\n$56\r\nExtract keys and access flags given a full Redis command\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nO(N) where N is the number of arguments to the command\r\n"));
+            }
+            return (true, reply.put(sc, at, "$23\r\ncommand|getkeysandflags\r\n*8\r\n$7\r\nsummary\r\n$56\r\nExtract keys and access flags given a full Redis command\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nO(N) where N is the number of arguments to the command\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\ncommand|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\ncommand|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "INFO") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\ncommand|info\r\n%6\r\n$7\r\nsummary\r\n$78\r\nGet array of specific Redis command details, or all when no argument is given.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$49\r\nO(N) where N is the number of commands to look up\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n7.0.0\r\n$66\r\nAllowed to be called with no argument to get info on all commands.\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$12\r\ncommand-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n~2\r\n+optional\r\n+multiple\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\ncommand|info\r\n*12\r\n$7\r\nsummary\r\n$78\r\nGet array of specific Redis command details, or all when no argument is given.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$49\r\nO(N) where N is the number of commands to look up\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n7.0.0\r\n$66\r\nAllowed to be called with no argument to get info on all commands.\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$12\r\ncommand-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n*2\r\n+optional\r\n+multiple\r\n"));
+        }
+        if reply.is_word(sub, "LIST") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\ncommand|list\r\n%5\r\n$7\r\nsummary\r\n$35\r\nGet an array of Redis command names\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$50\r\nO(N) where N is the total number of Redis commands\r\n$9\r\narguments\r\n*1\r\n%5\r\n$4\r\nname\r\n$8\r\nfilterby\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\ntoken\r\n$8\r\nFILTERBY\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$9\r\narguments\r\n*3\r\n%3\r\n$4\r\nname\r\n$11\r\nmodule-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nMODULE\r\n%3\r\n$4\r\nname\r\n$8\r\ncategory\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nACLCAT\r\n%3\r\n$4\r\nname\r\n$7\r\npattern\r\n$4\r\ntype\r\n$7\r\npattern\r\n$5\r\ntoken\r\n$7\r\nPATTERN\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\ncommand|list\r\n*10\r\n$7\r\nsummary\r\n$35\r\nGet an array of Redis command names\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$50\r\nO(N) where N is the total number of Redis commands\r\n$9\r\narguments\r\n*1\r\n*10\r\n$4\r\nname\r\n$8\r\nfilterby\r\n$4\r\ntype\r\n$5\r\noneof\r\n$5\r\ntoken\r\n$8\r\nFILTERBY\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$9\r\narguments\r\n*3\r\n*6\r\n$4\r\nname\r\n$11\r\nmodule-name\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nMODULE\r\n*6\r\n$4\r\nname\r\n$8\r\ncategory\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$6\r\nACLCAT\r\n*6\r\n$4\r\nname\r\n$7\r\npattern\r\n$4\r\ntype\r\n$7\r\npattern\r\n$5\r\ntoken\r\n$7\r\nPATTERN\r\n"));
+        }
+    }
+    if reply.is_word(name, "CONFIG") {
+        if reply.is_word(sub, "GET") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$10\r\nconfig|get\r\n%6\r\n$7\r\nsummary\r\n$42\r\nGet the values of configuration parameters\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$62\r\nO(N) when N is the number of configuration parameters provided\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n7.0.0\r\n$65\r\nAdded the ability to pass multiple pattern parameters in one call\r\n$9\r\narguments\r\n*1\r\n%4\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\nflags\r\n~1\r\n+multiple\r\n$9\r\narguments\r\n*1\r\n%2\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+            }
+            return (true, reply.put(sc, at, "$10\r\nconfig|get\r\n*12\r\n$7\r\nsummary\r\n$42\r\nGet the values of configuration parameters\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$62\r\nO(N) when N is the number of configuration parameters provided\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n7.0.0\r\n$65\r\nAdded the ability to pass multiple pattern parameters in one call\r\n$9\r\narguments\r\n*1\r\n*8\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\nflags\r\n*1\r\n+multiple\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nconfig|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nconfig|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n5.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "RESETSTAT") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$16\r\nconfig|resetstat\r\n%4\r\n$7\r\nsummary\r\n$32\r\nReset the stats returned by INFO\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$16\r\nconfig|resetstat\r\n*8\r\n$7\r\nsummary\r\n$32\r\nReset the stats returned by INFO\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "REWRITE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nconfig|rewrite\r\n%4\r\n$7\r\nsummary\r\n$63\r\nRewrite the configuration file with the in memory configuration\r\n$5\r\nsince\r\n$5\r\n2.8.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nconfig|rewrite\r\n*8\r\n$7\r\nsummary\r\n$63\r\nRewrite the configuration file with the in memory configuration\r\n$5\r\nsince\r\n$5\r\n2.8.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "SET") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$10\r\nconfig|set\r\n%6\r\n$7\r\nsummary\r\n$48\r\nSet configuration parameters to the given values\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$62\r\nO(N) when N is the number of configuration parameters provided\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n7.0.0\r\n$57\r\nAdded the ability to set multiple parameters in one call.\r\n$9\r\narguments\r\n*1\r\n%4\r\n$4\r\nname\r\n$15\r\nparameter_value\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\nflags\r\n~1\r\n+multiple\r\n$9\r\narguments\r\n*2\r\n%2\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$6\r\nstring\r\n%2\r\n$4\r\nname\r\n$5\r\nvalue\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+            }
+            return (true, reply.put(sc, at, "$10\r\nconfig|set\r\n*12\r\n$7\r\nsummary\r\n$48\r\nSet configuration parameters to the given values\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$62\r\nO(N) when N is the number of configuration parameters provided\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n7.0.0\r\n$57\r\nAdded the ability to set multiple parameters in one call.\r\n$9\r\narguments\r\n*1\r\n*8\r\n$4\r\nname\r\n$15\r\nparameter_value\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\nflags\r\n*1\r\n+multiple\r\n$9\r\narguments\r\n*2\r\n*4\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$6\r\nstring\r\n*4\r\n$4\r\nname\r\n$5\r\nvalue\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+        }
+    }
+    if reply.is_word(name, "OBJECT") {
+        if reply.is_word(sub, "ENCODING") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nobject|encoding\r\n%5\r\n$7\r\nsummary\r\n$47\r\nInspect the internal encoding of a Redis object\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nobject|encoding\r\n*10\r\n$7\r\nsummary\r\n$47\r\nInspect the internal encoding of a Redis object\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+        }
+        if reply.is_word(sub, "FREQ") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nobject|freq\r\n%5\r\n$7\r\nsummary\r\n$62\r\nGet the logarithmic access frequency counter of a Redis object\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nobject|freq\r\n*10\r\n$7\r\nsummary\r\n$62\r\nGet the logarithmic access frequency counter of a Redis object\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nobject|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nobject|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "IDLETIME") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nobject|idletime\r\n%5\r\n$7\r\nsummary\r\n$51\r\nGet the time since a Redis object was last accessed\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nobject|idletime\r\n*10\r\n$7\r\nsummary\r\n$51\r\nGet the time since a Redis object was last accessed\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+        }
+        if reply.is_word(sub, "REFCOUNT") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nobject|refcount\r\n%5\r\n$7\r\nsummary\r\n$52\r\nGet the number of references to the value of the key\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nobject|refcount\r\n*10\r\n$7\r\nsummary\r\n$52\r\nGet the number of references to the value of the key\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
+        }
+    }
+    return (false, at);
+}
+
 // Every command's docs, one after another (`COMMAND DOCS` with no names).
 pub fn put_all_docs[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     var o = at;

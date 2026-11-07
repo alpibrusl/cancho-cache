@@ -113,10 +113,9 @@ fn reply_starts[&b](sc: &b [byte], from: int, to: int, text: &static [byte]) -> 
     return true;
 }
 
-// Note one command answered: `name` ran, and its reply is `sc[from..to]`. An error reply is counted in `total_error_replies` and under its code. A command refused before
+// Note one command answered: command number `i` (`cmdnames.index_of`, -1 for none) ran, and its reply is `sc[from..to]`. An error reply is counted in `total_error_replies` and under its code. A command refused before
 // it ran (a wrong number of arguments, no room for it, another node's key, as in Redis) counts as `rejected_calls` and not as a call; any other error is a call that failed.
-pub fn record[&w, &n, &b](world: &!w [int], name: &n [byte], sc: &b [byte], from: int, to: int) -> [] int {
-    let i = cmdnames.index_of(name);
+pub fn record[&w, &b](world: &!w [int], i: int, sc: &b [byte], from: int, to: int) -> [] int {
     let failed = to > from && int_of(sc[from]) == '-';
     var rejected = false;
     var c = 0;

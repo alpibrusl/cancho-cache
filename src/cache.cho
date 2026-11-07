@@ -1,13 +1,16 @@
 edition 5;
 
+import std.addr;
 import std.buffer;
 import std.conns;
 import std.io;
 import cluster;
+import cmdnames;
 import commands;
 import pool;
 import reply;
 import resp;
+import slowlog;
 import stats;
 import store;
 import stream;
@@ -243,6 +246,43 @@ fn pump_get[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, ops: int, ope:
 
 // Answer every whole command buffered for connection `k`, write the answers, and keep the start of one that
 // is still arriving. Closes the connection if it is to close, or cannot be written to.
+// Whether the command in `tb` is timed for the slow log (`docs/design.md` section 31): every command if the threshold is a millisecond or less, otherwise only the ones
+// that can take a while, so that a lookup of one key does not pay for two reads of the clock. Never if the log is off.
+fn slow_timed[&c, &w](core: &c Core, tb: &w [int], idx: int) -> [] bool {
+    let limit = store.slow_threshold_of(core.store);
+    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx));
+}
+
+// After a timed command ran: it took until now from `began`; if that is as long as the threshold (as it is *now*, so that the command that sets it is judged by the new
+// value, as in Redis) it is logged.
+fn slow_after[&t, &c, &v, &w, &q](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], began: int, clock: &q Clock) -> [clock] int {
+    let took = (clock_ms(clock) - began) * 1000;
+    let limit = store.slow_threshold_of(core.store);
+    if limit >= 0 && took >= limit {
+        slow_note(tab, core, k, view, tb, took);
+    }
+    return 0;
+}
+
+// Log the command line in `view` as slow: it took `usec` microseconds. The client's address and name are looked up now, which only a slow command pays for.
+fn slow_note[&t, &c, &v, &w](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], usec: int) -> [] int {
+    let name_length = contents(core.state)[stride() * k + 5];
+    region r {
+        let buf = alloc_slice[r](64, byte_of(0));
+        var n = 0;
+        match conns.peer(tab, k) {
+            conns.Peered::Known(peer) => {
+                n = addr.text_port(peer, buf);
+            }
+            conns.Peered::Unavailable(e) => {
+            }
+        }
+        let secs = (store.wall_of(core.store) + store.now_of(core.store)) / 1000;
+        slowlog.record(core.store, view, tb, secs, usec, buf[0..n], contents(core.names)[k * 64..k * 64 + name_length]);
+    }
+    return 0;
+}
+
 fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q Clock) -> [conn_write, poll, clock] int {
     let st = contents(core.state);
     let bf = contents(core.bufs);
@@ -398,6 +438,10 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                 // In cluster mode a command whose keys another node owns is refused here, before the transaction layer sees it: queued inside `MULTI` it is
                 // refused when it is queued and `EXEC` then answers `EXECABORT`, as in Redis (`docs/design.md` section 29).
                 let reply_from = at;
+                var cmd_idx = 0 - 1;
+                if tb[0] > 0 {
+                    cmd_idx = cmdnames.index_of(reply.arg_of(view, tb, 0));
+                }
                 let refused = cluster.route(view, tb, sc, at, contents(core.info));
                 var status = 0;
                 if refused != at {
@@ -422,10 +466,14 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                         st[p + 16] = store.stamp_of(core.store, ge);
                         st[p + 17] = store.epoch_of(core.store);
                     } else {
-                        let began = clock_ms(clock);
+                        let timed = slow_timed(core, tb, cmd_idx);
+                        var began = 0;
+                        if timed {
+                            began = clock_ms(clock);
+                        }
                         at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
-                        if clock_ms(clock) - began >= 1000000 {
-                            contents(core.info)[7] = contents(core.info)[7] + 1;
+                        if timed {
+                            slow_after(tab, core, k, view, tb, began, clock);
                         }
                     }
                 }
@@ -440,7 +488,7 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                     contents(core.info)[2] = contents(core.info)[2] + 1;
                     // The command is counted for `INFO commandstats`, and an error reply for `errorstats` (`docs/design.md` section 30).
                     if tb[0] > 0 {
-                        stats.record(contents(core.info), reply.arg_of(view, tb, 0), sc, reply_from, at);
+                        stats.record(contents(core.info), cmd_idx, sc, reply_from, at);
                     }
                 }
                 if status == 2 {
@@ -462,7 +510,15 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                                 // The watches were checked already and `clear` below forgets them.
                                 at = reply.put(sc, at, "+OK\r\n");
                             } else {
+                                let timed = slow_timed(core, tb, cmdnames.index_of(reply.arg_of(qview, tb, 0)));
+                                var began = 0;
+                                if timed {
+                                    began = clock_ms(clock);
+                                }
                                 at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                                if timed {
+                                    slow_after(tab, core, k, qview, tb, began, clock);
+                                }
                                 if st[p + 9] != 0 {
                                     // Part way through a command that answers in pieces: what it wrote goes out, and it is called again.
                                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);

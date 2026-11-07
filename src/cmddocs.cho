@@ -430,6 +430,12 @@ pub fn put_docs[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -
         }
         return (true, reply.put(sc, at, "$8\r\nsetrange\r\n*10\r\n$7\r\nsummary\r\n$66\r\nOverwrite part of a string at key starting at the specified offset\r\n$5\r\nsince\r\n$5\r\n2.2.0\r\n$5\r\ngroup\r\n$6\r\nstring\r\n$10\r\ncomplexity\r\n$215\r\nO(1), not counting the time taken to copy the new string in place. Usually, this string is very small so the amortized complexity is O(1). Otherwise, complexity is O(M) with M being the length of the value argument.\r\n$9\r\narguments\r\n*3\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n*4\r\n$4\r\nname\r\n$6\r\noffset\r\n$4\r\ntype\r\n$7\r\ninteger\r\n*4\r\n$4\r\nname\r\n$5\r\nvalue\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
     }
+    if reply.is_word(name, "SLOWLOG") {
+        if resp3 {
+            return (true, reply.put(sc, at, "$7\r\nslowlog\r\n%5\r\n$7\r\nsummary\r\n$33\r\nA container for slow log commands\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$22\r\nDepends on subcommand.\r\n$11\r\nsubcommands\r\n%4\r\n$11\r\nslowlog|get\r\n%6\r\n$7\r\nsummary\r\n$26\r\nGet the slow log's entries\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$46\r\nO(N) where N is the number of entries returned\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n4.0.0\r\n$52\r\nAdded client IP address, port and name to the reply.\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$11\r\nslowlog|len\r\n%4\r\n$7\r\nsummary\r\n$25\r\nGet the slow log's length\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$12\r\nslowlog|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$13\r\nslowlog|reset\r\n%4\r\n$7\r\nsummary\r\n$35\r\nClear all entries from the slow log\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$52\r\nO(N) where N is the number of entries in the slowlog\r\n"));
+        }
+        return (true, reply.put(sc, at, "$7\r\nslowlog\r\n*10\r\n$7\r\nsummary\r\n$33\r\nA container for slow log commands\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$22\r\nDepends on subcommand.\r\n$11\r\nsubcommands\r\n*8\r\n$11\r\nslowlog|get\r\n*12\r\n$7\r\nsummary\r\n$26\r\nGet the slow log's entries\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$46\r\nO(N) where N is the number of entries returned\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n4.0.0\r\n$52\r\nAdded client IP address, port and name to the reply.\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$11\r\nslowlog|len\r\n*8\r\n$7\r\nsummary\r\n$25\r\nGet the slow log's length\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$12\r\nslowlog|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$13\r\nslowlog|reset\r\n*8\r\n$7\r\nsummary\r\n$35\r\nClear all entries from the slow log\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$52\r\nO(N) where N is the number of entries in the slowlog\r\n"));
+    }
     if reply.is_word(name, "STRLEN") {
         if resp3 {
             return (true, reply.put(sc, at, "$6\r\nstrlen\r\n%5\r\n$7\r\nsummary\r\n$43\r\nGet the length of the value stored in a key\r\n$5\r\nsince\r\n$5\r\n2.2.0\r\n$5\r\ngroup\r\n$6\r\nstring\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
@@ -853,6 +859,32 @@ pub fn put_sub_docs[&w, &s, &b](name: &w [byte], sub: &s [byte], sc: &!b [byte],
             return (true, reply.put(sc, at, "$15\r\nobject|refcount\r\n*10\r\n$7\r\nsummary\r\n$52\r\nGet the number of references to the value of the key\r\n$5\r\nsince\r\n$5\r\n2.2.3\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n"));
         }
     }
+    if reply.is_word(name, "SLOWLOG") {
+        if reply.is_word(sub, "GET") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nslowlog|get\r\n%6\r\n$7\r\nsummary\r\n$26\r\nGet the slow log's entries\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$46\r\nO(N) where N is the number of entries returned\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n4.0.0\r\n$52\r\nAdded client IP address, port and name to the reply.\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\nflags\r\n~1\r\n+optional\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nslowlog|get\r\n*12\r\n$7\r\nsummary\r\n$26\r\nGet the slow log's entries\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$46\r\nO(N) where N is the number of entries returned\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n4.0.0\r\n$52\r\nAdded client IP address, port and name to the reply.\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\nflags\r\n*1\r\n+optional\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nslowlog|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nslowlog|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "LEN") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nslowlog|len\r\n%4\r\n$7\r\nsummary\r\n$25\r\nGet the slow log's length\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nslowlog|len\r\n*8\r\n$7\r\nsummary\r\n$25\r\nGet the slow log's length\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "RESET") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$13\r\nslowlog|reset\r\n%4\r\n$7\r\nsummary\r\n$35\r\nClear all entries from the slow log\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$52\r\nO(N) where N is the number of entries in the slowlog\r\n"));
+            }
+            return (true, reply.put(sc, at, "$13\r\nslowlog|reset\r\n*8\r\n$7\r\nsummary\r\n$35\r\nClear all entries from the slow log\r\n$5\r\nsince\r\n$6\r\n2.2.12\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$52\r\nO(N) where N is the number of entries in the slowlog\r\n"));
+        }
+    }
     return (false, at);
 }
 
@@ -929,6 +961,7 @@ pub fn put_all_docs[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_docs("SETEX", sc, o, resp3).1;
     o = put_docs("SETNX", sc, o, resp3).1;
     o = put_docs("SETRANGE", sc, o, resp3).1;
+    o = put_docs("SLOWLOG", sc, o, resp3).1;
     o = put_docs("STRLEN", sc, o, resp3).1;
     o = put_docs("SUBSTR", sc, o, resp3).1;
     o = put_docs("TOUCH", sc, o, resp3).1;

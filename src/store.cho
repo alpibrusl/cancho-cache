@@ -183,6 +183,13 @@ pub res struct Store {
     hits: int,
     misses: int,
     peak: int,
+    // The slow log (`docs/design.md` section 31): a ring of entries, their texts, and its settings. `slow_next` is the id the next entry gets; `slow_count` how many are kept.
+    slow: Box[[int]],
+    slowtext: Box[[byte]],
+    slow_next: int,
+    slow_count: int,
+    slow_threshold: int,
+    slow_max: int,
     now: int,
     // How many uses of keys have been stamped in the current millisecond (`use_stamp`).
     seq: int,
@@ -223,13 +230,15 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, slow: box_slice(heap, slow_cap() * slow_fields(), 0), slowtext: box_slice(heap, slow_cap() * slow_room(), byte_of(0)), slow_next: 0, slow_count: 0, slow_threshold: 10000, slow_max: 128, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, slow, slowtext, slow_next, slow_count, slow_threshold, slow_max, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
+    unbox_slice(heap, slow);
+    unbox_slice(heap, slowtext);
     unbox_slice(heap, meta);
     unbox_slice(heap, data);
     return live;
@@ -1457,6 +1466,73 @@ pub fn note_peak[&s](st: &!s Store) -> [] int {
 
 pub fn peak_of[&s](st: &s Store) -> [] int {
     return st.peak;
+}
+
+// The slow log's size, fixed at start: this many entries, each `slow_fields()` ints and `slow_room()` bytes of text.
+pub fn slow_cap() -> [] int {
+    return 128;
+}
+
+pub fn slow_fields() -> [] int {
+    return 8;
+}
+
+pub fn slow_room() -> [] int {
+    return 5120;
+}
+
+// A new slow log entry: answers its id (ids count up from 0 and are not reused, `SLOWLOG RESET` or not), makes room for it in the ring, and counts it.
+pub fn slow_push[&s](st: &!s Store) -> [] int {
+    let id = st.slow_next;
+    st.slow_next = id + 1;
+    if st.slow_count < st.slow_max {
+        st.slow_count = st.slow_count + 1;
+    }
+    return id;
+}
+
+pub fn slow_next_id[&s](st: &s Store) -> [] int {
+    return st.slow_next;
+}
+
+pub fn slow_len[&s](st: &s Store) -> [] int {
+    return st.slow_count;
+}
+
+pub fn slow_clear[&s](st: &!s Store) -> [] int {
+    st.slow_count = 0;
+    return 0;
+}
+
+// `slowlog-log-slower-than` in microseconds (-1: off, 0: everything) and `slowlog-max-len`.
+pub fn slow_threshold_of[&s](st: &s Store) -> [] int {
+    return st.slow_threshold;
+}
+
+pub fn set_slow_threshold[&s](st: &!s Store, us: int) -> [] int {
+    st.slow_threshold = us;
+    return 0;
+}
+
+pub fn slow_max_of[&s](st: &s Store) -> [] int {
+    return st.slow_max;
+}
+
+pub fn set_slow_max[&s](st: &!s Store, n: int) -> [] int {
+    st.slow_max = n;
+    if st.slow_count > n {
+        st.slow_count = n;
+    }
+    return 0;
+}
+
+// The slow log's ring, to be read and written by `slowlog`.
+pub fn slow_ints[&s](st: &!s Store) -> [] &!s [int] {
+    return contents(st.slow);
+}
+
+pub fn slow_text[&s](st: &!s Store) -> [] &!s [byte] {
+    return contents(st.slowtext);
 }
 
 // Which eviction policy is in force.

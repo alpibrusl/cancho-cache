@@ -389,6 +389,25 @@ def main():
         w('    return "";')
         w("}")
         w("")
+        slow_names = {"KEYS", "SCAN", "HSCAN", "HRANDFIELD", "FLUSHALL", "FLUSHDB", "EXEC", "HGETALL", "HKEYS", "HVALS", "COMMAND", "CLUSTER", "INFO", "RENAME", "RENAMENX",
+                      "COPY", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "MGET", "MSET", "MSETNX", "DEL", "UNLINK", "EXISTS", "TOUCH", "WATCH", "HMGET", "HDEL", "HSET",
+                      "HMSET", "CONFIG", "OBJECT"}
+        mask = [0, 0]
+        for i, n in enumerate(order):
+            if n in slow_names:
+                mask[i // 62] |= 1 << (i % 62)
+        w("// Whether command `i` can take long enough to be worth timing by default for the slow log (`docs/design.md` section 31): the ones whose cost grows with the")
+        w("// keys, the arguments or the bytes they touch. A single-key lookup is not one: it cannot take a millisecond.")
+        w("pub fn may_be_slow(i: int) -> [] bool {")
+        w("    if i < 0 {")
+        w("        return false;")
+        w("    }")
+        w("    if i < 62 {")
+        w("        return %d >> i & 1 == 1;" % mask[0])
+        w("    }")
+        w("    return %d >> i - 62 & 1 == 1;" % mask[1])
+        w("}")
+        w("")
         w = w_keep
         while names_lines[-1] == "":
             names_lines.pop()

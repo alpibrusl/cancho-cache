@@ -248,17 +248,18 @@ fn pump_get[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, ops: int, ope:
 // is still arriving. Closes the connection if it is to close, or cannot be written to.
 // Whether the command in `tb` is timed for the slow log (`docs/design.md` section 31): every command if the threshold is a millisecond or less, otherwise only the ones
 // that can take a while, so that a lookup of one key does not pay for two reads of the clock. Never if the log is off.
-fn slow_timed[&c, &w](core: &c Core, tb: &w [int], idx: int) -> [] bool {
+fn slow_timed[&c, &v, &w](core: &c Core, view: &v [byte], tb: &w [int], idx: int) -> [] bool {
     let limit = store.slow_threshold_of(core.store);
-    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx));
+    // `CONFIG` is always timed: it may be the command that switches the log on, and it is then judged by the new threshold.
+    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx)) || reply.is_word(reply.arg_of(view, tb, 0), "CONFIG");
 }
 
 // After a timed command ran: it took until now from `began`; if that is as long as the threshold (as it is *now*, so that the command that sets it is judged by the new
 // value, as in Redis) it is logged.
-fn slow_after[&t, &c, &v, &w, &q](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], began: int, clock: &q Clock) -> [clock] int {
+fn slow_after[&t, &c, &v, &w, &q, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], began: int, clock: &q Clock, sc: &b [byte], from: int, to: int) -> [clock] int {
     let took = (clock_ms(clock) - began) * 1000;
     let limit = store.slow_threshold_of(core.store);
-    if limit >= 0 && took >= limit {
+    if limit >= 0 && took >= limit && !stats.did_not_run(sc, from, to) {
         slow_note(tab, core, k, view, tb, took);
     }
     return 0;
@@ -451,9 +452,17 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                     }
                     status = 1;
                 } else {
+                    let txn_timed = slow_timed(core, view, tb, cmd_idx);
+                    var txn_began = 0;
+                    if txn_timed {
+                        txn_began = clock_ms(clock);
+                    }
                     let (after, handled) = txn.handle(view, tb, sc, at, core.store, tx, qall[qlo..qhi], st[p + 5..p + 10], n);
                     at = after;
                     status = handled;
+                    if txn_timed && status == 1 {
+                        slow_after(tab, core, k, view, tb, txn_began, clock, sc, reply_from, at);
+                    }
                 }
                 if status == 0 {
                     // A `GET` of a value too long for a buffer is sent in pieces.
@@ -466,14 +475,14 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                         st[p + 16] = store.stamp_of(core.store, ge);
                         st[p + 17] = store.epoch_of(core.store);
                     } else {
-                        let timed = slow_timed(core, tb, cmd_idx);
+                        let timed = slow_timed(core, view, tb, cmd_idx);
                         var began = 0;
                         if timed {
                             began = clock_ms(clock);
                         }
                         at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
                         if timed {
-                            slow_after(tab, core, k, view, tb, began, clock);
+                            slow_after(tab, core, k, view, tb, began, clock, sc, reply_from, at);
                         }
                     }
                 }
@@ -510,14 +519,15 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                                 // The watches were checked already and `clear` below forgets them.
                                 at = reply.put(sc, at, "+OK\r\n");
                             } else {
-                                let timed = slow_timed(core, tb, cmdnames.index_of(reply.arg_of(qview, tb, 0)));
+                                let exec_from = at;
+                                let timed = slow_timed(core, qview, tb, cmdnames.index_of(reply.arg_of(qview, tb, 0)));
                                 var began = 0;
                                 if timed {
                                     began = clock_ms(clock);
                                 }
                                 at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
                                 if timed {
-                                    slow_after(tab, core, k, qview, tb, began, clock);
+                                    slow_after(tab, core, k, qview, tb, began, clock, sc, exec_from, at);
                                 }
                                 if st[p + 9] != 0 {
                                     // Part way through a command that answers in pieces: what it wrote goes out, and it is called again.

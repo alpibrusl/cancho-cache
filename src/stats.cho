@@ -113,6 +113,22 @@ fn reply_starts[&b](sc: &b [byte], from: int, to: int, text: &static [byte]) -> 
     return true;
 }
 
+// Whether the error code `c` of the reply `sc[from..to]` is one of a command refused before it ran.
+fn is_rejected[&b](sc: &b [byte], from: int, to: int, c: int) -> [] bool {
+    return reply_starts(sc, from, to, "-ERR wrong number of arguments") || reply_starts(sc, from, to, "-ERR unknown subcommand '") || c == 2 || c == 4 || c == 5 || c == 6 || c == 7;
+}
+
+// Whether the reply `sc[from..to]` is that of a command that did not run: one refused (as above), one that does not exist, or one only queued in `MULTI`. Such a command is not in the slow log.
+pub fn did_not_run[&b](sc: &b [byte], from: int, to: int) -> [] bool {
+    if to <= from {
+        return false;
+    }
+    if reply_starts(sc, from, to, "+QUEUED") || reply_starts(sc, from, to, "-ERR unknown command") {
+        return true;
+    }
+    return int_of(sc[from]) == '-' && is_rejected(sc, from, to, code_of(sc, from, to));
+}
+
 // Note one command answered: command number `i` (`cmdnames.index_of`, -1 for none) ran, and its reply is `sc[from..to]`. An error reply is counted in `total_error_replies` and under its code. A command refused before
 // it ran (a wrong number of arguments, no room for it, another node's key, as in Redis) counts as `rejected_calls` and not as a call; any other error is a call that failed.
 pub fn record[&w, &b](world: &!w [int], i: int, sc: &b [byte], from: int, to: int) -> [] int {
@@ -121,7 +137,7 @@ pub fn record[&w, &b](world: &!w [int], i: int, sc: &b [byte], from: int, to: in
     var c = 0;
     if failed {
         c = code_of(sc, from, to);
-        rejected = reply_starts(sc, from, to, "-ERR wrong number of arguments") || c == 2 || c == 4 || c == 5 || c == 6 || c == 7;
+        rejected = is_rejected(sc, from, to, c);
     }
     if i >= 0 {
         if rejected {

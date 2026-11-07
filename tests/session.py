@@ -146,7 +146,7 @@ try:
         z = Client()
         z.s.sendall(cmd("ECHO", noise) + cmd("INFO") + cmd("PING") + cmd("CONFIG", "GET", "*") + cmd("PING", "after") + cmd("INFO", "stats") + cmd("ECHO", "end"))
         got = [z.read() for _ in range(7)]
-        check("ECHO, INFO, PING, CONFIG GET, PING, INFO stats, ECHO in one write: every reply intact", got[0] == noise and got[1].endswith(b"\r\n\r\n") and got[2] == ("+", b"PONG") and len(got[3]) == 22 and got[4] == b"after" and got[5].startswith(b"# Stats") and got[6] == b"end", repr([g if not isinstance(g, bytes) else g[:20] for g in got]))
+        check("ECHO, INFO, PING, CONFIG GET, PING, INFO stats, ECHO in one write: every reply intact", got[0] == noise and got[1].endswith(b"\r\n\r\n") and got[2] == ("+", b"PONG") and len(got[3]) == 26 and got[4] == b"after" and got[5].startswith(b"# Stats") and got[6] == b"end", repr([g if not isinstance(g, bytes) else g[:20] for g in got]))
         z.s.close()
 
     # --- HELLO, CLIENT
@@ -173,7 +173,7 @@ try:
     check("CONFIG GET maxmemory is the arena", c.ask("CONFIG", "GET", "maxmemory") == [b"maxmemory", b"67108864"])
     check("CONFIG GET maxmemory-policy", c.ask("CONFIG", "GET", "maxmemory-policy") == [b"maxmemory-policy", b"allkeys-lru"])
     allc = c.ask("CONFIG", "GET", "*")
-    check("CONFIG GET * lists the eleven settings once each", len(allc) == 22 and len(set(allc[0::2])) == 11, repr(allc)[:200])
+    check("CONFIG GET * lists the thirteen settings once each", len(allc) == 26 and len(set(allc[0::2])) == 13, repr(allc)[:200])
     two = c.ask("CONFIG", "GET", "save", "appendonly")
     check("CONFIG GET of two settings (Redis's order is its hash seed's, so only the pairs are compared)", sorted(zip(two[0::2], two[1::2])) == [(b"appendonly", b"no"), (b"save", b"")], repr(two))
     check("CONFIG GET port", c.ask("CONFIG", "GET", "port") == [b"port", str(PORT).encode()])

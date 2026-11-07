@@ -135,7 +135,9 @@ try:
     only = c.ask("INFO", "memory")
     check("INFO memory is only that section", b"# Memory" in only and b"# Server" not in only and b"# Clients" not in only)
     check("INFO of an unknown section is empty", c.ask("INFO", "nonsense") == b"")
-    check("INFO too many arguments", c.ask("INFO", "a", "b")[1] == b"ERR syntax error")
+    check("INFO of several unknown sections is empty, as in Redis 7", c.ask("INFO", "a", "b") == b"")
+    several = c.ask("INFO", "a", "server", "c")
+    check("INFO takes several sections and gives the ones it has", b"# Server" in several and b"# Clients" not in several)
     c.ask("DEL", "info:a", "info:b")
 
     # Replies that follow a long one must start exactly where it ends, whatever the scratch buffer held before: INFO and CONFIG GET are written

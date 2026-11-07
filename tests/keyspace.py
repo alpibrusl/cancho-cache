@@ -209,6 +209,9 @@ try:
     def run_model(port, arena_note, longest=300):
         x = Client(port)
         x.ask("FLUSHALL")
+        # Its own generator: the steps before this one draw from `rnd` a number of times that depends on the timing of the run, and the sequence here decides whether a
+        # stale hash of a renamed key ever matters, so a mutant of RENAME was caught in some runs and not in others.
+        rnd = random.Random(20261107 + port)
         model = {}
         names = ["m:%d" % i for i in range(30)]
         refused = 0

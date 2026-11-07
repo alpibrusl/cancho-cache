@@ -95,7 +95,14 @@ def entries(text):
     return out
 
 
-STABLE = ("name", "flags", "db", "sub", "psub", "ssub", "multi", "user", "redir", "resp")
+STABLE = ("name", "flags", "db", "sub", "psub", "ssub", "multi", "user", "redir", "resp", "cmd")
+
+
+def plain(e):
+    """the fields the commands decide; `cmd` without its subcommand (the cache does not say it)"""
+    out = {k: e[k] for k in STABLE}
+    out["cmd"] = out["cmd"].split("|")[0]
+    return out
 
 redis = start(["redis-server", "--port", str(RPORT), "--save", "", "--appendonly", "no", "--protected-mode", "no"], RPORT)
 cache = start([CACHE, str(CPORT)], CPORT)
@@ -111,6 +118,12 @@ try:
     both(lambda i: c[i].ask("MULTI"))
     both(lambda i: c[i].ask("GET", "x"))
     both(lambda i: a[i].ask("CLIENT", "SETNAME", "ay"))
+    # a connection that speaks RESP3, and one whose last command was a GET
+    r3 = [Client(p) for p in ports]
+    both(lambda i: r3[i].ask("HELLO", "3", "SETNAME", "three"))
+    g = [Client(p) for p in ports]
+    both(lambda i: g[i].ask("CLIENT", "SETNAME", "getter"))
+    both(lambda i: g[i].ask("GET", "x"))
 
     r_list, c_list = [entries(a[i].ask("CLIENT", "LIST")) for i in (0, 1)]
     check("number of entries", len(c_list), len(r_list))
@@ -118,14 +131,14 @@ try:
         check("Redis's fields are the ones this test knows", set(e) - set(c_list[0]) <= CANNOT | {"ssub"} | set(), True)
     for e in c_list:
         check("fields of an entry", sorted(e), sorted(k for k in r_list[0] if k not in CANNOT))
-    by_name = lambda es: {e["name"]: {k: e[k] for k in STABLE} for e in es}
+    by_name = lambda es: {e["name"]: plain(e) for e in es}
     check("stable fields of every entry", by_name(c_list), by_name(r_list))
     check("ids are distinct and increasing in connection order", sorted(int(e["id"]) for e in c_list), sorted(int(e["id"]) for e in c_list))
 
     # CLIENT INFO is the caller's own line
     ri, ci = [entries(a[i].ask("CLIENT", "INFO")) for i in (0, 1)]
     check("CLIENT INFO is one entry", (len(ri), len(ci)), (1, 1))
-    check("CLIENT INFO fields", {k: ci[0][k] for k in STABLE}, {k: ri[0][k] for k in STABLE})
+    check("CLIENT INFO fields", plain(ci[0]), plain(ri[0]))
     check("CLIENT INFO's id is CLIENT ID", int(ci[0]["id"]), a[1].ask("CLIENT", "ID"))
 
     # filters and errors
@@ -149,7 +162,7 @@ try:
         got = entries(a[i].ask("CLIENT", "LIST", "ID", *[str(x) for x in some]))
         check("LIST ID finds the ones asked for (%d)" % i, sorted(int(e["id"]) for e in got), sorted(some))
         got = entries(a[i].ask("CLIENT", "LIST", "TYPE", "normal"))
-        check("LIST TYPE normal is all of them (%d)" % i, len(got), 3)
+        check("LIST TYPE normal is all of them (%d)" % i, len(got), 5)
 
     # KILL: by id, by address, by type normal; the caller is skipped unless asked
     for i in (0, 1):

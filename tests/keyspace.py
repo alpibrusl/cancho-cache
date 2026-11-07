@@ -205,6 +205,22 @@ try:
     check("SCAN while keys come and go: every key present throughout is answered, once", once == stable, "%d of %d once" % (len(once), len(stable)))
     check("SCAN while keys come and go: nothing else is made up", set(seen) <= stable | churn | added | {"c:%d" % i for i in range(1500)})
 
+    # --- a renamed key is watched under its new name: deleting it aborts a transaction that watched it. (A RENAME that kept the old name's hash would bump the wrong bucket;
+    # the random run below finds that only when the table's state happens to show it, which depends on the timing of the run.)
+    for i in range(8):
+        got = []
+        for port in (REDIS_PORT, CACHE_PORT):
+            x, y = Client(port), Client(port)
+            x.ask("FLUSHALL")
+            x.ask("SET", "old%d" % i, "v")
+            x.ask("RENAME", "old%d" % i, "new%d" % i)
+            x.ask("WATCH", "new%d" % i)
+            x.ask("MULTI")
+            x.ask("SET", "other", "1")
+            y.ask("DEL", "new%d" % i)
+            got.append(x.ask("EXEC"))
+        check("DEL of a renamed key aborts a transaction that watched it (%d)" % i, got[1] == got[0] == None, repr(got))
+
     # --- a random run against a model, on both caches
     def run_model(port, arena_note, longest=300):
         x = Client(port)

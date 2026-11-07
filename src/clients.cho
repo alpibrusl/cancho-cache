@@ -1,0 +1,324 @@
+edition 5;
+
+module clients;
+
+import std.addr;
+import std.conns;
+import cmdnames;
+import reply;
+
+// `clients` -- `CLIENT LIST`, `CLIENT INFO` and `CLIENT KILL` (`docs/design.md` section 32). These are the commands that look at other connections, so the loop (`src/cache.cho`)
+// hands this module the whole table of per-connection ints (`st`, `strd()` of them each, `names` 64 bytes each, `tx`, `txd` of them each).
+//
+// A connection's ints that this module reads (the layout is the loop's):
+//
+//     0 bytes of input buffered   2 bytes of output waiting   3, 7 closes once its answers have gone   4 what it is watched for   5 its name's length
+//     6 its id   8 its protocol   18 when it connected   19 when it last ran a command   20 which command that was (-1: none)   21 set by `kill`: close this one
+//
+// The fields of an entry are Redis 7.0's, less the two this cache cannot tell (`fd` and `laddr`: std.conns has neither) -- a field an exporter needs that is not here is
+// a gap and is said so in the design -- and `cmd` is the command's name without its subcommand.
+
+// The most an entry can take, with room to spare.
+pub fn entry_room() -> [] int {
+    return 512;
+}
+
+// What a connection's input buffer holds (`input_size()` in the loop).
+fn input_size() -> [] int {
+    return 16384;
+}
+
+fn put_kv[&b](sc: &!b [byte], at: int, key: &static [byte], n: int) -> [] int {
+    return reply.put_int(sc, reply.put(sc, at, key), n);
+}
+
+// One connection's line, as `CLIENT LIST` writes it: `slot` is the connection, `peer` its address as text.
+fn entry[&b, &s, &n, &a, &x](sc: &!b [byte], at: int, st: &s [int], slot: int, strd: int, names: &n [byte], peer: &a [byte], tx: &x [int], txd: int, now: int) -> [] int {
+    let p = strd * slot;
+    let t = txd * slot;
+    var o = put_kv(sc, at, "id=", st[p + 6]);
+    o = reply.put(sc, reply.put(sc, o, " addr="), peer);
+    o = reply.put(sc, reply.put(sc, o, " name="), names[slot * 64..slot * 64 + st[p + 5]]);
+    o = put_kv(sc, o, " age=", (now - st[p + 18]) / 1000);
+    o = put_kv(sc, o, " idle=", (now - st[p + 19]) / 1000);
+    o = reply.put(sc, o, " flags=");
+    let multi = tx[t] == 1;
+    let closing = st[p + 3] == 1 || st[p + 7] == 1;
+    if multi {
+        o = reply.put(sc, o, "x");
+    }
+    if closing {
+        o = reply.put(sc, o, "c");
+    }
+    if !multi && !closing {
+        o = reply.put(sc, o, "N");
+    }
+    o = reply.put(sc, o, " db=0 sub=0 psub=0 ssub=0");
+    var queued = 0 - 1;
+    var queue_bytes = 0;
+    if multi {
+        queued = tx[t + 3];
+        queue_bytes = tx[t + 2];
+    }
+    o = put_kv(sc, o, " multi=", queued);
+    o = put_kv(sc, o, " qbuf=", st[p]);
+    o = put_kv(sc, o, " qbuf-free=", input_size() - st[p]);
+    var waiting = st[p + 2];
+    if waiting < 0 {
+        waiting = 0;
+    }
+    o = put_kv(sc, o, " argv-mem=", 0);
+    o = put_kv(sc, o, " multi-mem=", queue_bytes);
+    o = put_kv(sc, o, " rbs=", input_size());
+    o = put_kv(sc, o, " rbp=", 0);
+    o = put_kv(sc, o, " obl=", 0);
+    o = put_kv(sc, o, " oll=", 0);
+    o = put_kv(sc, o, " omem=", waiting);
+    o = put_kv(sc, o, " tot-mem=", st[p] + waiting + queue_bytes);
+    o = reply.put(sc, o, " events=");
+    if st[p + 4] == 2 {
+        o = reply.put(sc, o, "w");
+    } else {
+        o = reply.put(sc, o, "r");
+    }
+    o = reply.put(sc, o, " cmd=");
+    if st[p + 20] < 0 {
+        o = reply.put(sc, o, "NULL");
+    } else {
+        o = reply.put(sc, o, cmdnames.name_at(st[p + 20]));
+    }
+    o = put_kv(sc, reply.put(sc, o, " user=default redir=-1"), " resp=", st[p + 8]);
+    return reply.put(sc, o, "\n");
+}
+
+// The address of connection `slot` as text in `out`: how many bytes (0: unknown).
+fn peer_text[&t, &o](tab: &!t conns.Table, slot: int, out: &!o [byte]) -> [] int {
+    var n = 0;
+    match conns.peer(tab, slot) {
+        conns.Peered::Known(peer) => {
+            n = addr.text_port(peer, out);
+        }
+        conns.Peered::Unavailable(e) => {
+        }
+    }
+    if n < 0 {
+        n = 0;
+    }
+    return n;
+}
+
+fn same[&a, &b](x: &a [byte], y: &b [byte]) -> [] bool {
+    if len(x) != len(y) {
+        return false;
+    }
+    var i = 0;
+    while i < len(x) {
+        if x[i] != y[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn syntax[&b](sc: &!b [byte], at: int) -> [] int {
+    return reply.put(sc, at, "-ERR syntax error\r\n");
+}
+
+fn put_cut[&b, &d](sc: &!b [byte], at: int, text: &d [byte]) -> [] int {
+    var shown = len(text);
+    if shown > 128 {
+        shown = 128;
+    }
+    return reply.put(sc, at, text[0..shown]);
+}
+
+fn unknown_type[&b, &d](sc: &!b [byte], at: int, text: &d [byte]) -> [] int {
+    return reply.put(sc, reply.put(sc, put_cut(sc, reply.put(sc, at, "-ERR Unknown client type '"), text), "'"), "\r\n");
+}
+
+// Whether `text` names a type of client: 0 if it names `normal`, 1 if another (`master`, `replica`, `slave`, `pubsub`: this cache has none), -1 if it is no type.
+fn client_type[&d](text: &d [byte]) -> [] int {
+    if reply.is_word(text, "NORMAL") {
+        return 0;
+    }
+    if reply.is_word(text, "MASTER") || reply.is_word(text, "REPLICA") || reply.is_word(text, "SLAVE") || reply.is_word(text, "PUBSUB") {
+        return 1;
+    }
+    return 0 - 1;
+}
+
+// Put the bulk string whose body was written at `from..end` (with room left for a header before it) in its place: `$<length>\r\n`, the body, `\r\n`. Answers where it ends.
+fn finish_bulk[&b](sc: &!b [byte], at: int, from: int, end: int) -> [] int {
+    let header = reply.put_nat(sc, reply.put(sc, at, "$"), end - from);
+    let body = reply.put(sc, header, "\r\n");
+    var i = 0;
+    while i < end - from {
+        sc[body + i] = sc[from + i];
+        i = i + 1;
+    }
+    return reply.put(sc, body + end - from, "\r\n");
+}
+
+// The room the header of a bulk string needs before its body: `$`, up to 8 digits, CRLF.
+fn header_room() -> [] int {
+    return 16;
+}
+
+// Whether the answer for `n` connections fits in `sc` after `at`.
+pub fn fits[&b](sc: &b [byte], at: int, n: int) -> [] bool {
+    return at + header_room() + n * entry_room() + 8 <= len(sc);
+}
+
+// `CLIENT LIST [TYPE normal|master|replica|pubsub] [ID id ...]` for `only` < 0, and `CLIENT INFO` for the connection `only`.
+pub fn list[&t, &v, &w, &b, &s, &n, &x](tab: &!t conns.Table, view: &v [byte], table: &w [int], sc: &!b [byte], at: int, st: &s [int], strd: int, names: &n [byte], tx: &x [int], txd: int, slots: int, now: int, only: int) -> [] int {
+    let argc = table[0];
+    var by_type = false;
+    var by_id = false;
+    if only < 0 {
+        if argc == 4 && reply.is_word(reply.arg_of(view, table, 2), "TYPE") {
+            by_type = true;
+            let t = client_type(reply.arg_of(view, table, 3));
+            if t < 0 {
+                return unknown_type(sc, at, reply.arg_of(view, table, 3));
+            }
+            if t == 1 {
+                return reply.put(sc, at, "$0\r\n\r\n");
+            }
+        } else if argc >= 4 && reply.is_word(reply.arg_of(view, table, 2), "ID") {
+            by_id = true;
+            var i = 3;
+            while i < argc {
+                let (bad, id) = reply.parse_int(reply.arg_of(view, table, i));
+                if bad != 0 {
+                    return reply.put(sc, at, "-ERR Invalid client ID\r\n");
+                }
+                i = i + 1;
+            }
+        } else if argc != 2 {
+            return syntax(sc, at);
+        }
+    }
+    let from = at + header_room();
+    var o = from;
+    region r {
+        let buf = alloc_slice[r](64, byte_of(0));
+        var k = 0;
+        while k < slots {
+            if st[strd * k + 1] == 1 && (only < 0 || only == k) {
+                var wanted = true;
+                if by_id {
+                    wanted = false;
+                    var i = 3;
+                    while i < argc {
+                        let (bad, id) = reply.parse_int(reply.arg_of(view, table, i));
+                        if bad == 0 && id == st[strd * k + 6] {
+                            wanted = true;
+                        }
+                        i = i + 1;
+                    }
+                }
+                if wanted {
+                    let m = peer_text(tab, k, buf);
+                    o = entry(sc, o, st, k, strd, names, buf[0..m], tx, txd, now);
+                }
+            }
+            k = k + 1;
+        }
+    }
+    return finish_bulk(sc, at, from, o);
+}
+
+// `CLIENT KILL addr` (answers OK or an error) and `CLIENT KILL filter value ...` (answers how many): the connections to close are marked in `st[strd * k + 21]`, for the loop to close
+// (the one that asked, if it is among them, once its answer has gone). `me` is the connection that asked.
+pub fn kill[&t, &v, &w, &b, &s](tab: &!t conns.Table, view: &v [byte], table: &w [int], sc: &!b [byte], at: int, st: &!s [int], strd: int, slots: int, me: int) -> [] int {
+    let argc = table[0];
+    if argc == 2 {
+        return reply.put(sc, at, "-ERR wrong number of arguments for 'client|kill' command\r\n");
+    }
+    var count = 0;
+    region r {
+        let buf = alloc_slice[r](64, byte_of(0));
+        if argc == 3 {
+            // The old form: an address, and it closes the connection even if it is the caller's own.
+            var k = 0;
+            while k < slots {
+                if st[strd * k + 1] == 1 {
+                    let m = peer_text(tab, k, buf);
+                    if same(buf[0..m], reply.arg_of(view, table, 2)) {
+                        st[strd * k + 21] = 1;
+                        count = count + 1;
+                    }
+                }
+                k = k + 1;
+            }
+            if count == 0 {
+                return reply.put(sc, at, "-ERR No such client\r\n");
+            }
+            return reply.put(sc, at, "+OK\r\n");
+        }
+        if argc % 2 == 1 {
+            return syntax(sc, at);
+        }
+        var id = 0;
+        var typed = false;
+        var addr_at = 0 - 1;
+        var skipme = true;
+        var i = 2;
+        while i < argc {
+            let key = reply.arg_of(view, table, i);
+            let value = reply.arg_of(view, table, i + 1);
+            if reply.is_word(key, "ID") {
+                let (bad, n) = reply.parse_int(value);
+                if bad != 0 || n <= 0 {
+                    return reply.put(sc, at, "-ERR client-id should be greater than 0\r\n");
+                }
+                id = n;
+            } else if reply.is_word(key, "TYPE") {
+                let t = client_type(value);
+                if t < 0 {
+                    return unknown_type(sc, at, value);
+                }
+                typed = t == 1;
+            } else if reply.is_word(key, "ADDR") {
+                addr_at = i + 1;
+            } else {
+                if reply.is_word(key, "LADDR") {
+                    return reply.put(sc, at, "-ERR CLIENT KILL LADDR is not supported by this cache: it does not know a connection's local address (docs/design.md section 32)\r\n");
+                }
+                if reply.is_word(key, "USER") {
+                    if !same(value, "default") {
+                        return reply.put(sc, put_cut(sc, reply.put(sc, at, "-ERR No such user '"), value), "'\r\n");
+                    }
+                } else if reply.is_word(key, "SKIPME") {
+                    if reply.is_word(value, "YES") {
+                        skipme = true;
+                    } else if reply.is_word(value, "NO") {
+                        skipme = false;
+                    } else {
+                        return syntax(sc, at);
+                    }
+                } else {
+                    return syntax(sc, at);
+                }
+            }
+            i = i + 2;
+        }
+        var k = 0;
+        while k < slots && !typed {
+            if st[strd * k + 1] == 1 && !(skipme && k == me) && (id == 0 || id == st[strd * k + 6]) {
+                var hit = true;
+                if addr_at >= 0 {
+                    let m = peer_text(tab, k, buf);
+                    hit = same(buf[0..m], reply.arg_of(view, table, addr_at));
+                }
+                if hit {
+                    st[strd * k + 21] = 1;
+                    count = count + 1;
+                }
+            }
+            k = k + 1;
+        }
+    }
+    return reply.put_integer(sc, at, count);
+}

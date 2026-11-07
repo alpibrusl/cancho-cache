@@ -4,6 +4,7 @@ import std.addr;
 import std.buffer;
 import std.conns;
 import std.io;
+import clients;
 import cluster;
 import cmdnames;
 import commands;
@@ -89,8 +90,11 @@ fn output_size() -> [] int {
 //     15 mode 1: bytes of value still to come; mode 4: bytes of value sent
 //     16 mode 1 and 3: when the key ends (0: never); mode 4: the stamp of the value when it began to be sent (`store.stamp_of`)
 //     17 the store's epoch when the mode began: a `FLUSHALL` makes the entry in 14 mean nothing
+//     18 when it connected (the store's milliseconds)
+//     19 when it last ran a command, and 20 which (`cmdnames.index_of`; -1 none): what `CLIENT LIST` shows as `idle` and `cmd`
+//     21 1 if `CLIENT KILL` chose it: the loop closes it (`docs/design.md` section 32)
 fn stride() -> [] int {
-    return 18;
+    return 22;
 }
 
 res struct Core {
@@ -284,6 +288,47 @@ fn slow_note[&t, &c, &v, &w](tab: &!t conns.Table, core: &!c Core, k: int, view:
     return 0;
 }
 
+// Run the command `tb` describes in `view`: `CLIENT LIST`, `INFO` and `KILL`, which look at other connections, are answered here (`src/clients.cho`), every other by `commands`.
+fn execute_in[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], sc: &!b [byte], at: int) -> [] int {
+    let st = contents(core.state);
+    let p = stride() * k;
+    if tb[0] >= 2 && reply.is_word(reply.arg_of(view, tb, 0), "CLIENT") {
+        let sub = reply.arg_of(view, tb, 1);
+        let listing = reply.is_word(sub, "LIST");
+        let info = reply.is_word(sub, "INFO");
+        if info && tb[0] != 2 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'client|info' command\r\n");
+        }
+        if listing || info {
+            if !clients.fits(sc, at, conns.live(tab)) {
+                return reply.put(sc, at, "-ERR too many clients to list in one reply (docs/design.md section 32)\r\n");
+            }
+            var only = 0 - 1;
+            if info {
+                only = k;
+            }
+            return clients.list(tab, view, tb, sc, at, st, stride(), contents(core.names), contents(core.txns), txn.stride(), conns.slots(tab), store.now_of(core.store), only);
+        }
+        if reply.is_word(sub, "KILL") {
+            let end = clients.kill(tab, view, tb, sc, at, st, stride(), conns.slots(tab), k);
+            var q = 0;
+            while q < conns.slots(tab) {
+                if st[stride() * q + 21] != 0 {
+                    st[stride() * q + 21] = 0;
+                    if q == k {
+                        st[p + 7] = 1;
+                    } else {
+                        shut(tab, core, q);
+                    }
+                }
+                q = q + 1;
+            }
+            return end;
+        }
+    }
+    return commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+}
+
 fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q Clock) -> [conn_write, poll, clock] int {
     let st = contents(core.state);
     let bf = contents(core.bufs);
@@ -442,6 +487,10 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                 var cmd_idx = 0 - 1;
                 if tb[0] > 0 {
                     cmd_idx = cmdnames.index_of(reply.arg_of(view, tb, 0));
+                    st[p + 19] = store.now_of(core.store);
+                    if cmd_idx >= 0 {
+                        st[p + 20] = cmd_idx;
+                    }
                 }
                 let refused = cluster.route(view, tb, sc, at, contents(core.info));
                 var status = 0;
@@ -480,7 +529,7 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                         if timed {
                             began = clock_ms(clock);
                         }
-                        at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                        at = execute_in(tab, core, k, view, tb, sc, at);
                         if timed {
                             slow_after(tab, core, k, view, tb, began, clock, sc, reply_from, at);
                         }
@@ -525,7 +574,7 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                                 if timed {
                                     began = clock_ms(clock);
                                 }
-                                at = commands.execute(qview, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                                at = execute_in(tab, core, k, qview, tb, sc, at);
                                 if timed {
                                     slow_after(tab, core, k, qview, tb, began, clock, sc, exec_from, at);
                                 }
@@ -740,6 +789,10 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 11] = 0 - 1;
                         st[p + 12] = 0 - 1;
                         st[p + 13] = 0;
+                        st[p + 18] = store.now_of(core.store);
+                        st[p + 19] = store.now_of(core.store);
+                        st[p + 20] = 0 - 1;
+                        st[p + 21] = 0;
                         txn.clear(contents(core.txns)[txn.stride() * slot..txn.stride() * slot + txn.stride()]);
                         contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {

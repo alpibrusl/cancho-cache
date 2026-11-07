@@ -199,6 +199,16 @@ pub fn client[&v, &t, &b, &s, &n](view: &v [byte], table: &t [int], sc: &!b [byt
         }
         return reply.put(sc, at, "+OK\r\n");
     }
+    if reply.is_word(sub, "NO-EVICT") {
+        // This cache has no client eviction (no `maxmemory-clients`), so the setting is accepted and means nothing (`docs/design.md` section 32).
+        if argc != 3 {
+            return client_arity(sc, at, "no-evict");
+        }
+        if !reply.is_word(reply.arg_of(view, table, 2), "ON") && !reply.is_word(reply.arg_of(view, table, 2), "OFF") {
+            return reply.put(sc, at, "-ERR syntax error\r\n");
+        }
+        return reply.put(sc, at, "+OK\r\n");
+    }
     var shown = len(sub);
     if shown > 128 {
         shown = 128;

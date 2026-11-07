@@ -27,7 +27,10 @@ on:
       - src/cmdnames.cho
       - src/stats.cho
       - src/slowlog.cho
+      - src/clients.cho
       - tests/info.py
+      - tests/slowlog.py
+      - tests/client_commands.py
       - tests/cluster.py
       - tests/gen_cmdinfo.py
       - src/commands.cho
@@ -80,7 +83,7 @@ jobs:
       - name: Every mutant still applies to the source, exactly once (fast)
         working-directory: cache
         run: |
-          for f in txn string keyspace pieces; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
+          for f in txn string keyspace pieces slowlog clients; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
 
       - name: Every transaction mutant is caught
         working-directory: cache
@@ -97,3 +100,11 @@ jobs:
       - name: Every string-command mutant is caught
         working-directory: cache
         run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/string_mutants.py
+
+      - name: Slow log mutants
+        working-directory: cache
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/slowlog_mutants.py
+
+      - name: CLIENT LIST, INFO and KILL mutants
+        working-directory: cache
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/clients_mutants.py

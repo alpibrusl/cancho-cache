@@ -6,7 +6,9 @@ import cluster;
 import cmddocs;
 import cmdinfo;
 import cmdkeys;
+import cmdnames;
 import reply;
+import stats;
 import store;
 
 // `session` -- the commands about the connection and the server rather than about keys: what a client library says when it
@@ -226,48 +228,150 @@ fn kv[&b](sc: &!b [byte], at: int, key: &static [byte], value: int) -> [] int {
     return reply.put(sc, reply.put_int(sc, reply.put(sc, reply.put(sc, at, key), ":"), value), "\r\n");
 }
 
+// Whether `INFO` was asked for `section`: with no argument (the default sections), or by name among its arguments (Redis 7 takes several), or `ALL`, `EVERYTHING`
+// or `DEFAULT`.
 fn wants[&v, &t](view: &v [byte], table: &t [int], section: &static [byte]) -> [] bool {
     if table[0] == 1 {
         return true;
     }
-    let asked = reply.arg_of(view, table, 1);
-    return reply.is_word(asked, section) || reply.is_word(asked, "ALL") || reply.is_word(asked, "EVERYTHING") || reply.is_word(asked, "DEFAULT");
+    var i = 1;
+    while i < table[0] {
+        let asked = reply.arg_of(view, table, i);
+        if reply.is_word(asked, section) || reply.is_word(asked, "ALL") || reply.is_word(asked, "EVERYTHING") || reply.is_word(asked, "DEFAULT") {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
 }
 
-// The text of `INFO`: five sections, each as Redis prints it (`# Name`, `field:value` lines, a blank line). `redis_version` is
-// what clients read to decide which commands to try, and the command set here is Redis 7.0's, so that is what it says; `server_name`
-// says what this is.
+// The sections that are not in the default `INFO` (`commandstats`): named, or `ALL` or `EVERYTHING`.
+fn wants_full[&v, &t](view: &v [byte], table: &t [int], section: &static [byte]) -> [] bool {
+    var i = 1;
+    while i < table[0] {
+        let asked = reply.arg_of(view, table, i);
+        if reply.is_word(asked, section) || reply.is_word(asked, "ALL") || reply.is_word(asked, "EVERYTHING") {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// `n` bytes the way `INFO` writes them for people: `512B`, `1.50K`, `3.20M`, `1.00G`.
+fn put_human[&b](sc: &!b [byte], at: int, n: int) -> [] int {
+    if n < 1024 {
+        return reply.put(sc, reply.put_nat(sc, at, n), "B");
+    }
+    var hundredths = n * 100 / 1024;
+    var unit = "K";
+    if n >= 1048576 {
+        hundredths = n * 100 / 1048576;
+        unit = "M";
+    }
+    if n >= 1073741824 {
+        hundredths = n * 100 / 1073741824;
+        unit = "G";
+    }
+    var o = reply.put_nat(sc, at, hundredths / 100);
+    o = reply.put_byte(sc, o, '.');
+    if hundredths % 100 < 10 {
+        o = reply.put_byte(sc, o, '0');
+    }
+    return reply.put(sc, reply.put_nat(sc, o, hundredths % 100), unit);
+}
+
+// `name:<n as people read it>`.
+fn kv_human[&b](sc: &!b [byte], at: int, key: &static [byte], value: int) -> [] int {
+    return reply.put(sc, put_human(sc, reply.put(sc, reply.put(sc, at, key), ":"), value), "\r\n");
+}
+
+// The text of `INFO` (`docs/design.md` section 30): the sections of Redis 7.0, each as Redis prints it (`# Name`, `field:value` lines, a blank line), with the fields this
+// cache can report truthfully. `redis_version` is what clients read to decide which commands to try, and the command set here is Redis 7.0's, so that is what it
+// says; `server_name` says what this is. Not here: `cpu` and `latencystats` (no way to measure them without a second clock read for each command), `modules`.
 fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &s store.Store, world: &w [int]) -> [] int {
     var o = at;
+    let answered = world[2];
+    let now = store.now_of(st);
     if wants(view, table, "SERVER") {
-        o = reply.put(sc, o, "# Server\r\nredis_version:7.0.15\r\nserver_name:cancho-cache\r\nredis_mode:standalone\r\narch_bits:64\r\n");
+        o = reply.put(sc, o, "# Server\r\nredis_version:7.0.15\r\nserver_name:cancho-cache\r\n");
+        if cluster.enabled(world) {
+            o = reply.put(sc, o, "redis_mode:cluster\r\n");
+        } else {
+            o = reply.put(sc, o, "redis_mode:standalone\r\n");
+        }
+        o = reply.put(sc, o, "arch_bits:64\r\n");
         o = kv(sc, o, "tcp_port", world[4]);
-        o = kv(sc, o, "uptime_in_seconds", (store.now_of(st) - world[1]) / 1000);
-        o = reply.put(sc, o, "\r\n");
+        o = kv(sc, o, "uptime_in_seconds", (now - world[1]) / 1000);
+        o = kv(sc, o, "uptime_in_days", (now - world[1]) / 86400000);
+        o = reply.put(sc, o, "hz:10\r\nconfigured_hz:10\r\n\r\n");
     }
     if wants(view, table, "CLIENTS") {
         o = reply.put(sc, o, "# Clients\r\n");
         o = kv(sc, o, "connected_clients", world[0]);
-        o = reply.put(sc, o, "\r\n");
+        o = reply.put(sc, o, "cluster_connections:0\r\nmaxclients:10000\r\nblocked_clients:0\r\ntracking_clients:0\r\n\r\n");
     }
     if wants(view, table, "MEMORY") {
         o = reply.put(sc, o, "# Memory\r\n");
         o = kv(sc, o, "used_memory", store.used(st));
+        o = kv_human(sc, o, "used_memory_human", store.used(st));
+        o = kv(sc, o, "used_memory_peak", store.peak_of(st));
+        o = kv_human(sc, o, "used_memory_peak_human", store.peak_of(st));
         o = kv(sc, o, "used_memory_dead", store.dead(st));
         o = kv(sc, o, "maxmemory", store.capacity(st));
+        o = kv_human(sc, o, "maxmemory_human", store.capacity(st));
         o = reply.put(sc, o, "maxmemory_policy:");
         o = reply.put(sc, o, store.policy_name(store.policy_of(st)));
-        o = reply.put(sc, o, "\r\n\r\n");
+        o = reply.put(sc, o, "\r\nmem_allocator:cancho-arena\r\n\r\n");
+    }
+    if wants(view, table, "PERSISTENCE") {
+        o = reply.put(sc, o, "# Persistence\r\nloading:0\r\nasync_loading:0\r\nrdb_changes_since_last_save:0\r\nrdb_bgsave_in_progress:0\r\nrdb_last_bgsave_status:ok\r\n");
+        o = reply.put(sc, o, "aof_enabled:0\r\naof_rewrite_in_progress:0\r\naof_last_write_status:ok\r\n\r\n");
     }
     if wants(view, table, "STATS") {
         o = reply.put(sc, o, "# Stats\r\n");
         o = kv(sc, o, "total_connections_received", world[3]);
-        o = kv(sc, o, "total_commands_processed", world[2]);
+        o = kv(sc, o, "total_commands_processed", answered);
+        o = kv(sc, o, "instantaneous_ops_per_sec", stats.ops_per_sec(world, now, answered));
         o = kv(sc, o, "expired_keys", store.expired(st));
         o = kv(sc, o, "evicted_keys", store.evicted(st));
+        o = kv(sc, o, "keyspace_hits", store.hits_of(st));
+        o = kv(sc, o, "keyspace_misses", store.misses_of(st));
+        o = kv(sc, o, "total_error_replies", stats.error_replies(world));
         o = kv(sc, o, "compactions", store.compactions(st));
         o = kv(sc, o, "compactions_forced", store.forced(st));
         o = kv(sc, o, "max_turn_ms", world[6]);
+        o = reply.put(sc, o, "\r\n");
+    }
+    if wants(view, table, "REPLICATION") {
+        o = reply.put(sc, o, "# Replication\r\nrole:master\r\nconnected_slaves:0\r\nmaster_failover_state:no-failover\r\n");
+        o = reply.put(sc, o, "master_replid:0000000000000000000000000000000000000000\r\nmaster_repl_offset:0\r\nrepl_backlog_active:0\r\n\r\n");
+    }
+    if wants_full(view, table, "COMMANDSTATS") {
+        o = reply.put(sc, o, "# Commandstats\r\n");
+        var i = 0;
+        while i < cmdinfo.count() {
+            if stats.calls(world, i) > 0 || stats.rejected_calls(world, i) > 0 {
+                o = reply.put(sc, reply.put(sc, o, "cmdstat_"), cmdnames.name_at(i));
+                o = reply.put_nat(sc, reply.put(sc, o, ":calls="), stats.calls(world, i));
+                o = reply.put_nat(sc, reply.put(sc, o, ",usec=0,usec_per_call=0.00,rejected_calls="), stats.rejected_calls(world, i));
+                o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, ",failed_calls="), stats.failed_calls(world, i)), "\r\n");
+            }
+            i = i + 1;
+        }
+        o = reply.put(sc, o, "\r\n");
+    }
+    if wants(view, table, "ERRORSTATS") {
+        o = reply.put(sc, o, "# Errorstats\r\n");
+        var c = 0;
+        while c < stats.code_count() {
+            if stats.errors_with_code(world, c) > 0 {
+                o = reply.put(sc, reply.put(sc, o, "errorstat_"), stats.code_name(c));
+                o = reply.put_nat(sc, reply.put(sc, o, ":count="), stats.errors_with_code(world, c));
+                o = reply.put(sc, o, "\r\n");
+            }
+            c = c + 1;
+        }
         o = reply.put(sc, o, "\r\n");
     }
     if wants(view, table, "CLUSTER") {
@@ -285,7 +389,9 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
             o = reply.put_int(sc, o, store.live(st));
             o = reply.put(sc, o, ",expires=");
             o = reply.put_int(sc, o, store.keys_with_expiry(st));
-            o = reply.put(sc, o, ",avg_ttl=0\r\n");
+            o = reply.put(sc, o, ",avg_ttl=");
+            o = reply.put_int(sc, o, store.average_ttl(st));
+            o = reply.put(sc, o, "\r\n");
         }
         o = reply.put(sc, o, "\r\n");
     }
@@ -295,9 +401,6 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
 // `INFO [section]` as one bulk string. The text is written first, a few bytes in, and the header (which needs the length) is written
 // against it and the whole answer moved down to where it belongs.
 pub fn info[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &s store.Store, world: &w [int]) -> [] int {
-    if table[0] > 2 {
-        return reply.syntax_error(sc, at);
-    }
     let room = 24;
     let body_from = at + room;
     let body_to = info_text(view, table, sc, body_from, st, world);
@@ -422,7 +525,7 @@ fn put_setting_value[&b, &s, &w](sc: &!b [byte], at: int, i: int, st: &s store.S
         return put_number_bulk(sc, at, 0);
     }
     if i == 7 {
-        return put_number_bulk(sc, at, 256);
+        return put_number_bulk(sc, at, 10000);
     }
     if i == 8 {
         return put_number_bulk(sc, at, 10);

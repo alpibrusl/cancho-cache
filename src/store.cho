@@ -179,6 +179,10 @@ pub res struct Store {
     policy: int,
     // How many keys an eviction samples (`maxmemory-samples`), as the client set it; `victim` uses at most `most_samples()`.
     samples: int,
+    // For `INFO` (`docs/design.md` section 30): reads that found their key and reads that did not, and the most the arena has held.
+    hits: int,
+    misses: int,
+    peak: int,
     now: int,
     // How many uses of keys have been stamped in the current millisecond (`use_stamp`).
     seq: int,
@@ -219,11 +223,11 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, meta);
@@ -1397,6 +1401,62 @@ pub fn set_wall[&s](st: &!s Store, unix_ms: int) -> [] int {
 // Unix milliseconds minus the store's milliseconds.
 pub fn wall_of[&s](st: &s Store) -> [] int {
     return st.wall;
+}
+
+// `find` for a command that reads: the same, and the lookup is counted as a hit or a miss (`keyspace_hits`, `keyspace_misses`).
+pub fn find_read[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
+    let e = find(st, key, h);
+    if e >= 0 {
+        st.hits = st.hits + 1;
+    } else {
+        st.misses = st.misses + 1;
+    }
+    return e;
+}
+
+pub fn hits_of[&s](st: &s Store) -> [] int {
+    return st.hits;
+}
+
+pub fn misses_of[&s](st: &s Store) -> [] int {
+    return st.misses;
+}
+
+// The mean of the time left (in milliseconds) of the keys that have an expiry among the first 4,096 entries: what `INFO keyspace` calls `avg_ttl`. Redis
+// samples too; this looks at a fixed prefix so that `INFO` changes nothing, and it is 0 when none of them has one.
+pub fn average_ttl[&s](st: &s Store) -> [] int {
+    let meta = contents(st.meta);
+    var looked = st.fresh;
+    if looked > 4096 {
+        looked = 4096;
+    }
+    var sum = 0;
+    var count = 0;
+    var e = 0;
+    while e < looked {
+        if meta[stride() * e + 6] == 0 - 2 && meta[stride() * e + 4] > st.now {
+            sum = sum + (meta[stride() * e + 4] - st.now);
+            count = count + 1;
+        }
+        e = e + 1;
+    }
+    if count == 0 {
+        return 0;
+    }
+    return sum / count;
+}
+
+// Note the most the arena has held, once a turn (`used_memory_peak`).
+pub fn note_peak[&s](st: &!s Store) -> [] int {
+    let now = used(st);
+    if now > st.peak {
+        st.peak = now;
+    }
+    return 0;
+}
+
+pub fn peak_of[&s](st: &s Store) -> [] int {
+    return st.peak;
 }
 
 // Which eviction policy is in force.

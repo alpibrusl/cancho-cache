@@ -58,6 +58,11 @@ MUTANTS = [
     ("keys in two slots are not CROSSSLOT", "cluster.cho", "        } else if here != slot {", "        } else if here < 0 {", ("py", "cluster.py")),
     ("a key another node owns is not redirected", "cluster.cho", "    if owner == world[base() + 1] {", "    if owner >= 0 {", ("py", "cluster.py")),
     ("a redirected command in MULTI does not abort the transaction", "cache.cho", "                    if tx[0] == 1 {\n                        tx[1] = 1;\n                    }\n                    status = 1;", "                    status = 1;", ("py", "cluster.py")),
+    ("a failed command is not counted as failed", "stats.cho", "            if failed {\n                world[commands_at() + 3 * i + 1] = world[commands_at() + 3 * i + 1] + 1;\n            }", "", ("py", "info.py")),
+    ("a wrong number of arguments is a call and not a rejection", "stats.cho", "reply_starts(sc, from, to, \"-ERR wrong number of arguments\") || ", "", ("py", "info.py")),
+    ("a hit is not counted", "store.cho", "    if e >= 0 {\n        st.hits = st.hits + 1;\n    } else {", "    if e >= 0 {\n    } else {", ("py", "info.py")),
+    ("an error is counted under the wrong code", "stats.cho", "        world[errors_at() + c] = world[errors_at() + c] + 1;", "        world[errors_at()] = world[errors_at()] + 1;", ("py", "info.py")),
+    ("INFO takes only the first section", "session.cho", "    var i = 1;\n    while i < table[0] {\n        let asked = reply.arg_of(view, table, i);\n        if reply.is_word(asked, section) || reply.is_word(asked, \"ALL\") || reply.is_word(asked, \"EVERYTHING\") || reply.is_word(asked, \"DEFAULT\") {", "    var i = 1;\n    while i < 2 {\n        let asked = reply.arg_of(view, table, i);\n        if reply.is_word(asked, section) || reply.is_word(asked, \"ALL\") || reply.is_word(asked, \"EVERYTHING\") || reply.is_word(asked, \"DEFAULT\") {", ("py", "info.py")),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]
 

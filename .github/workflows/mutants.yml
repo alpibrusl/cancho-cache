@@ -24,6 +24,9 @@ on:
       - src/cmddocs.cho
       - src/cmdkeys.cho
       - src/cluster.cho
+      - src/cmdnames.cho
+      - src/stats.cho
+      - tests/info.py
       - tests/cluster.py
       - tests/gen_cmdinfo.py
       - src/commands.cho

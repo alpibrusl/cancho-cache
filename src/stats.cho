@@ -1,0 +1,195 @@
+edition 5;
+
+module stats;
+
+import cluster;
+import cmdnames;
+import reply;
+
+// `stats` -- the counters of `INFO` that the command path keeps (`docs/design.md` section 30), in the `world` array after the cluster map's room (one int each, nothing
+// allocated): replies that were errors, how many for each error code, how often each command ran and failed, and a window of samples from which
+// `instantaneous_ops_per_sec` is worked out. The loop writes them (`record`, `sample`); `INFO` reads them.
+//
+//     [at()]        replies that were errors
+//     [at() + 1]    where the next sample goes
+//     [errors_at()] the errors by code, `codes()` of them (the last is every code not listed)
+//     [samples_at()] 16 samples: when (the store's milliseconds) and how many commands had been answered by then
+//     [commands_at()] 128 commands, three ints each: calls, calls whose reply was an error, and commands refused before they ran (`rejected_calls`)
+
+pub fn at() -> [] int {
+    return cluster.world_size();
+}
+
+fn codes() -> [] int {
+    return 10;
+}
+
+fn errors_at() -> [] int {
+    return at() + 2;
+}
+
+fn samples_at() -> [] int {
+    return errors_at() + codes();
+}
+
+fn commands_at() -> [] int {
+    return samples_at() + 32;
+}
+
+// The ints `world` needs beyond the cluster's.
+pub fn size() -> [] int {
+    return commands_at() + 384 - cluster.world_size();
+}
+
+// The error codes that have a counter of their own, in the order `INFO errorstats` lists them.
+pub fn code_name(i: int) -> [] &static [byte] {
+    if i == 0 {
+        return "ERR";
+    }
+    if i == 1 {
+        return "WRONGTYPE";
+    }
+    if i == 2 {
+        return "OOM";
+    }
+    if i == 3 {
+        return "EXECABORT";
+    }
+    if i == 4 {
+        return "MOVED";
+    }
+    if i == 5 {
+        return "CROSSSLOT";
+    }
+    if i == 6 {
+        return "CLUSTERDOWN";
+    }
+    if i == 7 {
+        return "NOAUTH";
+    }
+    if i == 8 {
+        return "READONLY";
+    }
+    return "";
+}
+
+pub fn code_count() -> [] int {
+    return 9;
+}
+
+// Which counter an error reply belongs to, from its text at `from` (`-CODE message`): the code's number, or the last counter for any other.
+fn code_of[&b](sc: &b [byte], from: int, to: int) -> [] int {
+    var i = 0;
+    while i < code_count() {
+        let name = code_name(i);
+        var same = from + 1 + len(name) < to;
+        var k = 0;
+        while same && k < len(name) {
+            if sc[from + 1 + k] != name[k] {
+                same = false;
+            }
+            k = k + 1;
+        }
+        if same && (int_of(sc[from + 1 + len(name)]) == ' ' || int_of(sc[from + 1 + len(name)]) == 13) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return codes() - 1;
+}
+
+// Whether the reply `sc[from..to]` starts with `text`.
+fn reply_starts[&b](sc: &b [byte], from: int, to: int, text: &static [byte]) -> [] bool {
+    if to - from < len(text) {
+        return false;
+    }
+    var k = 0;
+    while k < len(text) {
+        if sc[from + k] != text[k] {
+            return false;
+        }
+        k = k + 1;
+    }
+    return true;
+}
+
+// Note one command answered: `name` ran, and its reply is `sc[from..to]`. An error reply is counted in `total_error_replies` and under its code. A command refused before
+// it ran (a wrong number of arguments, no room for it, another node's key, as in Redis) counts as `rejected_calls` and not as a call; any other error is a call that failed.
+pub fn record[&w, &n, &b](world: &!w [int], name: &n [byte], sc: &b [byte], from: int, to: int) -> [] int {
+    let i = cmdnames.index_of(name);
+    let failed = to > from && int_of(sc[from]) == '-';
+    var rejected = false;
+    var c = 0;
+    if failed {
+        c = code_of(sc, from, to);
+        rejected = reply_starts(sc, from, to, "-ERR wrong number of arguments") || c == 2 || c == 4 || c == 5 || c == 6 || c == 7;
+    }
+    if i >= 0 {
+        if rejected {
+            world[commands_at() + 3 * i + 2] = world[commands_at() + 3 * i + 2] + 1;
+        } else {
+            world[commands_at() + 3 * i] = world[commands_at() + 3 * i] + 1;
+            if failed {
+                world[commands_at() + 3 * i + 1] = world[commands_at() + 3 * i + 1] + 1;
+            }
+        }
+    }
+    if failed {
+        world[at()] = world[at()] + 1;
+        world[errors_at() + c] = world[errors_at() + c] + 1;
+    }
+    return 0;
+}
+
+pub fn error_replies[&w](world: &w [int]) -> [] int {
+    return world[at()];
+}
+
+pub fn errors_with_code[&w](world: &w [int], i: int) -> [] int {
+    return world[errors_at() + i];
+}
+
+pub fn calls[&w](world: &w [int], i: int) -> [] int {
+    return world[commands_at() + 3 * i];
+}
+
+pub fn failed_calls[&w](world: &w [int], i: int) -> [] int {
+    return world[commands_at() + 3 * i + 1];
+}
+
+pub fn rejected_calls[&w](world: &w [int], i: int) -> [] int {
+    return world[commands_at() + 3 * i + 2];
+}
+
+// Once a turn: if 100 ms have passed since the last sample, take another (the oldest of the sixteen is overwritten), as Redis does.
+pub fn sample[&w](world: &!w [int], now: int, answered: int) -> [] int {
+    let head = world[at() + 1];
+    let last = (head + 15) % 16;
+    if world[samples_at() + 2 * last] == 0 || now - world[samples_at() + 2 * last] >= 100 {
+        world[samples_at() + 2 * head] = now;
+        world[samples_at() + 2 * head + 1] = answered;
+        world[at() + 1] = (head + 1) % 16;
+    }
+    return 0;
+}
+
+// Commands per second over the window of samples: from the oldest to now.
+pub fn ops_per_sec[&w](world: &w [int], now: int, answered: int) -> [] int {
+    var oldest = 0 - 1;
+    var i = 0;
+    while i < 16 {
+        let when = world[samples_at() + 2 * i];
+        if when > 0 && (oldest < 0 || when < world[samples_at() + 2 * oldest]) {
+            oldest = i;
+        }
+        i = i + 1;
+    }
+    if oldest < 0 {
+        return 0;
+    }
+    let span = now - world[samples_at() + 2 * oldest];
+    if span <= 0 {
+        return 0;
+    }
+    return (answered - world[samples_at() + 2 * oldest + 1]) * 1000 / span;
+}

@@ -679,6 +679,41 @@ fn test_a_key_table_that_is_full_evicts_under_lru_and_refuses_otherwise[&h](heap
     return 0;
 }
 
+// Uses of keys in one millisecond are ordered all the same (`docs/design.md` section 27): a key used later has a larger stamp, a new millisecond starts the
+// count again without going back, and `used_at` still says the millisecond.
+fn test_uses_in_one_millisecond_are_ordered[&h](heap: &!h Heap) -> [heap] int {
+    var st = store.open(heap, 10000, 100, 0, store.evict_lru());
+    borrow mut st as &!w in {
+        store.tick(w, 500);
+        test.assert_eq(store.set(w, "a", store.hash_of(w, "a"), "1", 0), 0);
+        test.assert_eq(store.set(w, "b", store.hash_of(w, "b"), "2", 0), 0);
+        test.assert_eq(store.set(w, "c", store.hash_of(w, "c"), "3", 0), 0);
+        let ea = store.find(w, "a", store.hash_of(w, "a"));
+        let eb = store.find(w, "b", store.hash_of(w, "b"));
+        let ec = store.find(w, "c", store.hash_of(w, "c"));
+        // Used in the order a, b, c, all in the millisecond 500.
+        test.assert(store.last_use(w, ea) < store.last_use(w, eb));
+        test.assert(store.last_use(w, eb) < store.last_use(w, ec));
+        test.assert_eq(store.used_at(w, ea), 500);
+        // Used again: a is now the latest of the three.
+        store.find(w, "a", store.hash_of(w, "a"));
+        test.assert(store.last_use(w, ec) < store.last_use(w, ea));
+        // The next millisecond starts the count again, and its first use is later than every use of the one before.
+        store.tick(w, 501);
+        store.find(w, "b", store.hash_of(w, "b"));
+        test.assert(store.last_use(w, ea) < store.last_use(w, eb));
+        test.assert_eq(store.used_at(w, eb), 501);
+        // Telling the store the same millisecond again does not start the count over.
+        store.find(w, "c", store.hash_of(w, "c"));
+        store.tick(w, 501);
+        store.find(w, "a", store.hash_of(w, "a"));
+        test.assert(store.last_use(w, ec) < store.last_use(w, ea));
+        test.assert(store.last_use(w, eb) < store.last_use(w, ec));
+    }
+    store.close(heap, st);
+    return 0;
+}
+
 fn test_expiry_lazy_and_swept[&h](heap: &!h Heap) -> [heap] int {
     var st = store.open(heap, 10000, 100, 0, store.evict_none());
     borrow mut st as &!w in {

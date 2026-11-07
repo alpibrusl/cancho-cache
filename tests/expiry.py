@@ -150,6 +150,23 @@ try:
         e2.read()
     check("a key used all the time survives 20,000 writes that evict", e2.ask("GET", "hot"), b"alive")
     check("the oldest of the churn is gone and the newest is there", (e2.ask("EXISTS", "x:0"), e2.ask("EXISTS", "x:19999")), (0, 1))
+    # The same with the commands sent in bursts, so that a burst is one turn of the loop and one millisecond: the stamps that say "used longest
+    # ago" must still tell the keys of a burst apart (docs/design.md section 27). With the stamp a millisecond, `hot` was lost in 82 runs of 200.
+    e3 = Client(LPORT)
+    e3.ask("SET", "hot", "alive")
+    burst = []
+    for i in range(20000):
+        burst.append(cmd("SET", "y:%d" % i, big))
+        if i % 10 == 9:
+            burst.append(cmd("GET", "hot"))
+        if len(burst) >= 200:
+            e3.s.sendall(b"".join(burst))
+            burst = []
+    if burst:
+        e3.s.sendall(b"".join(burst))
+    for _ in range(20000 + 2000):
+        e3.read()
+    check("a key used all the time survives 20,000 writes that evict, sent in bursts", e3.ask("GET", "hot"), b"alive")
 finally:
     for p in (redis, cache, lru):
         p.terminate()

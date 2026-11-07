@@ -2,6 +2,9 @@ edition 5;
 
 module session;
 
+import cmddocs;
+import cmdinfo;
+import cmdkeys;
 import reply;
 import store;
 
@@ -20,11 +23,6 @@ import store;
 // Not here: authentication that does anything (the default user has no password, as in Redis's default configuration, and any
 // other user is refused), RESP3 (`HELLO 3` is refused with Redis's own text for an unsupported version), `CLIENT LIST`/`KILL`/...,
 // `CONFIG SET`, and `INFO` sections beyond the five printed.
-
-// How many commands `COMMAND COUNT` says and `COMMAND LIST` lists: `tests/session_test.py` checks that every one is answered.
-pub fn supported() -> [] int {
-    return 54;
-}
 
 // The most bytes a client name may have here.
 fn name_room() -> [] int {
@@ -515,79 +513,228 @@ pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byt
 }
 
 // The commands this server answers, as `COMMAND LIST` gives them (lower case, one bulk string each): 54 of them.
-fn put_command_names[&b](sc: &!b [byte], at: int) -> [] int {
-    var o = reply.put_bulk(sc, at, "get");
-    o = reply.put_bulk(sc, o, "set");
-    o = reply.put_bulk(sc, o, "ping");
-    o = reply.put_bulk(sc, o, "echo");
-    o = reply.put_bulk(sc, o, "del");
-    o = reply.put_bulk(sc, o, "unlink");
-    o = reply.put_bulk(sc, o, "exists");
-    o = reply.put_bulk(sc, o, "touch");
-    o = reply.put_bulk(sc, o, "incr");
-    o = reply.put_bulk(sc, o, "decr");
-    o = reply.put_bulk(sc, o, "incrby");
-    o = reply.put_bulk(sc, o, "decrby");
-    o = reply.put_bulk(sc, o, "expire");
-    o = reply.put_bulk(sc, o, "pexpire");
-    o = reply.put_bulk(sc, o, "ttl");
-    o = reply.put_bulk(sc, o, "pttl");
-    o = reply.put_bulk(sc, o, "persist");
-    o = reply.put_bulk(sc, o, "setnx");
-    o = reply.put_bulk(sc, o, "setex");
-    o = reply.put_bulk(sc, o, "psetex");
-    o = reply.put_bulk(sc, o, "getset");
-    o = reply.put_bulk(sc, o, "getdel");
-    o = reply.put_bulk(sc, o, "mget");
-    o = reply.put_bulk(sc, o, "mset");
-    o = reply.put_bulk(sc, o, "strlen");
-    o = reply.put_bulk(sc, o, "type");
-    o = reply.put_bulk(sc, o, "dbsize");
-    o = reply.put_bulk(sc, o, "flushall");
-    o = reply.put_bulk(sc, o, "flushdb");
-    o = reply.put_bulk(sc, o, "select");
-    o = reply.put_bulk(sc, o, "hello");
-    o = reply.put_bulk(sc, o, "auth");
-    o = reply.put_bulk(sc, o, "client");
-    o = reply.put_bulk(sc, o, "info");
-    o = reply.put_bulk(sc, o, "config");
-    o = reply.put_bulk(sc, o, "command");
-    o = reply.put_bulk(sc, o, "quit");
-    o = reply.put_bulk(sc, o, "multi");
-    o = reply.put_bulk(sc, o, "exec");
-    o = reply.put_bulk(sc, o, "discard");
-    o = reply.put_bulk(sc, o, "watch");
-    o = reply.put_bulk(sc, o, "unwatch");
-    o = reply.put_bulk(sc, o, "append");
-    o = reply.put_bulk(sc, o, "setrange");
-    o = reply.put_bulk(sc, o, "getrange");
-    o = reply.put_bulk(sc, o, "substr");
-    o = reply.put_bulk(sc, o, "getex");
-    o = reply.put_bulk(sc, o, "msetnx");
-    o = reply.put_bulk(sc, o, "keys");
-    o = reply.put_bulk(sc, o, "scan");
-    o = reply.put_bulk(sc, o, "randomkey");
-    o = reply.put_bulk(sc, o, "rename");
-    o = reply.put_bulk(sc, o, "renamenx");
-    return reply.put_bulk(sc, o, "reset");
+// Where the first `|` of a command name is, or -1: `config|get` names a subcommand. Anything else after it (`a|b|c`, `get|`) simply matches no subcommand.
+fn bar_at[&w](name: &w [byte]) -> [] int {
+    var i = 0;
+    while i < len(name) {
+        if int_of(name[i]) == '|' {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
 }
 
-// `COMMAND`, `COMMAND COUNT`, `COMMAND LIST`. The full table Redis answers `COMMAND` with (flags, arity, key positions) is not kept:
-// clients that read it get an empty one, and `COMMAND DOCS` and `COMMAND INFO` the same.
-pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int) -> [] int {
+// The entry for `name` from `at`, which may name a subcommand (`config|get`): `(true, end)`, or `(false, at)` if there is none. `a|b|c`, `|get` and `get|`
+// are none, and so is a subcommand of a command that has none, as in Redis (the lookup finds nothing for them).
+fn info_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -> [] (bool, int) {
+    let cut = bar_at(name);
+    if cut < 0 {
+        return cmdinfo.put_entry(name, sc, at, resp3);
+    }
+    return cmdinfo.put_sub_entry(name[0..cut], name[cut + 1..len(name)], sc, at, resp3);
+}
+
+// The same for `COMMAND DOCS`: the name and the docs.
+fn docs_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -> [] (bool, int) {
+    let cut = bar_at(name);
+    if cut < 0 {
+        return cmddocs.put_docs(name, sc, at, resp3);
+    }
+    return cmddocs.put_sub_docs(name[0..cut], name[cut + 1..len(name)], sc, at, resp3);
+}
+
+// The flags of the key of a `SET` line, which Redis works out from the line (the key spec says `variable_flags`): a `GET` after the value makes the key
+// read and written (`RW access update`), and otherwise it is only overwritten (`OW update`).
+fn set_key_flags[&v, &t, &b](view: &v [byte], table: &t [int], n: int, sc: &!b [byte], at: int, resp3: bool) -> [] int {
+    var reads = false;
+    var i = 3;
+    while i < n {
+        if reply.is_word(reply.arg_of(view, table, 2 + i), "GET") {
+            reads = true;
+        }
+        i = i + 1;
+    }
+    var head = "*2\r\n+OW\r\n+update\r\n";
+    if resp3 {
+        head = "~2\r\n+OW\r\n+update\r\n";
+    }
+    if reads && resp3 {
+        head = "~3\r\n+RW\r\n+access\r\n+update\r\n";
+    } else if reads {
+        head = "*3\r\n+RW\r\n+access\r\n+update\r\n";
+    }
+    return reply.put(sc, at, head);
+}
+
+// `COMMAND GETKEYS command arg ...` and (`flags`) `COMMAND GETKEYSANDFLAGS command arg ...`: the keys of that command line, found as Redis finds them
+// for these commands. `GETKEYS` takes the first key, last key and step of the command's entry; `GETKEYSANDFLAGS` takes each key spec's own range and
+// gives each key its flags (`cmdkeys`, generated from the oracle). The refusals are Redis's, in its order: an unknown command, a command with no keys,
+// a wrong number of words for it, and a line too short to hold the keys its entry names.
+fn getkeys[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, flags: bool, resp3: bool) -> [] int {
     let argc = table[0];
+    if argc < 4 {
+        if flags {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'command|getkeysandflags' command\r\n");
+        }
+        return reply.put(sc, at, "-ERR wrong number of arguments for 'command|getkeys' command\r\n");
+    }
+    let n = argc - 2;
+    let name = reply.arg_of(view, table, 2);
+    var word = name[0..0];
+    if n >= 2 {
+        word = reply.arg_of(view, table, 3);
+    }
+    let (known, arity, first, last, step) = cmdkeys.key_spec(name, word);
+    if !known {
+        return reply.put(sc, at, "-ERR Invalid command specified\r\n");
+    }
+    if first == 0 {
+        return reply.put(sc, at, "-ERR The command has no key arguments\r\n");
+    }
+    if arity > 0 && n != arity || arity < 0 && n < 0 - arity {
+        return reply.put(sc, at, "-ERR Invalid number of arguments specified for command\r\n");
+    }
+    if !flags {
+        var stop = last;
+        if last < 0 {
+            stop = n + last;
+        }
+        if step < 1 || first > stop || stop >= n {
+            return reply.put(sc, at, "-ERR Invalid arguments specified for command\r\n");
+        }
+        let count = (stop - first) / step + 1;
+        var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), count), "\r\n");
+        var i = first;
+        while i <= stop {
+            o = reply.put_bulk(sc, o, reply.arg_of(view, table, 2 + i));
+            i = i + step;
+        }
+        return o;
+    }
+    // The specs: first count the keys (and refuse a line too short for one), then write them.
+    var total = 0;
+    var k = 0;
+    var more = true;
+    while more {
+        let (index, lastkey, kstep) = cmdkeys.spec_info(name, word, k);
+        if kstep < 1 {
+            more = false;
+        } else {
+            var stop = index + lastkey;
+            if lastkey < 0 {
+                stop = n + lastkey;
+            }
+            if index > stop || stop >= n {
+                return reply.put(sc, at, "-ERR Invalid arguments specified for command\r\n");
+            }
+            total = total + (stop - index) / kstep + 1;
+            k = k + 1;
+        }
+    }
+    if total == 0 {
+        return reply.put(sc, at, "-ERR Invalid arguments specified for command\r\n");
+    }
+    var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), total), "\r\n");
+    k = 0;
+    more = true;
+    while more {
+        let (index, lastkey, kstep) = cmdkeys.spec_info(name, word, k);
+        if kstep < 1 {
+            more = false;
+        } else {
+            var stop = index + lastkey;
+            if lastkey < 0 {
+                stop = n + lastkey;
+            }
+            var i = index;
+            while i <= stop {
+                o = reply.put(sc, o, "*2\r\n");
+                o = reply.put_bulk(sc, o, reply.arg_of(view, table, 2 + i));
+                if reply.is_word(name, "SET") {
+                    o = set_key_flags(view, table, n, sc, o, resp3);
+                } else {
+                    o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);
+                }
+                i = i + kstep;
+            }
+            k = k + 1;
+        }
+    }
+    return o;
+}
+
+// `COMMAND`, `COMMAND COUNT`, `COMMAND LIST`, `COMMAND INFO [name ...]` (`docs/design.md` section 26). The entries are Redis 7.0's own for every command
+// this cache implements (`cmdinfo`, generated from the oracle), so a client that reads arity, flags and key positions to find the keys of a command
+// gets what Redis would tell it. `COMMAND GETKEYSANDFLAGS` and the subcommand forms (`config|get`) are built from the same tables.
+pub fn command[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, proto: int) -> [] int {
+    let argc = table[0];
+    let resp3 = proto == 3;
     if argc == 1 {
-        return reply.put(sc, at, "*0\r\n");
+        return cmdinfo.put_all(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), cmdinfo.count()), "\r\n"), resp3);
     }
     let sub = reply.arg_of(view, table, 1);
     if reply.is_word(sub, "COUNT") && argc == 2 {
-        return reply.put_integer(sc, at, supported());
+        return reply.put_integer(sc, at, cmdinfo.count());
     }
     if reply.is_word(sub, "LIST") && argc == 2 {
-        return put_command_names(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), supported()), "\r\n"));
+        return cmdinfo.put_names(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), cmdinfo.count()), "\r\n"));
     }
-    if reply.is_word(sub, "DOCS") || reply.is_word(sub, "INFO") {
-        return reply.put(sc, at, "*0\r\n");
+    if reply.is_word(sub, "INFO") {
+        if argc == 2 {
+            return cmdinfo.put_all(sc, reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), cmdinfo.count()), "\r\n"), resp3);
+        }
+        var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), argc - 2), "\r\n");
+        var i = 2;
+        while i < argc {
+            let (found, end) = info_entry(reply.arg_of(view, table, i), sc, o, resp3);
+            if found {
+                o = end;
+            } else {
+                o = reply.put_null(sc, o, proto);
+            }
+            i = i + 1;
+        }
+        return o;
+    }
+    if reply.is_word(sub, "GETKEYS") {
+        return getkeys(view, table, sc, at, false, resp3);
+    }
+    if reply.is_word(sub, "GETKEYSANDFLAGS") {
+        return getkeys(view, table, sc, at, true, resp3);
+    }
+    if reply.is_word(sub, "DOCS") {
+        var found = cmdinfo.count();
+        if argc > 2 {
+            found = 0;
+            var k = 2;
+            while k < argc {
+                // Counted by writing the entry where the answer will go, which the answer then overwrites.
+                let (hit, ignored) = docs_entry(reply.arg_of(view, table, k), sc, at, resp3);
+                if hit {
+                    found = found + 1;
+                }
+                k = k + 1;
+            }
+        }
+        // A map of name to docs: RESP3's own type, and in RESP2 an array of twice as many.
+        var head = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "%"), found), "\r\n");
+        if !resp3 {
+            head = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), 2 * found), "\r\n");
+        }
+        if argc == 2 {
+            return cmddocs.put_all_docs(sc, head, resp3);
+        }
+        var o = head;
+        var i = 2;
+        while i < argc {
+            let (hit, end) = docs_entry(reply.arg_of(view, table, i), sc, o, resp3);
+            if hit {
+                o = end;
+            }
+            i = i + 1;
+        }
+        return o;
     }
     var shown = len(sub);
     if shown > 128 {

@@ -255,8 +255,8 @@ known = [
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
     ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
     ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
-    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "54 commands, not 240"),
-    ("COMMAND", cmd("COMMAND"), "the command table (flags, arity, key positions) is not kept"),
+    ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "the commands this cache implements, not Redis's 240"),
+    ("COMMAND", cmd("COMMAND"), "the table holds the commands this cache implements, not all 240 of Redis's"),
 ]
 
 
@@ -489,6 +489,62 @@ cases += [
     ("MSETNX of 300 pairs, one of them there", seq(("FLUSHALL",), ("SET", "w:150", "old"), ("MSETNX", *[x for i in range(300) for x in ("w:%d" % i, "v%d" % i)]), ("DBSIZE",), ("GET", "w:150"))),
     ("MGET of 500 keys in MULTI", seq(("FLUSHALL",), ("SET", "w:1", "x"), M, ("MGET", *["w:%d" % i for i in range(500)]), ("DEL", *["w:%d" % i for i in range(500)]), X)),
 ]
+# COMMAND INFO (docs/design.md section 26): every command the cache implements answers what Redis does, in RESP2 and in RESP3. The names are the ones the source
+# dispatches on, the list tests/gen_cmdinfo.py also reads, so a command added without regenerating src/cmdinfo.cho is found here.
+import glob as _glob
+_names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "..", "src", "*.cho")) if not f.endswith("cmdinfo.cho") for n in re.findall(r'is_word\(name, "([A-Z]+)"\)', open(f).read())})
+# Not these: Redis lists their subcommands in a different order in each process; tests/keyspace.py compares them with the subcommands sorted.
+for _n in [n for n in _names if n not in ("CLIENT", "COMMAND", "CONFIG", "OBJECT")]:
+    cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
+    cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
+    cases.append(("COMMAND DOCS %s" % _n.lower(), seq(("COMMAND", "DOCS", _n.lower()))))
+    cases.append(("COMMAND DOCS %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "DOCS", _n))))
+cases += [
+    ("COMMAND INFO of several names, in any case, with unknown ones", seq(("COMMAND", "INFO", "GeT", "nosuchcommand", "SET", "hset", "x|y"))),
+    ("COMMAND INFO of several names, RESP3", seq(("HELLO", "3"), ("COMMAND", "INFO", "get", "nosuchcommand", "expireat"))),
+    ("COMMAND INFO of an unknown name", seq(("COMMAND", "INFO", "nosuchcommand"))),
+    ("COMMAND INFO in MULTI", seq(M, ("COMMAND", "INFO", "get"), X)),
+    ("COMMAND DOCS of several names, an unknown one left out", seq(("COMMAND", "DOCS", "GeT", "nosuchcommand", "SET", "get"))),
+    ("COMMAND DOCS of several names, RESP3", seq(("HELLO", "3"), ("COMMAND", "DOCS", "get", "nosuchcommand", "expireat"))),
+    ("COMMAND DOCS of an unknown name", seq(("COMMAND", "DOCS", "nosuchcommand"), ("HELLO", "3"), ("COMMAND", "DOCS", "nosuchcommand"))),
+    ("COMMAND DOCS in MULTI", seq(M, ("COMMAND", "DOCS", "get"), X)),
+]
+# COMMAND GETKEYS (docs/design.md section 26): the keys of a command line, and the refusals, in Redis's order.
+_gk = [
+    ("string and expiry commands", [("SET", "a", "b"), ("GET", "a"), ("GETEX", "k", "EX", "1"), ("EXPIRE", "a", "1"), ("EXPIREAT", "a", "1"), ("APPEND", "k", "v"), ("INCRBY", "k", "1"), ("SETRANGE", "k", "1", "v"), ("GETRANGE", "k", "0", "1"), ("TTL", "k"), ("PEXPIRETIME", "a"), ("GETDEL", "a"), ("SETEX", "k", "1", "v"), ("PERSIST", "a")]),
+    ("several keys, any step", [("MSET", "a", "1", "b", "2"), ("MSET", "a", "1", "b"), ("MSET", "a", "1", "b", "2", "c"), ("MSETNX", "a", "1", "b", "2"), ("DEL", "a", "b", "c"), ("UNLINK", "a", "b"), ("EXISTS", "a", "b"), ("TOUCH", "a", "b"), ("MGET", "a", "b"), ("WATCH", "a", "b")]),
+    ("two keys", [("COPY", "a", "b"), ("COPY", "a", "b", "REPLACE"), ("COPY", "a", "b", "DB", "0"), ("RENAME", "a", "b"), ("RENAMENX", "a", "b")]),
+    ("hashes", [("HSET", "h", "f", "v"), ("HMGET", "h", "a", "b"), ("HGETALL", "h"), ("HDEL", "h", "a", "b"), ("HSCAN", "h", "0"), ("HRANDFIELD", "h")]),
+    ("OBJECT", [("OBJECT", "ENCODING", "a"), ("OBJECT", "FREQ", "a"), ("OBJECT", "IDLETIME", "a"), ("OBJECT", "FOO"), ("OBJECT", "HELP"), ("OBJECT", "ENCODING"), ("OBJECT", "ENCODING", "a", "b")]),
+    ("commands without keys", [("SCAN", "0"), ("KEYS", "*"), ("KEYS", "a", "b", "c"), ("SELECT", "0"), ("CLIENT", "ID"), ("CLIENT", "NOSUCH"), ("CONFIG", "GET", "x"), ("COMMAND", "INFO", "get"), ("AUTH", "x"), ("HELLO", "3"), ("ECHO", "x"), ("PING", "x"), ("DBSIZE", "x"), ("INFO", "x"), ("MULTI", "x"), ("EXEC", "x"), ("QUIT", "x")]),
+    ("refusals", [("GET", "a", "b"), ("SET", "a"), ("EXISTS", "a"), ("NOSUCH", "a"), ("NOSUCH"), ("SET", "a", "b", "c", "d")]),
+    ("any case", [("set", "a", "b"), ("Get", "a"), ("mset", "a", "1", "b", "2"), ("object", "encoding", "a")]),
+]
+for _label, _lines in _gk:
+    cases.append(("COMMAND GETKEYS, %s" % _label, seq(*[("COMMAND", "GETKEYS", *_l) for _l in _lines])))
+cases += [
+    ("COMMAND GETKEYS, too few words", seq(("COMMAND", "GETKEYS"), ("COMMAND", "GETKEYS", "GET"), ("COMMAND", "GETKEYS", "PING"), ("COMMAND", "GETKEYS", "OBJECT"), ("COMMAND", "GETKEYS", "CLIENT"))),
+    ("COMMAND GETKEYS in MULTI", seq(M, ("COMMAND", "GETKEYS", "SET", "a", "b"), ("COMMAND", "GETKEYS", "SCAN", "0"), X)),
+]
+# COMMAND GETKEYSANDFLAGS: each key with the flags of its key spec (docs/design.md section 26); SET's come from the line.
+_gkf = [
+    ("SET", [("SET", "a", "b"), ("SET", "a", "b", "GET"), ("SET", "a", "b", "get"), ("SET", "a", "b", "NX", "GET"), ("SET", "a", "GET"), ("SET", "a", "b", "EX", "1"), ("SET", "a", "b", "c", "GET"), ("SET", "a")]),
+    ("single keys", [("GET", "a"), ("EXPIRE", "a", "1"), ("GETEX", "k", "EX", "1"), ("SETRANGE", "k", "1", "v"), ("APPEND", "k", "v"), ("PERSIST", "a"), ("TTL", "k"), ("GETDEL", "a"), ("HSET", "h", "f", "v"), ("HGETALL", "h"), ("HDEL", "h", "a", "b"), ("HMGET", "h", "a"), ("SETEX", "k", "1", "v")]),
+    ("several keys", [("MSET", "a", "1", "b", "2"), ("MSET", "a", "1", "b"), ("MSETNX", "a", "1", "b", "2"), ("DEL", "a", "b", "c"), ("UNLINK", "a"), ("MGET", "a", "b"), ("TOUCH", "a", "b"), ("EXISTS", "a", "b"), ("WATCH", "a", "b")]),
+    ("keys with different flags", [("COPY", "a", "b"), ("COPY", "a", "b", "REPLACE"), ("RENAME", "a", "b"), ("RENAMENX", "a", "b")]),
+    ("OBJECT and the refusals", [("OBJECT", "ENCODING", "a"), ("OBJECT", "FREQ", "a"), ("OBJECT", "HELP"), ("OBJECT", "FOO"), ("PING",), ("SCAN", "0"), ("NOSUCH", "a"), ("GET", "a", "b"), ("SET",), ("set", "a", "b"), ("object", "encoding", "a")]),
+]
+for _label, _lines in _gkf:
+    cases.append(("COMMAND GETKEYSANDFLAGS, %s" % _label, seq(*[("COMMAND", "GETKEYSANDFLAGS", *_l) for _l in _lines])))
+    cases.append(("COMMAND GETKEYSANDFLAGS, %s, RESP3" % _label, seq(("HELLO", "3"), *[("COMMAND", "GETKEYSANDFLAGS", *_l) for _l in _lines])))
+cases += [
+    ("COMMAND GETKEYSANDFLAGS, too few words", seq(("COMMAND", "GETKEYSANDFLAGS"), ("COMMAND", "GETKEYSANDFLAGS", "GET"), ("COMMAND", "GETKEYSANDFLAGS", "SET"))),
+]
+# The subcommand forms of COMMAND INFO and COMMAND DOCS (config|get): in any case, a subcommand of a command that has none, a name with two bars, or with an empty half is unknown.
+_subs = [("get|x",), ("nosuch|x",), ("config|get",), ("CONFIG|GET",), ("get|",), ("|get",), ("config|",), ("a|b|c",), ("object|encoding",), ("object|nosuch",), ("client|id", "client|nosuch", "get"), ("Command|Getkeys",), ("command|docs",)]
+for _sub in ("INFO", "DOCS"):
+    cases.append(("COMMAND %s of subcommands" % _sub, seq(*[("COMMAND", _sub, *_n) for _n in _subs])))
+    cases.append(("COMMAND %s of subcommands, RESP3" % _sub, seq(("HELLO", "3"), *[("COMMAND", _sub, *_n) for _n in _subs])))
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.

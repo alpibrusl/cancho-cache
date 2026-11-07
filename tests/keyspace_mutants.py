@@ -45,7 +45,6 @@ MUTANTS = [
     ("COMMAND GETKEYS looks at the arity before the keys", "session.cho", "    if first == 0 {\n        return reply.put(sc, at, \"-ERR The command has no key arguments\\r\\n\");\n    }\n    if arity > 0", "    if arity > 0", ("diff", "COMMAND GETKEYS, commands without keys")),
     ("COMMAND DOCS answers every name asked, known or not", "session.cho", "                if hit {\n                    found = found + 1;\n                }", "                found = found + 1;", ("diff", "COMMAND DOCS of several names")),
     ("COMMAND GETKEYSANDFLAGS gives SET's key no flags from the GET", "session.cho", "        if reply.is_word(reply.arg_of(view, table, 2 + i), \"GET\") {\n            reads = true;\n        }", "", ("diff", "COMMAND GETKEYSANDFLAGS, SET")),
-    ("COMMAND INFO takes a|b|c for a subcommand", "session.cho", "    return (cut, bars == 1);", "    return (cut, true);", ("diff", "COMMAND INFO of subcommands")),
     ("COMMAND GETKEYSANDFLAGS writes one key of a range", "session.cho", "                o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);\n                }\n                i = i + kstep;", "                o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);\n                }\n                i = i + kstep + n;", ("diff", "COMMAND GETKEYSANDFLAGS, several keys")),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]

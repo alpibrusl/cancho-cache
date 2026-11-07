@@ -513,44 +513,33 @@ pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byt
 }
 
 // The commands this server answers, as `COMMAND LIST` gives them (lower case, one bulk string each): 54 of them.
-// Where the first `|` of a command name is, or -1, and whether it is the only one: `config|get` names a subcommand.
-fn bar_split[&w](name: &w [byte]) -> [] (int, bool) {
-    var cut = 0 - 1;
-    var bars = 0;
+// Where the first `|` of a command name is, or -1: `config|get` names a subcommand. Anything else after it (`a|b|c`, `get|`) simply matches no subcommand.
+fn bar_at[&w](name: &w [byte]) -> [] int {
     var i = 0;
     while i < len(name) {
         if int_of(name[i]) == '|' {
-            if cut < 0 {
-                cut = i;
-            }
-            bars = bars + 1;
+            return i;
         }
         i = i + 1;
     }
-    return (cut, bars == 1);
+    return 0 - 1;
 }
 
 // The entry for `name` from `at`, which may name a subcommand (`config|get`): `(true, end)`, or `(false, at)` if there is none. `a|b|c`, `|get` and `get|`
-// are none, and so is a subcommand of a command that has none, as in Redis.
+// are none, and so is a subcommand of a command that has none, as in Redis (the lookup finds nothing for them).
 fn info_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -> [] (bool, int) {
-    let (cut, single) = bar_split(name);
+    let cut = bar_at(name);
     if cut < 0 {
         return cmdinfo.put_entry(name, sc, at, resp3);
-    }
-    if !single || cut == 0 || cut == len(name) - 1 {
-        return (false, at);
     }
     return cmdinfo.put_sub_entry(name[0..cut], name[cut + 1..len(name)], sc, at, resp3);
 }
 
 // The same for `COMMAND DOCS`: the name and the docs.
 fn docs_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -> [] (bool, int) {
-    let (cut, single) = bar_split(name);
+    let cut = bar_at(name);
     if cut < 0 {
         return cmddocs.put_docs(name, sc, at, resp3);
-    }
-    if !single || cut == 0 || cut == len(name) - 1 {
-        return (false, at);
     }
     return cmddocs.put_sub_docs(name[0..cut], name[cut + 1..len(name)], sc, at, resp3);
 }

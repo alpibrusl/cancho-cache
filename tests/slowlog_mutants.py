@@ -32,7 +32,7 @@ MUTANTS = [
     ("commands that did not run are logged", "cache.cho", " && !stats.did_not_run(sc, from, to) {", " {", S),
     ("a queued command is logged", "stats.cho", "reply_starts(sc, from, to, \"+QUEUED\") || ", "", S),
     ("an unknown command is logged", "stats.cho", " || reply_starts(sc, from, to, \"-ERR unknown command\")", "", S),
-    ("CONFIG is not timed, so it is not logged when it switches the log on", "cache.cho", " || reply.is_word(reply.arg_of(view, tb, 0), \"CONFIG\");", ";", S),
+    ("CONFIG is not timed, so it is not logged when it switches the log on", "cache.cho", " || tb[0] > 0 && reply.is_word(reply.arg_of(view, tb, 0), \"CONFIG\");", ";", S),
     ("MULTI is not logged", "cache.cho", "                    if txn_timed && status == 1 {", "                    if false && status == 1 {", S),
 ]
 

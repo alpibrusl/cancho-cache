@@ -251,7 +251,7 @@ fn pump_get[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, ops: int, ope:
 fn slow_timed[&c, &v, &w](core: &c Core, view: &v [byte], tb: &w [int], idx: int) -> [] bool {
     let limit = store.slow_threshold_of(core.store);
     // `CONFIG` is always timed: it may be the command that switches the log on, and it is then judged by the new threshold.
-    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx)) || reply.is_word(reply.arg_of(view, tb, 0), "CONFIG");
+    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx)) || tb[0] > 0 && reply.is_word(reply.arg_of(view, tb, 0), "CONFIG");
 }
 
 // After a timed command ran: it took until now from `began`; if that is as long as the threshold (as it is *now*, so that the command that sets it is judged by the new

@@ -243,7 +243,7 @@ fn pump_get[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, ops: int, ope:
 
 // Answer every whole command buffered for connection `k`, write the answers, and keep the start of one that
 // is still arriving. Closes the connection if it is to close, or cannot be written to.
-fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write, poll] int {
+fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q Clock) -> [conn_write, poll, clock] int {
     let st = contents(core.state);
     let bf = contents(core.bufs);
     let pd = contents(core.pends);
@@ -422,7 +422,11 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                         st[p + 16] = store.stamp_of(core.store, ge);
                         st[p + 17] = store.epoch_of(core.store);
                     } else {
+                        let began = clock_ms(clock);
                         at = commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
+                        if clock_ms(clock) - began >= 1000000 {
+                            contents(core.info)[7] = contents(core.info)[7] + 1;
+                        }
                     }
                 }
                 if status == 0 && st[p + 9] != 0 {
@@ -554,7 +558,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
 }
 
 // The poller said connection `k` is ready.
-fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) -> [conn_read, conn_write, poll] int {
+fn step[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int, clock: &q Clock) -> [conn_read, conn_write, poll, clock] int {
     let st = contents(core.state);
     let bf = contents(core.bufs);
     let pd = contents(core.pends);
@@ -574,7 +578,7 @@ fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) ->
     if st[p + 13] == 4 && st[p + 2] == 0 {
         // A value is being sent and the last of it went: the connection is watched for room to write, and has some.
         if readiness % 4 >= 2 {
-            process(tab, core, k);
+            process(tab, core, k, clock);
         } else if readiness % 2 == 1 {
             shut(tab, core, k);
         }
@@ -598,7 +602,7 @@ fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) ->
                             // Held back while the last answers were being sent.
                             pool.give(contents(core.pendpool), st[p + 11]);
                             st[p + 11] = 0 - 1;
-                            process(tab, core, k);
+                            process(tab, core, k, clock);
                         }
                     }
                 }
@@ -619,7 +623,7 @@ fn step[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int) ->
         match conns.read(tab, k, bf[base + st[p]..base + size]) {
             Received::Data(got) => {
                 st[p] = st[p] + got;
-                process(tab, core, k);
+                process(tab, core, k, clock);
             }
             Received::End => {
                 shut(tab, core, k);
@@ -753,7 +757,7 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                         borrow mut tab as &!tw in {
                             borrow mut core as &!cw in {
                                 if contents(cw.state)[stride() * (token - 1) + 1] == 1 {
-                                    step(tw, cw, token - 1, readiness);
+                                    step(tw, cw, token - 1, readiness, clock);
                                 }
                             }
                         }

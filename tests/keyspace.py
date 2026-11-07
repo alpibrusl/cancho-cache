@@ -131,10 +131,10 @@ try:
             out.append((name, body))
         return out
 
-    for name in ("client", "cluster", "command", "config", "object"):
+    for name in ("client", "cluster", "command", "config", "object", "slowlog"):
         want, got = r.ask("COMMAND", "DOCS", name), c.ask("COMMAND", "DOCS", name)
         check("COMMAND DOCS %s agrees with Redis, subcommands in any order" % name, want and got and sorted_docs(want) == sorted_docs(got), repr(got)[:200])
-    for name in ("client", "cluster", "command", "config", "object"):
+    for name in ("client", "cluster", "command", "config", "object", "slowlog"):
         want, got = r.ask("COMMAND", "INFO", name), c.ask("COMMAND", "INFO", name)
         check("COMMAND INFO %s agrees with Redis, subcommands in any order" % name, want is not None and got is not None and [sorted_subs(e) for e in want] == [sorted_subs(e) for e in got], repr(got)[:200])
 
@@ -209,6 +209,9 @@ try:
     def run_model(port, arena_note, longest=300):
         x = Client(port)
         x.ask("FLUSHALL")
+        # Its own generator: the steps before this one draw from `rnd` a number of times that depends on the timing of the run, and the sequence here decides whether a
+        # stale hash of a renamed key ever matters, so a mutant of RENAME was caught in some runs and not in others.
+        rnd = random.Random(20261107 + port)
         model = {}
         names = ["m:%d" % i for i in range(30)]
         refused = 0

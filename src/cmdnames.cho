@@ -32,7 +32,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'T' {
             if reply.is_word(name, "TTL") {
-                return 73;
+                return 74;
             }
         }
     }
@@ -115,7 +115,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'T' {
             if reply.is_word(name, "TYPE") {
-                return 74;
+                return 75;
             }
         }
     }
@@ -165,12 +165,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'T' {
             if reply.is_word(name, "TOUCH") {
-                return 72;
+                return 73;
             }
         }
         if first == 'W' {
             if reply.is_word(name, "WATCH") {
-                return 77;
+                return 78;
             }
         }
     }
@@ -247,15 +247,15 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 65;
             }
             if reply.is_word(name, "STRLEN") {
-                return 70;
+                return 71;
             }
             if reply.is_word(name, "SUBSTR") {
-                return 71;
+                return 72;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNLINK") {
-                return 75;
+                return 76;
             }
         }
     }
@@ -300,9 +300,14 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 51;
             }
         }
+        if first == 'S' {
+            if reply.is_word(name, "SLOWLOG") {
+                return 70;
+            }
+        }
         if first == 'U' {
             if reply.is_word(name, "UNWATCH") {
-                return 76;
+                return 77;
             }
         }
     }
@@ -586,28 +591,43 @@ pub fn name_at(i: int) -> [] &static [byte] {
         return "setrange";
     }
     if i == 70 {
-        return "strlen";
+        return "slowlog";
     }
     if i == 71 {
-        return "substr";
+        return "strlen";
     }
     if i == 72 {
-        return "touch";
+        return "substr";
     }
     if i == 73 {
-        return "ttl";
+        return "touch";
     }
     if i == 74 {
-        return "type";
+        return "ttl";
     }
     if i == 75 {
-        return "unlink";
+        return "type";
     }
     if i == 76 {
-        return "unwatch";
+        return "unlink";
     }
     if i == 77 {
+        return "unwatch";
+    }
+    if i == 78 {
         return "watch";
     }
     return "";
+}
+
+// Whether command `i` can take long enough to be worth timing by default for the slow log (`docs/design.md` section 31): the ones whose cost grows with the
+// keys, the arguments or the bytes they touch. A single-key lookup is not one: it cannot take a millisecond.
+pub fn may_be_slow(i: int) -> [] bool {
+    if i < 0 {
+        return false;
+    }
+    if i < 62 {
+        return 2306680006577513593 >> i & 1 == 1;
+    }
+    return 85125 >> i - 62 & 1 == 1;
 }

@@ -26,6 +26,7 @@ on:
       - src/cluster.cho
       - src/cmdnames.cho
       - src/stats.cho
+      - src/slowlog.cho
       - tests/info.py
       - tests/cluster.py
       - tests/gen_cmdinfo.py

@@ -67,6 +67,90 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
         }
         return (false, 0, 0, 0, 0);
     }
+    if reply.is_word(name, "CLUSTER") {
+        if reply.is_word(sub, "ADDSLOTS") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "ADDSLOTSRANGE") {
+            return (true, -4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "BUMPEPOCH") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "COUNT-FAILURE-REPORTS") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "COUNTKEYSINSLOT") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "DELSLOTS") {
+            return (true, -3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "DELSLOTSRANGE") {
+            return (true, -4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "FAILOVER") {
+            return (true, -2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "FLUSHSLOTS") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "FORGET") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "GETKEYSINSLOT") {
+            return (true, 4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "INFO") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "KEYSLOT") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "LINKS") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "MEET") {
+            return (true, -4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "MYID") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "NODES") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "REPLICAS") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "REPLICATE") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "RESET") {
+            return (true, -2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SAVECONFIG") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SET-CONFIG-EPOCH") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SETSLOT") {
+            return (true, -4, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SHARDS") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SLAVES") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "SLOTS") {
+            return (true, 2, 0, 0, 0);
+        }
+        return (false, 0, 0, 0, 0);
+    }
     if reply.is_word(name, "COMMAND") {
         if reply.is_word(sub, "COUNT") {
             return (true, 2, 0, 0, 0);
@@ -281,6 +365,12 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
         return (true, -1, 0, 0, 0);
     }
     if reply.is_word(name, "RANDOMKEY") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "READONLY") {
+        return (true, 1, 0, 0, 0);
+    }
+    if reply.is_word(name, "READWRITE") {
         return (true, 1, 0, 0, 0);
     }
     if reply.is_word(name, "RENAME") {

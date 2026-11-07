@@ -38,6 +38,101 @@ pub fn evict_lru() -> [] int {
     return 1;
 }
 
+// The other policies of Redis's `maxmemory-policy` that this cache has (`docs/design.md` section 28); the LFU ones are not built.
+pub fn evict_allkeys_random() -> [] int {
+    return 2;
+}
+
+pub fn evict_volatile_lru() -> [] int {
+    return 3;
+}
+
+pub fn evict_volatile_random() -> [] int {
+    return 4;
+}
+
+pub fn evict_volatile_ttl() -> [] int {
+    return 5;
+}
+
+// The policy's name, as `CONFIG GET maxmemory-policy` and `INFO` say it.
+pub fn policy_name(p: int) -> [] &static [byte] {
+    if p == evict_lru() {
+        return "allkeys-lru";
+    }
+    if p == evict_allkeys_random() {
+        return "allkeys-random";
+    }
+    if p == evict_volatile_lru() {
+        return "volatile-lru";
+    }
+    if p == evict_volatile_random() {
+        return "volatile-random";
+    }
+    if p == evict_volatile_ttl() {
+        return "volatile-ttl";
+    }
+    return "noeviction";
+}
+
+// Whether `word` is `name` (written in lower case) in any case.
+fn named[&w](word: &w [byte], name: &static [byte]) -> [] bool {
+    if len(word) != len(name) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        var c = int_of(word[i]);
+        if c >= 'A' && c <= 'Z' {
+            c = c + 32;
+        }
+        if c != int_of(name[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The policy that `name` says, in any case: `maxmemory-policy`'s words. -1 if it is none this cache has (including the two LFU ones, which Redis has).
+pub fn policy_named[&w](name: &w [byte]) -> [] int {
+    if named(name, "noeviction") {
+        return evict_none();
+    }
+    if named(name, "allkeys-lru") {
+        return evict_lru();
+    }
+    if named(name, "allkeys-random") {
+        return evict_allkeys_random();
+    }
+    if named(name, "volatile-lru") {
+        return evict_volatile_lru();
+    }
+    if named(name, "volatile-random") {
+        return evict_volatile_random();
+    }
+    if named(name, "volatile-ttl") {
+        return evict_volatile_ttl();
+    }
+    return 0 - 1;
+}
+
+// Whether the policy takes only keys that have an expiry.
+fn only_volatile(p: int) -> [] bool {
+    return p == evict_volatile_lru() || p == evict_volatile_random() || p == evict_volatile_ttl();
+}
+
+// The most keys a sample may hold, whatever `maxmemory-samples` was set to (Redis keeps 16).
+fn most_samples() -> [] int {
+    return 64;
+}
+
+// How far from a random start `victim` looks, one entry after another, when drawing at random found no key it may take: a store in which most
+// keys have no expiry and a `volatile-*` policy. Past it the write is refused as if there were nothing to evict.
+fn scan_limit() -> [] int {
+    return 65536;
+}
+
 // Ints a key takes in `meta`.
 fn stride() -> [] int {
     return 10;
@@ -82,6 +177,8 @@ pub res struct Store {
     dead: int,
     seed: int,
     policy: int,
+    // How many keys an eviction samples (`maxmemory-samples`), as the client set it; `victim` uses at most `most_samples()`.
+    samples: int,
     now: int,
     // How many uses of keys have been stamped in the current millisecond (`use_stamp`).
     seq: int,
@@ -122,11 +219,11 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, meta);
@@ -502,19 +599,48 @@ pub fn random_below[&s](st: &!s Store, bound: int) -> [] int {
     return draw(st, bound);
 }
 
-// Pick the entry to evict: of five random keys in use, the one used longest ago. -1 if there is no key to take.
+// Whether entry `e` is a key the policy may take: in use, not the one being written, and with an expiry if the policy says so.
+fn may_take[&s, &m](st: &s Store, meta: &m [int], e: int, volatile: bool) -> [] bool {
+    return meta[stride() * e + 6] == 0 - 2 && e != st.protect && (!volatile || meta[stride() * e + 4] != 0);
+}
+
+// Pick the entry to evict (`docs/design.md` sections 4 and 28). `allkeys-random` and `volatile-random` take the first key they draw that they may; the
+// others sample `maxmemory-samples` keys they may take and choose among them: the one used longest ago (`*-lru`) or the one whose expiry is soonest
+// (`volatile-ttl`). -1 if there is no key to take.
 fn victim[&s](st: &!s Store) -> [] int {
     if st.live == 0 {
         return 0 - 1;
     }
+    let volatile = only_volatile(st.policy);
+    if volatile && st.ttl_keys == 0 {
+        return 0 - 1;
+    }
     let meta = contents(st.meta);
+    var want = st.samples;
+    if want > most_samples() {
+        want = most_samples();
+    }
+    if st.policy == evict_allkeys_random() || st.policy == evict_volatile_random() {
+        want = 1;
+    }
+    let by_ttl = st.policy == evict_volatile_ttl();
     var best = 0 - 1;
     var seen = 0;
     var tries = 0;
-    while seen < 5 && tries < 40 {
+    var limit = 8 * want;
+    if limit < 40 {
+        limit = 40;
+    }
+    while seen < want && tries < limit {
         let e = draw(st, st.fresh);
-        if meta[stride() * e + 6] == 0 - 2 && e != st.protect {
-            if best < 0 || meta[stride() * e + 7] < meta[stride() * best + 7] {
+        if may_take(st, meta, e, volatile) {
+            if best < 0 {
+                best = e;
+            } else if by_ttl {
+                if meta[stride() * e + 4] < meta[stride() * best + 4] {
+                    best = e;
+                }
+            } else if meta[stride() * e + 7] < meta[stride() * best + 7] {
                 best = e;
             }
             seen = seen + 1;
@@ -524,11 +650,15 @@ fn victim[&s](st: &!s Store) -> [] int {
     if best >= 0 {
         return best;
     }
-    // Sparse numbering (most entries free): look from a random start for any key in use.
+    // Sparse numbering, or few keys that may be taken: look from a random start, one entry after another, for any key that may be.
     var k = 0;
     var e = draw(st, st.fresh);
-    while k < st.fresh {
-        if meta[stride() * e + 6] == 0 - 2 && e != st.protect {
+    var looking = st.fresh;
+    if looking > scan_limit() {
+        looking = scan_limit();
+    }
+    while k < looking {
+        if may_take(st, meta, e, volatile) {
             return e;
         }
         e = e + 1;
@@ -910,7 +1040,7 @@ pub fn reclaim[&s](st: &!s Store, budget: int) -> [] int {
         return 0;
     }
     let cap = len(contents(st.data));
-    if st.policy == evict_lru() && cap - st.top < cap / 8 && st.dead < cap / 16 {
+    if st.policy != evict_none() && cap - st.top < cap / 8 && st.dead < cap / 16 {
         var k = 0;
         while k < set_evictions() && st.dead < cap / 16 && evict_one(st) == 1 {
             k = k + 1;
@@ -1269,7 +1399,23 @@ pub fn wall_of[&s](st: &s Store) -> [] int {
     return st.wall;
 }
 
-// Which eviction policy it was opened with.
+// Which eviction policy is in force.
 pub fn policy_of[&s](st: &s Store) -> [] int {
     return st.policy;
+}
+
+// Change the policy (`CONFIG SET maxmemory-policy`); takes effect at the next eviction.
+pub fn set_policy[&s](st: &!s Store, p: int) -> [] int {
+    st.policy = p;
+    return 0;
+}
+
+// `maxmemory-samples`, as set.
+pub fn samples_of[&s](st: &s Store) -> [] int {
+    return st.samples;
+}
+
+pub fn set_samples[&s](st: &!s Store, n: int) -> [] int {
+    st.samples = n;
+    return 0;
 }

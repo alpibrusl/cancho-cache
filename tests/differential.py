@@ -253,7 +253,7 @@ known = [
     ("bulk not followed by CRLF", b"*1\r\n$3\r\nabcde\r\n", "Redis skips two bytes after a bulk without checking them; the cache refuses (a request-smuggling-shaped ambiguity)"),
     ("WATCH of nine keys", cmd("WATCH", *["w:%d" % i for i in range(9)]), "the cache follows at most eight watched keys per connection (design.md 14.3); Redis has no limit"),
     ("SELECT 1", cmd("SELECT", "1"), "one database, not sixteen: SELECT 0 is OK and every other index is out of range"),
-    ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena, key table and policy are fixed at start"),
+    ("CONFIG SET", cmd("CONFIG", "SET", "maxmemory", "1mb"), "the arena and the key table are fixed at start (docs/design.md section 28): maxmemory cannot be changed"),
     ("CONFIG GET maxmemory", cmd("CONFIG", "GET", "maxmemory"), "the cache's own settings and its own defaults"),
     ("COMMAND COUNT", cmd("COMMAND", "COUNT"), "the commands this cache implements, not Redis's 240"),
     ("COMMAND", cmd("COMMAND"), "the table holds the commands this cache implements, not all 240 of Redis's"),
@@ -494,7 +494,7 @@ cases += [
 import glob as _glob
 _names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "..", "src", "*.cho")) if not f.endswith("cmdinfo.cho") for n in re.findall(r'is_word\(name, "([A-Z]+)"\)', open(f).read())})
 # Not these: Redis lists their subcommands in a different order in each process; tests/keyspace.py compares them with the subcommands sorted.
-for _n in [n for n in _names if n not in ("CLIENT", "COMMAND", "CONFIG", "OBJECT")]:
+for _n in [n for n in _names if n not in ("CLIENT", "CLUSTER", "COMMAND", "CONFIG", "OBJECT")]:
     cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
     cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
     cases.append(("COMMAND DOCS %s" % _n.lower(), seq(("COMMAND", "DOCS", _n.lower()))))
@@ -545,11 +545,36 @@ _subs = [("get|x",), ("nosuch|x",), ("config|get",), ("CONFIG|GET",), ("get|",),
 for _sub in ("INFO", "DOCS"):
     cases.append(("COMMAND %s of subcommands" % _sub, seq(*[("COMMAND", _sub, *_n) for _n in _subs])))
     cases.append(("COMMAND %s of subcommands, RESP3" % _sub, seq(("HELLO", "3"), *[("COMMAND", _sub, *_n) for _n in _subs])))
+# CONFIG SET of the two settings that can change while the cache runs, and every refusal (docs/design.md section 28). Each case puts the settings back at the end,
+# so that the cases after it meet the defaults on both servers.
+_reset = [("CONFIG", "SET", "maxmemory-policy", "noeviction", "maxmemory-samples", "5")]
+_cfg = [
+    ("CONFIG SET maxmemory-policy, each policy", [("CONFIG", "SET", "maxmemory-policy", p) if i % 2 == 0 else ("CONFIG", "GET", "maxmemory-policy") for p in ("volatile-ttl", "volatile-lru", "allkeys-random", "volatile-random", "allkeys-lru", "NOEVICTION") for i in range(2)] ),
+    ("CONFIG SET maxmemory-policy refusals", [("CONFIG", "SET", "maxmemory-policy", "nosuch"), ("CONFIG", "SET", "MAXMEMORY-POLICY", "nosuch"), ("CONFIG", "SET", "maxmemory-policy", ""), ("CONFIG", "SET", "maxmemory-policy", "lfu"), ("CONFIG", "GET", "maxmemory-policy")]),
+    ("CONFIG SET maxmemory-samples", [("CONFIG", "SET", "maxmemory-samples", "1"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "SET", "maxmemory-samples", "64"), ("CONFIG", "SET", "maxmemory-samples", "65"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "SET", "MAXMEMORY-SAMPLES", "7"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "SET", "maxmemory-samples", "2147483647"), ("CONFIG", "GET", "maxmemory-samples")]),
+    ("CONFIG SET maxmemory-samples refusals", [("CONFIG", "SET", "maxmemory-samples", "0"), ("CONFIG", "SET", "maxmemory-samples", "-1"), ("CONFIG", "SET", "maxmemory-samples", "2147483648"), ("CONFIG", "SET", "maxmemory-samples", "x"), ("CONFIG", "SET", "maxmemory-samples", "5.5"), ("CONFIG", "SET", "maxmemory-samples", ""), ("CONFIG", "GET", "maxmemory-samples")]),
+    ("CONFIG SET several pairs at once", [("CONFIG", "SET", "maxmemory-samples", "9", "maxmemory-policy", "volatile-ttl"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "GET", "maxmemory-policy"), ("CONFIG", "SET", "maxmemory-samples", "3", "maxmemory-policy", "bad"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "GET", "maxmemory-policy")]),
+    ("CONFIG SET names, in the order Redis looks at them", [("CONFIG", "SET", "nosuchparam", "1"), ("CONFIG", "SET", "maxmemory-samples", "3", "nosuchparam", "1"), ("CONFIG", "SET", "maxmemory-samples", "abc", "nosuchparam", "1"), ("CONFIG", "SET", "maxmemory-samples", "7", "maxmemory-samples", "8"), ("CONFIG", "SET", "MAXMEMORY-SAMPLES", "7", "maxmemory-samples", "8"), ("CONFIG", "SET", "databases", "4"), ("CONFIG", "SET", "DATABASES", "4"), ("CONFIG", "SET", "maxmemory-samples", "1", "databases", "4"), ("CONFIG", "SET", "maxmemory-samples", "abc", "maxmemory-policy", "bad"), ("CONFIG", "GET", "maxmemory-samples")]),
+    ("CONFIG SET arity", [("CONFIG", "SET"), ("CONFIG", "SET", "maxmemory-policy"), ("CONFIG", "SET", "maxmemory-samples", "5", "maxmemory-policy"), ("CONFIG", "SET", "maxmemory-samples", "5", "a", "b", "c")]),
+]
+for _label, _lines in _cfg:
+    cases.append((_label, seq(*_lines, *_reset)))
+    cases.append((_label + ", RESP3", seq(("HELLO", "3"), *_lines, *_reset)))
+cases.append(("CONFIG SET in MULTI", seq(M, ("CONFIG", "SET", "maxmemory-samples", "6"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "SET", "maxmemory-samples", "x"), X, *_reset)))
+# CLUSTER where the instance is not a cluster node (docs/design.md section 29): unknown subcommand and arity first, then the refusal that says so; and the
+# same checks when the command is queued in MULTI. (A cluster is compared with a real Redis Cluster by tests/cluster.py.)
+_cl = [("CLUSTER",), ("CLUSTER", "KEYSLOT"), ("CLUSTER", "KEYSLOT", "foo"), ("CLUSTER", "KEYSLOT", "a", "b"), ("CLUSTER", "INFO"), ("CLUSTER", "MYID"), ("CLUSTER", "SLOTS"), ("CLUSTER", "NODES"),
+       ("CLUSTER", "SHARDS"), ("CLUSTER", "NOSUCH"), ("CLUSTER", "nosuch", "x"), ("cluster", "keyslot", "foo"), ("CLUSTER", "INFO", "x"), ("CLUSTER", "MYID", "x"), ("CLUSTER", "SLOTS", "x"), ("READONLY",), ("READWRITE",), ("READONLY", "x"),
+       ("READWRITE", "x"), ("SELECT", "0")]
+cases.append(("CLUSTER and READONLY without a cluster", seq(*_cl)))
+cases.append(("CLUSTER and READONLY without a cluster, RESP3", seq(("HELLO", "3"), *_cl)))
+cases.append(("CLUSTER checked as it is queued in MULTI", seq(M, ("CLUSTER", "KEYSLOT"), ("CLUSTER", "NOSUCH"), ("CLUSTER",), ("CLUSTER", "KEYSLOT", "foo"), X)))
+cases.append(("CLUSTER queued in MULTI, a good line", seq(M, ("CLUSTER", "KEYSLOT", "foo"), ("READONLY",), X)))
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT", "EXPIREAT", "PEXPIREAT", "EXPIRETIME", "PEXPIRETIME"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT", "READONLY", "READWRITE", "EXPIREAT", "PEXPIREAT", "EXPIRETIME", "PEXPIRETIME"]:
     for given in range(0, 5):
         numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]

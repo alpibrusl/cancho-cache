@@ -131,10 +131,10 @@ try:
             out.append((name, body))
         return out
 
-    for name in ("client", "command", "config", "object"):
+    for name in ("client", "cluster", "command", "config", "object"):
         want, got = r.ask("COMMAND", "DOCS", name), c.ask("COMMAND", "DOCS", name)
         check("COMMAND DOCS %s agrees with Redis, subcommands in any order" % name, want and got and sorted_docs(want) == sorted_docs(got), repr(got)[:200])
-    for name in ("client", "command", "config", "object"):
+    for name in ("client", "cluster", "command", "config", "object"):
         want, got = r.ask("COMMAND", "INFO", name), c.ask("COMMAND", "INFO", name)
         check("COMMAND INFO %s agrees with Redis, subcommands in any order" % name, want is not None and got is not None and [sorted_subs(e) for e in want] == [sorted_subs(e) for e in got], repr(got)[:200])
 

@@ -75,12 +75,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho -o build/cache
+        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho -o build/cache
 
       - name: Authority has no ffi, and reads only /dev/urandom (the hash seed)
         working-directory: cache
         run: |
-          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho --std > /tmp/authority.txt
+          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/^performs/,/^never touches/p' /tmp/authority.txt | grep -q 'fs_read("/dev/urandom")'
           ! grep -q 'fs_write' /tmp/authority.txt
@@ -94,6 +94,14 @@ jobs:
       - name: INFO names the sections and fields Redis does, and its counters agree
         working-directory: cache
         run: python3 tests/info.py build/cache
+
+      - name: SLOWLOG entries, counts and errors agree with Redis
+        working-directory: cache
+        run: python3 tests/slowlog.py build/cache
+
+      - name: CLIENT LIST, INFO and KILL agree with Redis
+        working-directory: cache
+        run: python3 tests/client_commands.py build/cache
 
       - name: Cluster-lite against a real Redis Cluster (three nodes of each, compared line for line)
         working-directory: cache

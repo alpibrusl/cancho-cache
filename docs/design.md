@@ -865,3 +865,23 @@ The one cell that moved needed a closer look and is **noise, not cost**. At `get
 **Mutants.** `tests/slowlog_mutants.py` (21) change the cut, the counts, the redaction, the order, the defaults, the threshold edge and which commands are logged; `tests/slowlog.py` must fail on each.
 
 **Throughput gate, re-run** (`bench/vs_redis.sh -r 10`, the final code, Redis and the cache interleaved). Ratio to Redis: `set -P 1` 1.10, `set -P 16` 1.33, `get -P 1` 1.10, `get -P 16` 1.00. The last cell is the bimodal one of section 30: in this run the cache's ten runs were nine at about 1.33M and one at 2.0M, Redis's likewise at about 1.33M (one run each at 1.5M and 1.0M), so the median ratio reads 1.00 with both servers in the same mode; it is noise in the scheduler's mode, not a cost of the slow log. The other three cells are within a few percent of section 30's (`set -P 1` 1.15 there, 1.10 now: inside the run-to-run spread of 166k to 210k requests per second in this run). The 21 mutants of `tests/slowlog_mutants.py` were all caught.
+
+## 32. `CLIENT LIST`, `INFO` and `KILL` (epic #8, issue #18, slice 3)
+
+The commands that look at other connections, in `src/clients.cho`. The loop (`src/cache.cho`, `execute_in`) answers them itself, because only it holds the table of connections; every other command goes on to `commands.execute` as before, inside `MULTI`/`EXEC` too.
+
+**What a connection now remembers.** Four more ints in its row (`stride()` 18 → 22): when it connected, when it last ran a command, which command that was (`cmdnames.index_of`), and a mark that `CLIENT KILL` sets. The two writes on the command path are stores of ints, no clock read (the turn's time is the store's).
+
+**`CLIENT LIST [TYPE normal|master|replica|pubsub] [ID id ...]`** writes Redis 7.0's line for each connection: `id addr name age idle flags db sub psub ssub multi qbuf qbuf-free argv-mem multi-mem rbs rbp obl oll omem tot-mem events cmd user redir resp`. The flags are `x` (in `MULTI`), `c` (to be closed once its answers have gone) or `N`. Every connection is a `normal` one, so `TYPE master|replica|pubsub` lists nothing; a type nobody has is `-ERR Unknown client type`; `ID` takes any number (0 and negatives find nothing) and refuses what is not one. **`CLIENT INFO`** is the caller's own line.
+
+**What an entry cannot say, and says so.** `fd` and `laddr` are left out: `std.conns` gives neither a descriptor nor the local address of a connection, and a made-up value would be worse than none. `cmd` is the command's name without its subcommand (`client`, where Redis says `client|list`). The memory fields are what this cache can count (`qbuf`, `omem`, the queue of a `MULTI`); `rbs`, `rbp`, `argv-mem`, `obl` and `oll` are constants or zero because the buffers are lent in blocks of a fixed size, not grown. `tests/client_commands.py` checks that every field is one Redis has, that the cache's line has Redis's fields less those two, and that the fields the commands decide (`name`, `flags`, `multi`, `resp`, ...) agree.
+
+**`CLIENT KILL`.** The old form (`CLIENT KILL addr`) answers `OK` or `-ERR No such client`; the new form (`ID`, `TYPE`, `ADDR`, `USER`, `SKIPME`) answers how many it closed, skipping the caller unless `SKIPME no`. The filters are Redis's, with Redis's errors; `USER` knows only `default`; **`LADDR` is refused** with an error that says why (no local address). Other connections are closed at once, and the loop skips any event that was already waiting for them; the caller, if it is among them, gets its answer and is closed after it, as `QUIT` does. `CLIENT KILL MAXAGE` is Redis 7.4's and is a syntax error here as it is in 7.0.
+
+**`CLIENT NO-EVICT on|off`** is accepted and does nothing: the cache has no client eviction (`maxmemory-clients`), so there is nothing to protect a client from.
+
+**A reply bound.** The list is written into the turn's answer buffer, which holds 3,342,336 bytes after what the turn has already written; an entry is at most 512 bytes, so a table that could not fit (about 6,500 connections) is answered with `-ERR too many clients to list in one reply`, not cut. The limit of connections is 10,000, so the largest tables are refused rather than listed in pieces: a gap, not a Redis behaviour.
+
+**Not in this slice:** `CLIENT PAUSE`/`UNPAUSE` (they need the loop to hold commands back and write replies later), `CLIENT TRACKING*` (the tiered-mode issue), `CLIENT REPLY`, `CLIENT UNBLOCK`, `CLIENT GETREDIR`.
+
+**Mutants.** `tests/clients_mutants.py` (22) change the filters, the flags, the kill selection and what happens to the killed; `tests/client_commands.py` must fail on each.

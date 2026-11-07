@@ -258,7 +258,7 @@ fn command_getrange[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [b
         return reply.not_an_integer(sc, at);
     }
     let key = reply.arg_of(view, table, 1);
-    let e = store.find(st, key, store.hash_of(st, key));
+    let e = store.find_read(st, key, store.hash_of(st, key));
     if e < 0 {
         return reply.put(sc, at, "$0\r\n\r\n");
     }
@@ -331,7 +331,7 @@ fn command_getex[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte
     }
     let key = reply.arg_of(view, table, 1);
     let h = store.hash_of(st, key);
-    let e = store.find(st, key, h);
+    let e = store.find_read(st, key, h);
     if e < 0 {
         return reply.put_null(sc, at, proto);
     }
@@ -491,7 +491,7 @@ fn command_expire[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byt
 // `TTL key` (seconds) and `PTTL key` (milliseconds): -2 if there is no such key, -1 if it has no expiry.
 fn command_ttl[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, seconds: bool) -> [] int {
     let key = reply.arg_of(view, table, 1);
-    let e = store.find(st, key, store.hash_of(st, key));
+    let e = store.find_read(st, key, store.hash_of(st, key));
     if e < 0 {
         return reply.put_integer(sc, at, 0 - 2);
     }
@@ -512,7 +512,7 @@ fn command_ttl[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte],
 // `EXPIRETIME key` (unix seconds) and `PEXPIRETIME key` (unix milliseconds): -2 if there is no such key, -1 if it has no expiry.
 fn command_expiretime[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, seconds: bool) -> [] int {
     let key = reply.arg_of(view, table, 1);
-    let e = store.find(st, key, store.hash_of(st, key));
+    let e = store.find_read(st, key, store.hash_of(st, key));
     if e < 0 {
         return reply.put_integer(sc, at, 0 - 2);
     }
@@ -570,7 +570,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         let key = reply.arg_of(view, table, 1);
-        let e = store.find(st, key, store.hash_of(st, key));
+        let e = store.find_read(st, key, store.hash_of(st, key));
         if e < 0 {
             return reply.put_null(sc, at, link[3]);
         }
@@ -624,7 +624,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         var k = 1;
         while k < argc {
             let key = reply.arg_of(view, table, k);
-            if store.find(st, key, store.hash_of(st, key)) >= 0 {
+            if store.find_read(st, key, store.hash_of(st, key)) >= 0 {
                 found = found + 1;
             }
             k = k + 1;
@@ -737,7 +737,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         let key = reply.arg_of(view, table, 1);
         let h = store.hash_of(st, key);
-        let e = store.find(st, key, h);
+        let e = store.find_read(st, key, h);
         if e < 0 {
             return reply.put_null(sc, at, link[3]);
         }
@@ -766,7 +766,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         while k < argc && o + max_string() + 32 <= at + piece() {
             let key = reply.arg_of(view, table, k);
-            let e = store.find(st, key, store.hash_of(st, key));
+            let e = store.find_read(st, key, store.hash_of(st, key));
             if e < 0 || store.kind_of(st, e) == store.kind_hash() {
                 // A key that is not there, or holds a hash: Redis answers nil for both (MGET never says WRONGTYPE).
                 o = reply.put_null(sc, o, link[3]);
@@ -890,7 +890,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         let key = reply.arg_of(view, table, 1);
-        let e = store.find(st, key, store.hash_of(st, key));
+        let e = store.find_read(st, key, store.hash_of(st, key));
         if e < 0 {
             return reply.put_integer(sc, at, 0);
         }
@@ -904,7 +904,7 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         let key = reply.arg_of(view, table, 1);
-        let e = store.find(st, key, store.hash_of(st, key));
+        let e = store.find_read(st, key, store.hash_of(st, key));
         if e < 0 {
             return reply.put(sc, at, "+none\r\n");
         }

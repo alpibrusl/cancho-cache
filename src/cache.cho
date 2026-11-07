@@ -8,6 +8,7 @@ import commands;
 import pool;
 import reply;
 import resp;
+import stats;
 import store;
 import stream;
 import txn;
@@ -396,6 +397,7 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                 }
                 // In cluster mode a command whose keys another node owns is refused here, before the transaction layer sees it: queued inside `MULTI` it is
                 // refused when it is queued and `EXEC` then answers `EXECABORT`, as in Redis (`docs/design.md` section 29).
+                let reply_from = at;
                 let refused = cluster.route(view, tb, sc, at, contents(core.info));
                 var status = 0;
                 if refused != at {
@@ -432,6 +434,10 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                     n = 0;
                 } else {
                     contents(core.info)[2] = contents(core.info)[2] + 1;
+                    // The command is counted for `INFO commandstats`, and an error reply for `errorstats` (`docs/design.md` section 30).
+                    if tb[0] > 0 {
+                        stats.record(contents(core.info), reply.arg_of(view, tb, 0), sc, reply_from, at);
+                    }
                 }
                 if status == 2 {
                     // `EXEC`: run what was queued, one command at a time, the answers going out as they fill. If the client is not reading and the
@@ -697,7 +703,7 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size() + stats.size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
             var bad_map = false;
             borrow mut core as &!cw in {
@@ -758,6 +764,8 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                     borrow tab as &tr in {
                         contents(cw.info)[0] = conns.live(tr);
                     }
+                    stats.sample(contents(cw.info), store.now_of(cw.store), contents(cw.info)[2]);
+                    store.note_peak(cw.store);
                     // Work the arena's reclaiming ahead of need, a slice at a time (the sets do some themselves).
                     store.reclaim(cw.store, 1024);
                     // Take the keys whose time has passed that nobody asked for again: at most a hundred times a second,

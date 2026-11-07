@@ -9,7 +9,7 @@ import os, shutil, subprocess, sys, tempfile
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 CANCHO = os.environ.get("CANCHO")
-FILES = ["cache", "resp", "store", "commands", "reply", "session", "txn", "glob", "pool", "stream", "cmdinfo", "cmddocs", "cmdkeys", "cluster"]
+FILES = ["cache", "resp", "store", "commands", "reply", "session", "txn", "glob", "pool", "stream", "cmdinfo", "cmddocs", "cmdkeys", "cluster", "cmdnames", "stats"]
 
 
 def run(args, env=None, timeout=600):

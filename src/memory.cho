@@ -1,0 +1,98 @@
+edition 5;
+
+module memory;
+
+import reply;
+import store;
+
+// `memory` -- `MEMORY USAGE`, `STATS`, `DOCTOR` and `PURGE` (`docs/design.md` section 33). The numbers are this cache's: bytes of its arena, not an allocator's.
+
+fn small() -> [] int {
+    return 5242880;
+}
+
+fn field[&b](sc: &!b [byte], at: int, name: &static [byte], n: int) -> [] int {
+    return reply.put_integer(sc, reply.put_bulk(sc, at, name), n);
+}
+
+// `MEMORY USAGE key [SAMPLES count]`: the bytes a key takes (its name, its value, and `store.record_overhead()`), or nil.
+fn usage[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
+    let argc = table[0];
+    if argc < 3 {
+        return reply.put(sc, at, "-ERR wrong number of arguments for 'memory|usage' command\r\n");
+    }
+    var i = 3;
+    while i < argc {
+        if !reply.is_word(reply.arg_of(view, table, i), "SAMPLES") || i + 1 >= argc {
+            return reply.syntax_error(sc, at);
+        }
+        let (status, n) = reply.parse_int(reply.arg_of(view, table, i + 1));
+        if status != 0 {
+            return reply.not_an_integer(sc, at);
+        }
+        if n < 0 {
+            return reply.syntax_error(sc, at);
+        }
+        i = i + 2;
+    }
+    let key = reply.arg_of(view, table, 2);
+    let e = store.peek(st, key, store.hash_of(st, key));
+    if e < 0 {
+        return reply.put_null(sc, at, proto);
+    }
+    return reply.put_integer(sc, at, len(key) + len(store.value(st, e)) + store.record_overhead());
+}
+
+pub fn command[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, proto: int) -> [] int {
+    let argc = table[0];
+    let sub = reply.arg_of(view, table, 1);
+    if reply.is_word(sub, "USAGE") {
+        return usage(view, table, sc, at, st, proto);
+    }
+    if reply.is_word(sub, "PURGE") {
+        if argc != 2 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'memory|purge' command\r\n");
+        }
+        return reply.put(sc, at, "+OK\r\n");
+    }
+    if reply.is_word(sub, "DOCTOR") {
+        if argc != 2 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'memory|doctor' command\r\n");
+        }
+        if store.used(st) - store.dead(st) < small() {
+            return reply.put_bulk(sc, at, "Hi Sam, this instance is empty or is using very little memory, my issues detector can't be used in these conditions. Please, leave for your mission on Earth and fill it with some data. The new Sam and I will be back to our programming as soon as I finished rebooting.\n");
+        }
+        return reply.put_bulk(sc, at, "Hi Sam, I can't find any memory issue in your instance. I can only account for what occurs on this base.\n");
+    }
+    if reply.is_word(sub, "STATS") {
+        if argc != 2 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'memory|stats' command\r\n");
+        }
+        let data = store.used(st) - store.dead(st);
+        var per_key = 0;
+        if store.live(st) > 0 {
+            per_key = data / store.live(st);
+        }
+        var o = at;
+        if proto == 3 {
+            o = reply.put(sc, o, "%5\r\n");
+        } else {
+            o = reply.put(sc, o, "*10\r\n");
+        }
+        o = field(sc, o, "peak.allocated", store.peak_of(st));
+        o = field(sc, o, "total.allocated", store.used(st));
+        o = field(sc, o, "keys.count", store.live(st));
+        o = field(sc, o, "keys.bytes-per-key", per_key);
+        return field(sc, o, "dataset.bytes", data);
+    }
+    if reply.is_word(sub, "MALLOC-STATS") || reply.is_word(sub, "HELP") {
+        return reply.put(sc, reply.put(sc, reply.put(sc, at, "-ERR MEMORY "), sub), " is not supported by this cache (docs/design.md section 33)\r\n");
+    }
+    var shown = len(sub);
+    if shown > 128 {
+        shown = 128;
+    }
+    var o = reply.put(sc, at, "-ERR unknown subcommand '");
+    o = reply.put(sc, o, sub[0..shown]);
+    return reply.put(sc, o, "'. Try MEMORY HELP.\r\n");
+}

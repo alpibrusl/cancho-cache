@@ -4,6 +4,8 @@ module commands;
 
 import cluster;
 import glob;
+import latency;
+import memory;
 import reply;
 import session;
 import slowlog;
@@ -951,6 +953,18 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.wrong_arguments(sc, at, name);
         }
         return slowlog.command(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "LATENCY") {
+        if argc < 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return latency.command(view, table, sc, at, st);
+    }
+    if reply.is_word(name, "MEMORY") {
+        if argc < 2 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return memory.command(view, table, sc, at, st, link[3]);
     }
     if reply.is_word(name, "CLUSTER") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") {
         if reply.is_word(name, "CLUSTER") && argc < 2 || !reply.is_word(name, "CLUSTER") && argc != 1 {
@@ -2054,7 +2068,7 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
         return 0 - 1;
     }
-    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") || reply.is_word(name, "CLUSTER") || reply.is_word(name, "SLOWLOG") {
+    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") || reply.is_word(name, "CLUSTER") || reply.is_word(name, "SLOWLOG") || reply.is_word(name, "LATENCY") || reply.is_word(name, "MEMORY") {
         return 0 - 2;
     }
     if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "EXPIREAT") || reply.is_word(name, "PEXPIREAT") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") || reply.is_word(name, "COPY") {

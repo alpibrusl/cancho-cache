@@ -190,6 +190,9 @@ pub res struct Store {
     slow_count: int,
     slow_threshold: int,
     slow_max: int,
+    // The latency monitor (`docs/design.md` section 33): `lat_events()` blocks of `lat_block()` ints, and `latency-monitor-threshold` in milliseconds (0: off).
+    lat: Box[[int]],
+    lat_threshold: int,
     now: int,
     // How many uses of keys have been stamped in the current millisecond (`use_stamp`).
     seq: int,
@@ -230,15 +233,16 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, slow: box_slice(heap, slow_cap() * slow_fields(), 0), slowtext: box_slice(heap, slow_cap() * slow_room(), byte_of(0)), slow_next: 0, slow_count: 0, slow_threshold: 10000, slow_max: 128, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, slow: box_slice(heap, slow_cap() * slow_fields(), 0), slowtext: box_slice(heap, slow_cap() * slow_room(), byte_of(0)), slow_next: 0, slow_count: 0, slow_threshold: 10000, slow_max: 128, lat: box_slice(heap, lat_events() * lat_block(), 0), lat_threshold: 0, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, slow, slowtext, slow_next, slow_count, slow_threshold, slow_max, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, slow, slowtext, slow_next, slow_count, slow_threshold, slow_max, lat, lat_threshold, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, slow);
     unbox_slice(heap, slowtext);
+    unbox_slice(heap, lat);
     unbox_slice(heap, meta);
     unbox_slice(heap, data);
     return live;
@@ -1533,6 +1537,38 @@ pub fn slow_ints[&s](st: &!s Store) -> [] &!s [int] {
 
 pub fn slow_text[&s](st: &!s Store) -> [] &!s [byte] {
     return contents(st.slowtext);
+}
+
+// What a key costs beyond its name and value: the record's header, its row in the entry table and its slot in the index (`MEMORY USAGE`).
+pub fn record_overhead() -> [] int {
+    return header() + stride() * 8 + 8;
+}
+
+// The latency monitor: each event (`command`, `fast-command`) keeps `lat_samples()` samples in a ring. A block is: where the next sample goes, the longest ever seen (ms, since
+// the last reset), then a pair per sample: when (seconds of the day, 0: none) and how long (ms).
+pub fn lat_events() -> [] int {
+    return 2;
+}
+
+pub fn lat_samples() -> [] int {
+    return 160;
+}
+
+pub fn lat_block() -> [] int {
+    return 2 + 2 * lat_samples();
+}
+
+pub fn lat_threshold_of[&s](st: &s Store) -> [] int {
+    return st.lat_threshold;
+}
+
+pub fn set_lat_threshold[&s](st: &!s Store, ms: int) -> [] int {
+    st.lat_threshold = ms;
+    return 0;
+}
+
+pub fn lat_ints[&s](st: &!s Store) -> [] &!s [int] {
+    return contents(st.lat);
 }
 
 // Which eviction policy is in force.

@@ -27,12 +27,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SET") {
-                return 66;
+                return 68;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TTL") {
-                return 74;
+                return 76;
             }
         }
     }
@@ -89,33 +89,33 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'M' {
             if reply.is_word(name, "MGET") {
-                return 45;
+                return 47;
             }
             if reply.is_word(name, "MSET") {
-                return 46;
+                return 48;
             }
         }
         if first == 'P' {
             if reply.is_word(name, "PING") {
-                return 54;
+                return 56;
             }
             if reply.is_word(name, "PTTL") {
-                return 56;
+                return 58;
             }
         }
         if first == 'Q' {
             if reply.is_word(name, "QUIT") {
-                return 57;
+                return 59;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SCAN") {
-                return 64;
+                return 66;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TYPE") {
-                return 75;
+                return 77;
             }
         }
     }
@@ -147,30 +147,30 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'M' {
             if reply.is_word(name, "MULTI") {
-                return 48;
+                return 50;
             }
         }
         if first == 'R' {
             if reply.is_word(name, "RESET") {
-                return 63;
+                return 65;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SETEX") {
-                return 67;
+                return 69;
             }
             if reply.is_word(name, "SETNX") {
-                return 68;
+                return 70;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TOUCH") {
-                return 73;
+                return 75;
             }
         }
         if first == 'W' {
             if reply.is_word(name, "WATCH") {
-                return 78;
+                return 80;
             }
         }
     }
@@ -223,39 +223,42 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
             }
         }
         if first == 'M' {
+            if reply.is_word(name, "MEMORY") {
+                return 46;
+            }
             if reply.is_word(name, "MSETNX") {
-                return 47;
+                return 49;
             }
         }
         if first == 'O' {
             if reply.is_word(name, "OBJECT") {
-                return 49;
+                return 51;
             }
         }
         if first == 'P' {
             if reply.is_word(name, "PSETEX") {
-                return 55;
+                return 57;
             }
         }
         if first == 'R' {
             if reply.is_word(name, "RENAME") {
-                return 61;
+                return 63;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SELECT") {
-                return 65;
+                return 67;
             }
             if reply.is_word(name, "STRLEN") {
-                return 71;
+                return 73;
             }
             if reply.is_word(name, "SUBSTR") {
-                return 72;
+                return 74;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNLINK") {
-                return 76;
+                return 78;
             }
         }
     }
@@ -292,22 +295,27 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 39;
             }
         }
+        if first == 'L' {
+            if reply.is_word(name, "LATENCY") {
+                return 45;
+            }
+        }
         if first == 'P' {
             if reply.is_word(name, "PERSIST") {
-                return 50;
+                return 52;
             }
             if reply.is_word(name, "PEXPIRE") {
-                return 51;
+                return 53;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SLOWLOG") {
-                return 70;
+                return 72;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNWATCH") {
-                return 77;
+                return 79;
             }
         }
     }
@@ -329,30 +337,30 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'R' {
             if reply.is_word(name, "READONLY") {
-                return 59;
+                return 61;
             }
             if reply.is_word(name, "RENAMENX") {
-                return 62;
+                return 64;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SETRANGE") {
-                return 69;
+                return 71;
             }
         }
     }
     if len(name) == 9 {
         if first == 'P' {
             if reply.is_word(name, "PEXPIREAT") {
-                return 52;
+                return 54;
             }
         }
         if first == 'R' {
             if reply.is_word(name, "RANDOMKEY") {
-                return 58;
+                return 60;
             }
             if reply.is_word(name, "READWRITE") {
-                return 60;
+                return 62;
             }
         }
     }
@@ -371,7 +379,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
     if len(name) == 11 {
         if first == 'P' {
             if reply.is_word(name, "PEXPIRETIME") {
-                return 53;
+                return 55;
             }
         }
     }
@@ -516,105 +524,111 @@ pub fn name_at(i: int) -> [] &static [byte] {
         return "keys";
     }
     if i == 45 {
-        return "mget";
+        return "latency";
     }
     if i == 46 {
-        return "mset";
+        return "memory";
     }
     if i == 47 {
-        return "msetnx";
+        return "mget";
     }
     if i == 48 {
-        return "multi";
+        return "mset";
     }
     if i == 49 {
-        return "object";
+        return "msetnx";
     }
     if i == 50 {
-        return "persist";
+        return "multi";
     }
     if i == 51 {
-        return "pexpire";
+        return "object";
     }
     if i == 52 {
-        return "pexpireat";
+        return "persist";
     }
     if i == 53 {
-        return "pexpiretime";
+        return "pexpire";
     }
     if i == 54 {
-        return "ping";
+        return "pexpireat";
     }
     if i == 55 {
-        return "psetex";
+        return "pexpiretime";
     }
     if i == 56 {
-        return "pttl";
+        return "ping";
     }
     if i == 57 {
-        return "quit";
+        return "psetex";
     }
     if i == 58 {
-        return "randomkey";
+        return "pttl";
     }
     if i == 59 {
-        return "readonly";
+        return "quit";
     }
     if i == 60 {
-        return "readwrite";
+        return "randomkey";
     }
     if i == 61 {
-        return "rename";
+        return "readonly";
     }
     if i == 62 {
-        return "renamenx";
+        return "readwrite";
     }
     if i == 63 {
-        return "reset";
+        return "rename";
     }
     if i == 64 {
-        return "scan";
+        return "renamenx";
     }
     if i == 65 {
-        return "select";
+        return "reset";
     }
     if i == 66 {
-        return "set";
+        return "scan";
     }
     if i == 67 {
-        return "setex";
+        return "select";
     }
     if i == 68 {
-        return "setnx";
+        return "set";
     }
     if i == 69 {
-        return "setrange";
+        return "setex";
     }
     if i == 70 {
-        return "slowlog";
+        return "setnx";
     }
     if i == 71 {
-        return "strlen";
+        return "setrange";
     }
     if i == 72 {
-        return "substr";
+        return "slowlog";
     }
     if i == 73 {
-        return "touch";
+        return "strlen";
     }
     if i == 74 {
-        return "ttl";
+        return "substr";
     }
     if i == 75 {
-        return "type";
+        return "touch";
     }
     if i == 76 {
-        return "unlink";
+        return "ttl";
     }
     if i == 77 {
-        return "unwatch";
+        return "type";
     }
     if i == 78 {
+        return "unlink";
+    }
+    if i == 79 {
+        return "unwatch";
+    }
+    if i == 80 {
         return "watch";
     }
     return "";
@@ -627,7 +641,7 @@ pub fn may_be_slow(i: int) -> [] bool {
         return false;
     }
     if i < 62 {
-        return 2306680006577513593 >> i & 1 == 1;
+        return 3264719037949049 >> i & 1 == 1;
     }
-    return 85125 >> i - 62 & 1 == 1;
+    return 340502 >> i - 62 & 1 == 1;
 }

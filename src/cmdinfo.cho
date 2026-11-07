@@ -9,7 +9,7 @@ import reply;
 
 // How many commands the table holds.
 pub fn count() -> [] int {
-    return 79;
+    return 81;
 }
 
 // Write the entry of the command `name` (any case) from `at` and answer `(true, where it ends)`, or `(false, at)` if it is not in the table.
@@ -283,6 +283,18 @@ pub fn put_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) 
             return (true, reply.put(sc, at, "*10\r\n$4\r\nkeys\r\n:2\r\n~1\r\n+readonly\r\n:0\r\n:0\r\n:0\r\n~4\r\n+@keyspace\r\n+@read\r\n+@slow\r\n+@dangerous\r\n~2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nnondeterministic_output_order\r\n~0\r\n~0\r\n"));
         }
         return (true, reply.put(sc, at, "*10\r\n$4\r\nkeys\r\n:2\r\n*1\r\n+readonly\r\n:0\r\n:0\r\n:0\r\n*4\r\n+@keyspace\r\n+@read\r\n+@slow\r\n+@dangerous\r\n*2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nnondeterministic_output_order\r\n*0\r\n*0\r\n"));
+    }
+    if reply.is_word(name, "LATENCY") {
+        if resp3 {
+            return (true, reply.put(sc, at, "*10\r\n$7\r\nlatency\r\n:-2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n*7\r\n*10\r\n$14\r\nlatency|doctor\r\n:2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$13\r\nlatency|graph\r\n:3\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$12\r\nlatency|help\r\n:2\r\n~2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n~0\r\n*10\r\n$17\r\nlatency|histogram\r\n:-2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$15\r\nlatency|history\r\n:3\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$14\r\nlatency|latest\r\n:2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$13\r\nlatency|reset\r\n:-2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n~0\r\n~0\r\n"));
+        }
+        return (true, reply.put(sc, at, "*10\r\n$7\r\nlatency\r\n:-2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*0\r\n*0\r\n*7\r\n*10\r\n$14\r\nlatency|doctor\r\n:2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$13\r\nlatency|graph\r\n:3\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$12\r\nlatency|help\r\n:2\r\n*2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*0\r\n*0\r\n*0\r\n*10\r\n$17\r\nlatency|histogram\r\n:-2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$15\r\nlatency|history\r\n:3\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$14\r\nlatency|latest\r\n:2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$13\r\nlatency|reset\r\n:-2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n*0\r\n*0\r\n"));
+    }
+    if reply.is_word(name, "MEMORY") {
+        if resp3 {
+            return (true, reply.put(sc, at, "*10\r\n$6\r\nmemory\r\n:-2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n*6\r\n*10\r\n$13\r\nmemory|doctor\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$11\r\nmemory|help\r\n:2\r\n~2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n~0\r\n*10\r\n$19\r\nmemory|malloc-stats\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$12\r\nmemory|purge\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nresponse_policy:all_succeeded\r\n~0\r\n~0\r\n*10\r\n$12\r\nmemory|stats\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$12\r\nmemory|usage\r\n:-3\r\n~1\r\n+readonly\r\n:2\r\n:2\r\n:1\r\n~2\r\n+@read\r\n+@slow\r\n~0\r\n~1\r\n%3\r\n$5\r\nflags\r\n~1\r\n+RO\r\n$12\r\nbegin_search\r\n%2\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n%1\r\n$5\r\nindex\r\n:2\r\n$9\r\nfind_keys\r\n%2\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n%3\r\n$7\r\nlastkey\r\n:0\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n~0\r\n"));
+        }
+        return (true, reply.put(sc, at, "*10\r\n$6\r\nmemory\r\n:-2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*0\r\n*0\r\n*6\r\n*10\r\n$13\r\nmemory|doctor\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$11\r\nmemory|help\r\n:2\r\n*2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*0\r\n*0\r\n*0\r\n*10\r\n$19\r\nmemory|malloc-stats\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$12\r\nmemory|purge\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nresponse_policy:all_succeeded\r\n*0\r\n*0\r\n*10\r\n$12\r\nmemory|stats\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n*10\r\n$12\r\nmemory|usage\r\n:-3\r\n*1\r\n+readonly\r\n:2\r\n:2\r\n:1\r\n*2\r\n+@read\r\n+@slow\r\n*0\r\n*1\r\n*6\r\n$5\r\nflags\r\n*1\r\n+RO\r\n$12\r\nbegin_search\r\n*4\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n*2\r\n$5\r\nindex\r\n:2\r\n$9\r\nfind_keys\r\n*4\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n*6\r\n$7\r\nlastkey\r\n:0\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n*0\r\n"));
     }
     if reply.is_word(name, "MGET") {
         if resp3 {
@@ -626,6 +638,12 @@ pub fn known[&w](name: &w [byte]) -> [] bool {
         return true;
     }
     if reply.is_word(name, "KEYS") {
+        return true;
+    }
+    if reply.is_word(name, "LATENCY") {
+        return true;
+    }
+    if reply.is_word(name, "MEMORY") {
         return true;
     }
     if reply.is_word(name, "MGET") {
@@ -1073,6 +1091,88 @@ pub fn put_sub_entry[&w, &s, &b](name: &w [byte], sub: &s [byte], sc: &!b [byte]
             return (true, reply.put(sc, at, "*10\r\n$10\r\nconfig|set\r\n:-4\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n*0\r\n*0\r\n"));
         }
     }
+    if reply.is_word(name, "LATENCY") {
+        if reply.is_word(sub, "DOCTOR") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$14\r\nlatency|doctor\r\n:2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$14\r\nlatency|doctor\r\n:2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "GRAPH") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$13\r\nlatency|graph\r\n:3\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$13\r\nlatency|graph\r\n:3\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$12\r\nlatency|help\r\n:2\r\n~2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$12\r\nlatency|help\r\n:2\r\n*2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*0\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "HISTOGRAM") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$17\r\nlatency|histogram\r\n:-2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$17\r\nlatency|histogram\r\n:-2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "HISTORY") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$15\r\nlatency|history\r\n:3\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$15\r\nlatency|history\r\n:3\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "LATEST") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$14\r\nlatency|latest\r\n:2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$14\r\nlatency|latest\r\n:2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "RESET") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$13\r\nlatency|reset\r\n:-2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$13\r\nlatency|reset\r\n:-2\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n*0\r\n*0\r\n"));
+        }
+    }
+    if reply.is_word(name, "MEMORY") {
+        if reply.is_word(sub, "DOCTOR") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$13\r\nmemory|doctor\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$13\r\nmemory|doctor\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$11\r\nmemory|help\r\n:2\r\n~2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$11\r\nmemory|help\r\n:2\r\n*2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*0\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "MALLOC-STATS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$19\r\nmemory|malloc-stats\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$19\r\nmemory|malloc-stats\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "PURGE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$12\r\nmemory|purge\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nresponse_policy:all_succeeded\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$12\r\nmemory|purge\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nresponse_policy:all_succeeded\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "STATS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$12\r\nmemory|stats\r\n:2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$12\r\nmemory|stats\r\n:2\r\n*0\r\n:0\r\n:0\r\n:0\r\n*1\r\n+@slow\r\n*3\r\n$23\r\nnondeterministic_output\r\n$25\r\nrequest_policy:all_shards\r\n$23\r\nresponse_policy:special\r\n*0\r\n*0\r\n"));
+        }
+        if reply.is_word(sub, "USAGE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "*10\r\n$12\r\nmemory|usage\r\n:-3\r\n~1\r\n+readonly\r\n:2\r\n:2\r\n:1\r\n~2\r\n+@read\r\n+@slow\r\n~0\r\n~1\r\n%3\r\n$5\r\nflags\r\n~1\r\n+RO\r\n$12\r\nbegin_search\r\n%2\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n%1\r\n$5\r\nindex\r\n:2\r\n$9\r\nfind_keys\r\n%2\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n%3\r\n$7\r\nlastkey\r\n:0\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n~0\r\n"));
+            }
+            return (true, reply.put(sc, at, "*10\r\n$12\r\nmemory|usage\r\n:-3\r\n*1\r\n+readonly\r\n:2\r\n:2\r\n:1\r\n*2\r\n+@read\r\n+@slow\r\n*0\r\n*1\r\n*6\r\n$5\r\nflags\r\n*1\r\n+RO\r\n$12\r\nbegin_search\r\n*4\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n*2\r\n$5\r\nindex\r\n:2\r\n$9\r\nfind_keys\r\n*4\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n*6\r\n$7\r\nlastkey\r\n:0\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n*0\r\n"));
+        }
+    }
     if reply.is_word(name, "OBJECT") {
         if reply.is_word(sub, "ENCODING") {
             if resp3 {
@@ -1148,6 +1248,12 @@ pub fn is_container[&w](name: &w [byte]) -> [] bool {
     if reply.is_word(name, "CONFIG") {
         return true;
     }
+    if reply.is_word(name, "LATENCY") {
+        return true;
+    }
+    if reply.is_word(name, "MEMORY") {
+        return true;
+    }
     if reply.is_word(name, "OBJECT") {
         return true;
     }
@@ -1205,6 +1311,8 @@ pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     o = reply.put_bulk(sc, o, "incrby");
     o = reply.put_bulk(sc, o, "info");
     o = reply.put_bulk(sc, o, "keys");
+    o = reply.put_bulk(sc, o, "latency");
+    o = reply.put_bulk(sc, o, "memory");
     o = reply.put_bulk(sc, o, "mget");
     o = reply.put_bulk(sc, o, "mset");
     o = reply.put_bulk(sc, o, "msetnx");
@@ -1290,6 +1398,8 @@ pub fn put_all[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_entry("INCRBY", sc, o, resp3).1;
     o = put_entry("INFO", sc, o, resp3).1;
     o = put_entry("KEYS", sc, o, resp3).1;
+    o = put_entry("LATENCY", sc, o, resp3).1;
+    o = put_entry("MEMORY", sc, o, resp3).1;
     o = put_entry("MGET", sc, o, resp3).1;
     o = put_entry("MSET", sc, o, resp3).1;
     o = put_entry("MSETNX", sc, o, resp3).1;

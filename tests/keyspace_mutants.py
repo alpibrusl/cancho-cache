@@ -23,10 +23,10 @@ MUTANTS = [
     ("SCAN lets a key that has run out through", "store.cho", "    return meta[m + 6] == 0 - 2 && (meta[m + 4] == 0 || meta[m + 4] > st.now);", "    return meta[m + 6] == 0 - 2;", ("unit",)),
     ("SCAN takes a cursor that is not a number", "commands.cho", "        if c < '0' || c > '9' {\n            return (1, 0);\n        }\n        if c != '0' && first < 0 {", "        if c < '0' || c > '9' {\n            return (0, 0);\n        }\n        if c != '0' && first < 0 {", ("diff", "SCAN cursor errors")),
     ("RENAME leaves the key it overwrites", "store.cho", "    if d >= 0 && d != e {\n        remove_entry(st, d);\n    }", "", ("diff", "RENAME over an existing key")),
-    ("RENAME drops the expiry", "store.cho", "    meta[m + 5] = hd;\n    meta[m + 7] = st.now;", "    meta[m + 5] = hd;\n    put_expiry(st, m, 0);\n    meta[m + 7] = st.now;", ("diff", "RENAME moves the expiry")),
+    ("RENAME drops the expiry", "store.cho", "    meta[m + 5] = hd;\n    meta[m + 7] = use_stamp(st);", "    meta[m + 5] = hd;\n    put_expiry(st, m, 0);\n    meta[m + 7] = st.now;", ("diff", "RENAME moves the expiry")),
     ("RENAME forgets the old record is garbage", "store.cho", "    st.dead = st.dead + header() + meta[m + 1] + meta[m + 3];\n    meta[m] = at + header();\n    meta[m + 1] = len(dst);", "    meta[m] = at + header();\n    meta[m + 1] = len(dst);", ("unit",)),
     ("RENAME leaves the old name in the index", "store.cho", "    bump(st, meta[m + 5]);\n    close_hole(st, slot);\n    st.dead", "    bump(st, meta[m + 5]);\n    st.dead", ("py", "keyspace.py")),
-    ("RENAME does not record the new hash", "store.cho", "    meta[m + 5] = hd;\n    meta[m + 7] = st.now;", "    meta[m + 7] = st.now;", ("py", "keyspace.py")),
+    ("RENAME does not record the new hash", "store.cho", "    meta[m + 5] = hd;\n    meta[m + 7] = use_stamp(st);", "    meta[m + 7] = st.now;", ("py", "keyspace.py")),
     ("RENAME does not mark the old name for WATCH", "store.cho", "    let slot = slot_of(st, e);\n    bump(st, meta[m + 5]);\n    close_hole(st, slot);", "    let slot = slot_of(st, e);\n    close_hole(st, slot);", ("diff", "RENAME dirties the old name for WATCH")),
     ("RENAMENX renames onto an existing key", "commands.cho", "    if nx && store.find(st, dst, hd) >= 0 {\n        return reply.put_integer(sc, at, 0);\n    }", "", ("diff", "RENAMENX onto an existing key")),
     ("COPY drops the expiry", "store.cho", "    let w = commit(st, ne, meta[m + 4]);", "    let w = commit(st, ne, 0);", ("diff", "COPY keeps the expiry")),
@@ -46,6 +46,8 @@ MUTANTS = [
     ("COMMAND DOCS answers every name asked, known or not", "session.cho", "                if hit {\n                    found = found + 1;\n                }", "                found = found + 1;", ("diff", "COMMAND DOCS of several names")),
     ("COMMAND GETKEYSANDFLAGS gives SET's key no flags from the GET", "session.cho", "        if reply.is_word(reply.arg_of(view, table, 2 + i), \"GET\") {\n            reads = true;\n        }", "", ("diff", "COMMAND GETKEYSANDFLAGS, SET")),
     ("COMMAND GETKEYSANDFLAGS writes one key of a range", "session.cho", "                o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);\n                }\n                i = i + kstep;", "                o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);\n                }\n                i = i + kstep + n;", ("diff", "COMMAND GETKEYSANDFLAGS, several keys")),
+    ("a use is stamped with the millisecond alone", "store.cho", "    return st.now * stamp_bits() + st.seq;", "    return st.now * stamp_bits();", ("py", "expiry.py")),
+    ("the count of uses starts over at every tick", "store.cho", "    if now != st.now {\n        st.seq = 0;\n    }\n    st.now = now;", "    st.seq = 0;\n    st.now = now;", ("unit",)),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]
 

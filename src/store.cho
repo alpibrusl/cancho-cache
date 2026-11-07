@@ -83,6 +83,8 @@ pub res struct Store {
     seed: int,
     policy: int,
     now: int,
+    // How many uses of keys have been stamped in the current millisecond (`use_stamp`).
+    seq: int,
     // The next entry `sweep` looks at, and the state of the generator that picks eviction candidates.
     cursor: int,
     rng: int,
@@ -120,11 +122,11 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, meta);
@@ -140,8 +142,26 @@ pub fn hash_of[&s, &k](st: &s Store, key: &k [byte]) -> [] int {
 
 // Say what time it is, in milliseconds from any fixed origin that never goes backwards.
 pub fn tick[&s](st: &!s Store, now: int) -> [] int {
+    if now != st.now {
+        st.seq = 0;
+    }
     st.now = now;
     return 0;
+}
+
+// How many low bits of a use stamp count the uses within a millisecond (16 million; past that the count stops, which no loop turn reaches).
+fn stamp_bits() -> [] int {
+    return 16777216;
+}
+
+// The stamp of a use of a key now (`docs/design.md` section 27): the millisecond in the high bits and, below it, the number of uses stamped in that
+// millisecond so far. Every use gets a stamp larger than the one before, so two keys used in one millisecond (a pipeline, a whole turn of the loop) are
+// still ordered, and eviction by "used longest ago" has an answer between them instead of a tie.
+fn use_stamp[&s](st: &!s Store) -> [] int {
+    if st.seq < stamp_bits() - 1 {
+        st.seq = st.seq + 1;
+    }
+    return st.now * stamp_bits() + st.seq;
 }
 
 pub fn live[&s](st: &s Store) -> [] int {
@@ -338,7 +358,8 @@ fn remove_entry[&s](st: &!s Store, e: int) -> [] int {
 pub fn find[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
     let e = peek(st, key, h);
     if e >= 0 {
-        contents(st.meta)[stride() * e + 7] = st.now;
+        let stamp = use_stamp(st);
+        contents(st.meta)[stride() * e + 7] = stamp;
     }
     return e;
 }
@@ -363,6 +384,11 @@ pub fn peek[&s, &k](st: &!s Store, key: &k [byte], h: int) -> [] int {
 
 // When entry `e` was last used, in `tick`'s milliseconds.
 pub fn used_at[&s](st: &s Store, e: int) -> [] int {
+    return contents(st.meta)[stride() * e + 7] / stamp_bits();
+}
+
+// The stamp itself: larger for a later use, whatever the millisecond (`use_stamp`).
+pub fn last_use[&s](st: &s Store, e: int) -> [] int {
     return contents(st.meta)[stride() * e + 7];
 }
 
@@ -634,7 +660,7 @@ fn put_key[&s, &k, &v](st: &!s Store, key: &k [byte], h: int, value: &v [byte], 
     meta[m + 4] = 0;
     meta[m + 5] = h;
     meta[m + 6] = 0 - 2;
-    meta[m + 7] = st.now;
+    meta[m + 7] = use_stamp(st);
     // A new key is a string until a command says otherwise: the entry may be one a deleted or flushed hash left, and its kind with it.
     meta[m + 8] = kind_string();
     if expiry > 0 {
@@ -735,7 +761,7 @@ pub fn rename[&s, &k, &x](st: &!s Store, src: &k [byte], hs: int, dst: &x [byte]
     meta[m + 1] = len(dst);
     meta[m + 3] = room(vlen);
     meta[m + 5] = hd;
-    meta[m + 7] = st.now;
+    meta[m + 7] = use_stamp(st);
     st.top = at + header() + size;
     let index = contents(st.index);
     var j = hd & st.mask;
@@ -1083,7 +1109,7 @@ pub fn commit[&s](st: &!s Store, e: int, expiry: int) -> [] int {
         let index = contents(st.index);
         meta[m + 5] = h;
         meta[m + 6] = 0 - 2;
-        meta[m + 7] = st.now;
+        meta[m + 7] = use_stamp(st);
         meta[m + 8] = kind_string();
         meta[m + 9] = stamp(st);
         if expiry > 0 {

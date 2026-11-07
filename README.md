@@ -13,7 +13,7 @@
 * **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (515 cases and 8 small-index cases, four framings each). The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12.
 * **Speed, measured.** On one core against Redis 7.0.15 it is at 1.07 to 2.00 times Redis's throughput on the pre-registered cells, with the same hit rate at the same resident memory, while doing much less than Redis does.
 * **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before.
-* **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and an approximate LRU (`allkeys-lru`) or `noeviction`, which refuses with Redis's own error.
+* **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and six eviction policies (`noeviction`, which refuses with Redis's own error; `allkeys-lru`, `allkeys-random`, `volatile-lru`, `volatile-random`, `volatile-ttl`), the policy and `maxmemory-samples` settable with `CONFIG SET`; the LFU policies are not built yet.
 * **An authority you can read.** `cancho authority` lists what the program may do, and CI checks it (below).
 * **Real clients.** RESP2 and RESP3, `HELLO`, `AUTH`, `CLIENT`, `INFO`, `CONFIG GET`, `COMMAND`: what a client library sends on connecting; and transactions, so `redis-py`'s default `pipeline()`, its `WATCH`-based `transaction()` and `ioredis`'s `multi().exec()` work.
 
@@ -39,11 +39,11 @@ export CANCHO=$PWD/../cancho/standalone/cancho
 mkdir -p build
 $CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho -o build/cache
 
-build/cache 6379 &                     # port; optional: arena MiB, most keys, noeviction | allkeys-lru
+build/cache 6379 &                     # port; optional: arena MiB, most keys, eviction policy (noeviction | allkeys-lru | allkeys-random | volatile-lru | volatile-random | volatile-ttl)
 redis-cli -p 6379 PING                 # PONG
 ```
 
-The arguments are `cache <port> [<arena MiB> [<most keys> [noeviction | allkeys-lru]]]`, with 64 MiB, 1,000,000 keys and
+The arguments are `cache <port> [<arena MiB> [<most keys> [<policy>]]]`, a policy being any of the six above, with 64 MiB, 1,000,000 keys and
 `noeviction` by default. Sizes are fixed at start.
 
 ## Examples
@@ -93,7 +93,7 @@ fixes the seed for reproducible tests and benchmarks; the sixth argument of `cac
 `GET` and `SET` (with `NX XX GET EX PX KEEPTTL`), `SETNX`, `SETEX`, `GETSET`, `GETDEL`, `GETEX`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `SETRANGE`, `GETRANGE` (and `SUBSTR`), `INCR`, `DECR`, `KEYS`, `SCAN` (`MATCH COUNT TYPE`), `RANDOMKEY`, `RENAME`, `RENAMENX`,
 `INCRBY`, `DECRBY`, `DEL`, `EXISTS`, `TYPE`, `STRLEN`, `DBSIZE`, `FLUSHALL`; and hashes: `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HDEL`, `HLEN`, `HEXISTS`, `HSTRLEN`, `HGETALL`, `HKEYS`, `HVALS`, `HINCRBY`, `HRANDFIELD`, `HSCAN`; `EXPIRE` and `PEXPIRE` (with `NX XX GT LT`),
 `TTL`, `PTTL`, `PERSIST`; and what a client library says on connecting: `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT`, `INFO`,
-`CONFIG GET`, `COMMAND`, `QUIT`, `RESET`; and transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`. The eviction policy is `allkeys-lru`. Every reply is byte-identical to Redis 7.0.15
+`CONFIG GET`, `COMMAND`, `QUIT`, `RESET`; and transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`. The eviction policy is `noeviction` unless the command line or `CONFIG SET maxmemory-policy` says otherwise. Every reply is byte-identical to Redis 7.0.15
 for the cases in `tests/differential.py`; the deliberate divergences (inline commands refused, `CONFIG SET` refused, a
 `COMMAND` that keeps no table of flags) are listed in [`docs/design.md`](docs/design.md) section 12.
 
@@ -110,7 +110,7 @@ python3 tests/differential.py build/cache                 # byte-for-byte agains
 python3 tests/limits.py build/cache                       # a full arena and a full key table
 python3 tests/connections.py build/cache                  # 10,000 connections; pools of lent buffers running out
 python3 tests/large.py build/cache                        # values of 1 MiB to the whole arena, in and out in pieces
-python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under allkeys-lru
+python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under every policy
 python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CONFIG/QUIT; redis-py, ioredis, node-redis and redis-rs connecting
 python3 tests/fuzz_server.py build/cache                  # hostile bytes
 python3 tests/transactions.py build/cache                 # WATCH and EXEC across two connections; redis-py, ioredis and node-redis transactions

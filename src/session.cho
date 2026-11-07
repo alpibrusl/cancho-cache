@@ -255,11 +255,7 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
         o = kv(sc, o, "used_memory_dead", store.dead(st));
         o = kv(sc, o, "maxmemory", store.capacity(st));
         o = reply.put(sc, o, "maxmemory_policy:");
-        if store.policy_of(st) == store.evict_lru() {
-            o = reply.put(sc, o, "allkeys-lru");
-        } else {
-            o = reply.put(sc, o, "noeviction");
-        }
+        o = reply.put(sc, o, store.policy_name(store.policy_of(st)));
         o = reply.put(sc, o, "\r\n\r\n");
     }
     if wants(view, table, "STATS") {
@@ -360,10 +356,13 @@ fn setting_name(i: int) -> [] &static [byte] {
     if i == 8 {
         return "hz";
     }
-    return "requirepass";
+    if i == 9 {
+        return "requirepass";
+    }
+    return "maxmemory-samples";
 }
 
-// 2^i, for i below 10: the mark a setting has been answered.
+// 2^i, for i below 11: the mark a setting has been answered.
 fn bit(i: int) -> [] int {
     var b = 1;
     var k = 0;
@@ -375,7 +374,7 @@ fn bit(i: int) -> [] int {
 }
 
 fn settings() -> [] int {
-    return 10;
+    return 11;
 }
 
 // `$<digits>\r\n<number>\r\n`: a number as a bulk string, which is how `CONFIG GET` answers one.
@@ -396,10 +395,7 @@ fn put_setting_value[&b, &s, &w](sc: &!b [byte], at: int, i: int, st: &s store.S
         return put_number_bulk(sc, at, store.capacity(st));
     }
     if i == 1 {
-        if store.policy_of(st) == store.evict_lru() {
-            return reply.put_bulk(sc, at, "allkeys-lru");
-        }
-        return reply.put_bulk(sc, at, "noeviction");
+        return reply.put_bulk(sc, at, store.policy_name(store.policy_of(st)));
     }
     if i == 2 {
         return reply.put_bulk(sc, at, "");
@@ -422,6 +418,9 @@ fn put_setting_value[&b, &s, &w](sc: &!b [byte], at: int, i: int, st: &s store.S
     if i == 8 {
         return put_number_bulk(sc, at, 10);
     }
+    if i == 10 {
+        return put_number_bulk(sc, at, store.samples_of(st));
+    }
     return reply.put_bulk(sc, at, "");
 }
 
@@ -437,11 +436,107 @@ fn has_glob[&p](pattern: &p [byte]) -> [] bool {
     return false;
 }
 
+// Which setting `CONFIG` knows by this name (any case), or -1.
+fn setting_index[&n](name: &n [byte]) -> [] int {
+    var i = 0;
+    while i < settings() {
+        if len(name) == len(setting_name(i)) && reply.is_prefix_word(name, setting_name(i)) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// `CONFIG SET failed (possibly related to argument 'name') - ` and then `what`, as Redis writes a refusal of one pair.
+fn set_failed[&b, &n](sc: &!b [byte], at: int, name: &n [byte], what: &static [byte]) -> [] int {
+    var o = reply.put(sc, at, "-ERR CONFIG SET failed (possibly related to argument '");
+    o = reply.put(sc, o, name);
+    o = reply.put(sc, o, "') - ");
+    o = reply.put(sc, o, what);
+    return reply.put(sc, o, "\r\n");
+}
+
+// The text of why a value is not one of the policies. Redis names eight; the two LFU ones are valid there and not built here.
+fn policy_refusal[&b, &n, &v](sc: &!b [byte], at: int, name: &n [byte], value: &v [byte]) -> [] int {
+    if reply.is_word(value, "ALLKEYS-LFU") || reply.is_word(value, "VOLATILE-LFU") {
+        return set_failed(sc, at, name, "the LFU policies need a use counter this cache does not keep yet (docs/design.md section 28)");
+    }
+    return set_failed(sc, at, name, "argument(s) must be one of the following: volatile-lru, volatile-lfu, volatile-random, volatile-ttl, allkeys-lru, allkeys-lfu, allkeys-random, noeviction");
+}
+
+// `CONFIG SET parameter value [parameter value ...]` (`docs/design.md` section 28): `maxmemory-policy` and `maxmemory-samples` can change while the
+// cache runs; the arena and the key table cannot, and the other settings it reports are fixed too. Redis's order: every name is looked at first
+// (unknown, immutable, repeated), then every value, and nothing is changed unless all are good.
+fn config_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let argc = table[0];
+    if argc < 4 {
+        return reply.put(sc, at, "-ERR wrong number of arguments for 'config|set' command\r\n");
+    }
+    if argc % 2 == 1 {
+        return reply.syntax_error(sc, at);
+    }
+    var i = 2;
+    while i < argc {
+        let name = reply.arg_of(view, table, i);
+        let idx = setting_index(name);
+        if idx < 0 {
+            return reply.put(sc, reply.put(sc, reply.put(sc, at, "-ERR Unknown option or number of arguments for CONFIG SET - '"), name), "'\r\n");
+        }
+        if idx == 4 {
+            return set_failed(sc, at, name, "can't set immutable config");
+        }
+        var j = 2;
+        while j < i {
+            if setting_index(reply.arg_of(view, table, j)) == idx {
+                return set_failed(sc, at, name, "duplicate parameter");
+            }
+            j = j + 2;
+        }
+        i = i + 2;
+    }
+    i = 2;
+    while i < argc {
+        let name = reply.arg_of(view, table, i);
+        let value = reply.arg_of(view, table, i + 1);
+        let idx = setting_index(name);
+        if idx == 1 {
+            if store.policy_named(value) < 0 {
+                return policy_refusal(sc, at, setting_name(idx), value);
+            }
+        } else if idx == 10 {
+            let (status, n) = reply.parse_int(value);
+            if status != 0 {
+                return set_failed(sc, at, setting_name(idx), "argument couldn't be parsed into an integer");
+            }
+            if n < 1 || n > 2147483647 {
+                return set_failed(sc, at, setting_name(idx), "argument must be between 1 and 2147483647 inclusive");
+            }
+        } else {
+            return set_failed(sc, at, setting_name(idx), "this cache does not change this setting while it runs (docs/design.md section 28)");
+        }
+        i = i + 2;
+    }
+    i = 2;
+    while i < argc {
+        let idx = setting_index(reply.arg_of(view, table, i));
+        let value = reply.arg_of(view, table, i + 1);
+        if idx == 1 {
+            store.set_policy(st, store.policy_named(value));
+        } else {
+            let (status, n) = reply.parse_int(value);
+            store.set_samples(st, n);
+        }
+        i = i + 2;
+    }
+    return reply.put(sc, at, "+OK\r\n");
+}
+
 // `CONFIG GET pattern...` for the settings that mean something here, in Redis's way: a pattern with no wildcard names one setting and
 // is echoed as it was typed; a pattern with one matches settings, which are named as they are; a setting is answered once. `CONFIG SET`
 // is refused (the arena, key table and policy are fixed at start), `CONFIG RESETSTAT` is accepted and does nothing. The pairs are
 // written a header's room in and counted; the array header (which needs the count) is written against them and the answer moved down.
-pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &s store.Store, world: &w [int], proto: int) -> [] int {
+pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store, world: &w [int], proto: int) -> [] int {
     let argc = table[0];
     if argc == 1 {
         return reply.wrong_arguments(sc, at, reply.arg_of(view, table, 0));
@@ -498,7 +593,7 @@ pub fn config[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byt
         return at + header + size;
     }
     if reply.is_word(sub, "SET") {
-        return reply.put(sc, at, "-ERR CONFIG SET is not supported: this server's settings are fixed when it starts\r\n");
+        return config_set(view, table, sc, at, st);
     }
     if reply.is_word(sub, "RESETSTAT") {
         return reply.put(sc, at, "+OK\r\n");

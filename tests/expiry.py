@@ -89,6 +89,7 @@ def check_range(what, got, lo, hi):
         failures.append("%s: got %r, wanted %d..%d" % (what, got, lo, hi))
 
 
+others = {}
 redis = start(["redis-server", "--port", str(RPORT), "--save", "", "--appendonly", "no", "--protected-mode", "no"], RPORT)
 cache = start([CACHE, str(CPORT)], CPORT)
 lru = start([CACHE, str(LPORT), "1", "100000", "allkeys-lru"], LPORT)
@@ -167,11 +168,65 @@ try:
     for _ in range(20000 + 2000):
         e3.read()
     check("a key used all the time survives 20,000 writes that evict, sent in bursts", e3.ask("GET", "hot"), b"alive")
+    # --- the other policies (docs/design.md section 28), each on a 1 MiB arena written to far past its size
+    def churn(x, prefix, n, *options):
+        for i in range(n):
+            x.s.sendall(cmd("SET", "%s:%d" % (prefix, i), big, *options))
+        refused = 0
+        for _ in range(n):
+            rep = x.read()
+            if isinstance(rep, tuple) and rep[0] == "-":
+                refused += 1
+        return refused
+
+    for k, policy in enumerate(("volatile-lru", "volatile-random", "volatile-ttl", "allkeys-random")):
+        port = 6410 + k
+        others[policy] = (start([CACHE, str(port), "1", "100000", policy], port), port)
+    for policy, (proc, port) in others.items():
+        x = Client(port)
+        check(policy + " is what CONFIG GET says", x.ask("CONFIG", "GET", "maxmemory-policy"), [b"maxmemory-policy", policy.encode()])
+        if policy.startswith("volatile"):
+            # 300 keys that never run out, and then far more written that do: the 300 must all survive, and no write is refused.
+            check(policy + ": 300 keys with no expiry are written", churn(x, "keep", 300), 0)
+            check(policy + ": writes of keys with an expiry are not refused while volatile keys can go", churn(x, "life", 6000, "EX", "100000"), 0)
+            kept = sum(x.ask("EXISTS", "keep:%d" % i) for i in range(300))
+            check(policy + ": no key without an expiry was taken", kept, 300)
+            check_range(policy + ": the store holds about a MiB", x.ask("DBSIZE"), 500, 1100)
+            # With nothing that has an expiry to take, a full arena refuses, as with noeviction.
+            y = Client(port)
+            y.ask("FLUSHALL")
+            check(policy + ": filling the arena with keys that have no expiry", churn(y, "fill", 1500) > 0, True)
+            check(policy + ": a write that needs room is refused with -OOM when no key has an expiry", y.ask("SET", "more", big)[0], "-")
+        else:
+            check(policy + ": no write is refused", churn(x, "r", 6000), 0)
+            check_range(policy + ": the store holds about a MiB", x.ask("DBSIZE"), 500, 1100)
+    # volatile-ttl takes the key whose expiry is soonest: of 300 keys with a short life and 300 with a long one, written first, the short ones go first.
+    x = Client(others["volatile-ttl"][1])
+    x.ask("FLUSHALL")
+    churn(x, "short", 300, "EX", "100")
+    churn(x, "long", 300, "EX", "100000")
+    churn(x, "newer", 800, "EX", "50000")
+    short = sum(x.ask("EXISTS", "short:%d" % i) for i in range(300))
+    long_ = sum(x.ask("EXISTS", "long:%d" % i) for i in range(300))
+    check("volatile-ttl: the keys that expire soonest are the ones taken (short %d left, long %d left)" % (short, long_), short < long_, True)
+    check("volatile-ttl: most of the short-lived are gone, most of the long-lived are there", (short < 100, long_ > 200), (True, True))
+    # CONFIG SET changes the policy while the cache runs: a full noeviction cache refuses, and takes writes after allkeys-lru is set.
+    port = 6420
+    full = start([CACHE, str(port), "1", "100000", "noeviction"], port)
+    try:
+        x = Client(port)
+        check("noeviction: a full arena refuses", churn(x, "n", 3000) > 0, True)
+        check("CONFIG SET maxmemory-policy allkeys-lru", x.ask("CONFIG", "SET", "maxmemory-policy", "allkeys-lru"), ("+", b"OK"))
+        check("after it, writes are taken and old keys go", (churn(x, "m", 3000), x.ask("EXISTS", "n:0")), (0, 0))
+        check("CONFIG SET maxmemory-samples 10", (x.ask("CONFIG", "SET", "maxmemory-samples", "10"), x.ask("CONFIG", "GET", "maxmemory-samples")), (("+", b"OK"), [b"maxmemory-samples", b"10"]))
+        check("the setting is in INFO", b"maxmemory_policy:allkeys-lru" in b"".join(x.ask("INFO", "memory").split(b"\n")) if isinstance(x.ask("INFO", "memory"), bytes) else False, True)
+    finally:
+        full.terminate()
 finally:
-    for p in (redis, cache, lru):
+    for p in [redis, cache, lru] + [v[0] for v in others.values()]:
         p.terminate()
 
 if failures:
     print("\n".join(failures))
     sys.exit(1)
-print("expiry, the sweep, PTTL, and eviction under allkeys-lru behave as stated")
+print("expiry, the sweep, PTTL, and eviction under every policy behave as stated")

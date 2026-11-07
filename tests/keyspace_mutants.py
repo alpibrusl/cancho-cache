@@ -48,6 +48,11 @@ MUTANTS = [
     ("COMMAND GETKEYSANDFLAGS writes one key of a range", "session.cho", "                o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);\n                }\n                i = i + kstep;", "                o = cmdkeys.put_spec_flags(name, word, k, sc, o, resp3);\n                }\n                i = i + kstep + n;", ("diff", "COMMAND GETKEYSANDFLAGS, several keys")),
     ("a use is stamped with the millisecond alone", "store.cho", "    return st.now * stamp_bits() + st.seq;", "    return st.now * stamp_bits();", ("unit",)),
     ("the count of uses starts over at every tick", "store.cho", "    if now != st.now {\n        st.seq = 0;\n    }\n    st.now = now;", "    st.seq = 0;\n    st.now = now;", ("unit",)),
+    ("eviction takes the key used most recently", "store.cho", "            } else if meta[stride() * e + 7] < meta[stride() * best + 7] {", "            } else if meta[stride() * e + 7] > meta[stride() * best + 7] {", ("unit",)),
+    ("a volatile policy takes keys that have no expiry", "store.cho", " && e != st.protect && (!volatile || meta[stride() * e + 4] != 0);", " && e != st.protect;", ("py", "expiry.py")),
+    ("volatile-ttl takes the key that expires last", "store.cho", "                if meta[stride() * e + 4] < meta[stride() * best + 4] {", "                if meta[stride() * e + 4] > meta[stride() * best + 4] {", ("py", "expiry.py")),
+    ("CONFIG SET says OK and keeps the policy", "session.cho", "            store.set_policy(st, store.policy_named(value));", "            store.policy_named(value);", ("diff", "CONFIG SET maxmemory-policy, each policy")),
+    ("CONFIG SET takes a repeated parameter", "session.cho", "            if setting_index(reply.arg_of(view, table, j)) == idx {\n                return set_failed(sc, at, name, \"duplicate parameter\");\n            }", "", ("diff", "CONFIG SET names")),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]
 

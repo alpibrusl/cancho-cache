@@ -836,7 +836,11 @@ fn main(world: World) -> [] int {
     var seed = 0 - 1;
     borrow args as &g in {
         if arg_count(g) > 4 {
-            if arg(g, 4)[0] == byte_of('a') {
+            let named = store.policy_named(arg(g, 4));
+            if named >= 0 {
+                policy = named;
+            } else if arg(g, 4)[0] == byte_of('a') {
+                // The old spelling: anything starting with "a" was allkeys-lru.
                 policy = store.evict_lru();
             }
         }

@@ -526,6 +526,25 @@ cases += [
     ("COMMAND GETKEYS, too few words", seq(("COMMAND", "GETKEYS"), ("COMMAND", "GETKEYS", "GET"), ("COMMAND", "GETKEYS", "PING"), ("COMMAND", "GETKEYS", "OBJECT"), ("COMMAND", "GETKEYS", "CLIENT"))),
     ("COMMAND GETKEYS in MULTI", seq(M, ("COMMAND", "GETKEYS", "SET", "a", "b"), ("COMMAND", "GETKEYS", "SCAN", "0"), X)),
 ]
+# COMMAND GETKEYSANDFLAGS: each key with the flags of its key spec (docs/design.md section 26); SET's come from the line.
+_gkf = [
+    ("SET", [("SET", "a", "b"), ("SET", "a", "b", "GET"), ("SET", "a", "b", "get"), ("SET", "a", "b", "NX", "GET"), ("SET", "a", "GET"), ("SET", "a", "b", "EX", "1"), ("SET", "a", "b", "c", "GET"), ("SET", "a")]),
+    ("single keys", [("GET", "a"), ("EXPIRE", "a", "1"), ("GETEX", "k", "EX", "1"), ("SETRANGE", "k", "1", "v"), ("APPEND", "k", "v"), ("PERSIST", "a"), ("TTL", "k"), ("GETDEL", "a"), ("HSET", "h", "f", "v"), ("HGETALL", "h"), ("HDEL", "h", "a", "b"), ("HMGET", "h", "a"), ("SETEX", "k", "1", "v")]),
+    ("several keys", [("MSET", "a", "1", "b", "2"), ("MSET", "a", "1", "b"), ("MSETNX", "a", "1", "b", "2"), ("DEL", "a", "b", "c"), ("UNLINK", "a"), ("MGET", "a", "b"), ("TOUCH", "a", "b"), ("EXISTS", "a", "b"), ("WATCH", "a", "b")]),
+    ("keys with different flags", [("COPY", "a", "b"), ("COPY", "a", "b", "REPLACE"), ("RENAME", "a", "b"), ("RENAMENX", "a", "b")]),
+    ("OBJECT and the refusals", [("OBJECT", "ENCODING", "a"), ("OBJECT", "FREQ", "a"), ("OBJECT", "HELP"), ("OBJECT", "FOO"), ("PING",), ("SCAN", "0"), ("NOSUCH", "a"), ("GET", "a", "b"), ("SET",), ("set", "a", "b"), ("object", "encoding", "a")]),
+]
+for _label, _lines in _gkf:
+    cases.append(("COMMAND GETKEYSANDFLAGS, %s" % _label, seq(*[("COMMAND", "GETKEYSANDFLAGS", *_l) for _l in _lines])))
+    cases.append(("COMMAND GETKEYSANDFLAGS, %s, RESP3" % _label, seq(("HELLO", "3"), *[("COMMAND", "GETKEYSANDFLAGS", *_l) for _l in _lines])))
+cases += [
+    ("COMMAND GETKEYSANDFLAGS, too few words", seq(("COMMAND", "GETKEYSANDFLAGS"), ("COMMAND", "GETKEYSANDFLAGS", "GET"), ("COMMAND", "GETKEYSANDFLAGS", "SET"))),
+]
+# The subcommand forms of COMMAND INFO and COMMAND DOCS (config|get): in any case, a subcommand of a command that has none, a name with two bars, or with an empty half is unknown.
+_subs = [("get|x",), ("nosuch|x",), ("config|get",), ("CONFIG|GET",), ("get|",), ("|get",), ("config|",), ("a|b|c",), ("object|encoding",), ("object|nosuch",), ("client|id", "client|nosuch", "get"), ("Command|Getkeys",), ("command|docs",)]
+for _sub in ("INFO", "DOCS"):
+    cases.append(("COMMAND %s of subcommands" % _sub, seq(*[("COMMAND", _sub, *_n) for _n in _subs])))
+    cases.append(("COMMAND %s of subcommands, RESP3" % _sub, seq(("HELLO", "3"), *[("COMMAND", _sub, *_n) for _n in _subs])))
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.

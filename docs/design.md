@@ -885,3 +885,5 @@ The commands that look at other connections, in `src/clients.cho`. The loop (`sr
 **Not in this slice:** `CLIENT PAUSE`/`UNPAUSE` (they need the loop to hold commands back and write replies later), `CLIENT TRACKING*` (the tiered-mode issue), `CLIENT REPLY`, `CLIENT UNBLOCK`, `CLIENT GETREDIR`.
 
 **Mutants.** `tests/clients_mutants.py` (22) change the filters, the flags, the kill selection and what happens to the killed; `tests/client_commands.py` must fail on each.
+
+**Throughput gate, re-run** (`bench/vs_redis.sh -r 10`, the final code). Ratio to Redis: `set -P 1` 1.10, `set -P 16` 1.33, `get -P 1` 1.16, `get -P 16` 1.00 (both servers in the same mode of the bimodal cell of section 30, 1.33M requests per second each, so the median ratio reads 1.00). Unchanged from section 31: the command path gained two int stores and a comparison. The full differential (943 cases + 8 small-index cases, 0 differ) and all 22 mutants of `tests/clients_mutants.py` (two first survived, because the test compared neither `resp` nor `cmd`; it does now) were run on the final code.

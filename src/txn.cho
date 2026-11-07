@@ -2,6 +2,7 @@ edition 5;
 
 module txn;
 
+import cluster;
 import commands;
 import reply;
 import store;
@@ -179,6 +180,14 @@ pub fn handle[&v, &t, &b, &s, &x, &q, &c](view: &v [byte], table: &t [int], sc: 
     if reply.is_word(name, "OBJECT") {
         // The subcommand has its own arity, which Redis checks as it queues.
         let refusal = commands.object_check(view, table, sc, at);
+        if refusal != at {
+            tx[1] = 1;
+            return (refusal, 1);
+        }
+    }
+    if reply.is_word(name, "CLUSTER") {
+        // As `OBJECT`: the subcommand has its own arity, which Redis checks as it queues.
+        let refusal = cluster.check(view, table, sc, at);
         if refusal != at {
             tx[1] = 1;
             return (refusal, 1);

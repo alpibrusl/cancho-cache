@@ -74,12 +74,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho -o build/cache
+        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho -o build/cache
 
       - name: Authority has no ffi, and reads only /dev/urandom (the hash seed)
         working-directory: cache
         run: |
-          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho --std > /tmp/authority.txt
+          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/^performs/,/^never touches/p' /tmp/authority.txt | grep -q 'fs_read("/dev/urandom")'
           ! grep -q 'fs_write' /tmp/authority.txt
@@ -89,6 +89,10 @@ jobs:
       - name: Differential test against Redis
         working-directory: cache
         run: python3 tests/differential.py build/cache
+
+      - name: Cluster-lite against a real Redis Cluster (three nodes of each, compared line for line)
+        working-directory: cache
+        run: python3 tests/cluster.py build/cache
 
       - name: A full arena and a full key table refuse in Redis's words
         working-directory: cache

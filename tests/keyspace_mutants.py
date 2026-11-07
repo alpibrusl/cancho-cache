@@ -53,6 +53,11 @@ MUTANTS = [
     ("volatile-ttl takes the key that expires last", "store.cho", "                if meta[stride() * e + 4] < meta[stride() * best + 4] {", "                if meta[stride() * e + 4] > meta[stride() * best + 4] {", ("py", "expiry.py")),
     ("CONFIG SET says OK and keeps the policy", "session.cho", "            store.set_policy(st, store.policy_named(value));", "            store.policy_named(value);", ("diff", "CONFIG SET maxmemory-policy, each policy")),
     ("CONFIG SET takes a repeated parameter", "session.cho", "            if setting_index(reply.arg_of(view, table, j)) == idx {\n                return set_failed(sc, at, name, \"duplicate parameter\");\n            }", "", ("diff", "CONFIG SET names")),
+    ("the slot function has a wrong polynomial", "cluster.cho", "                crc = (crc << 1 ^ 0x1021) & 0xffff;", "                crc = (crc << 1 ^ 0x1020) & 0xffff;", ("py", "cluster.py")),
+    ("a hash tag is not looked at", "cluster.cho", "    return crc16(key[open + 1..close]) & 16383;", "    return crc16(key) & 16383;", ("py", "cluster.py")),
+    ("keys in two slots are not CROSSSLOT", "cluster.cho", "        } else if here != slot {", "        } else if here < 0 {", ("py", "cluster.py")),
+    ("a key another node owns is not redirected", "cluster.cho", "    if owner == world[base() + 1] {", "    if owner >= 0 {", ("py", "cluster.py")),
+    ("a redirected command in MULTI does not abort the transaction", "cache.cho", "                    if tx[0] == 1 {\n                        tx[1] = 1;\n                    }\n                    status = 1;", "                    status = 1;", ("py", "cluster.py")),
     ("RANDOMKEY answers nothing", "commands.cho", "        let e = store.random_visible(st);\n        if e < 0 {", "        let e = 0 - 1;\n        if e < 0 {", ("diff", "RANDOMKEY of one key")),
 ]
 

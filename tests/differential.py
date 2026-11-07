@@ -494,7 +494,7 @@ cases += [
 import glob as _glob
 _names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "..", "src", "*.cho")) if not f.endswith("cmdinfo.cho") for n in re.findall(r'is_word\(name, "([A-Z]+)"\)', open(f).read())})
 # Not these: Redis lists their subcommands in a different order in each process; tests/keyspace.py compares them with the subcommands sorted.
-for _n in [n for n in _names if n not in ("CLIENT", "COMMAND", "CONFIG", "OBJECT")]:
+for _n in [n for n in _names if n not in ("CLIENT", "CLUSTER", "COMMAND", "CONFIG", "OBJECT")]:
     cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
     cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
     cases.append(("COMMAND DOCS %s" % _n.lower(), seq(("COMMAND", "DOCS", _n.lower()))))
@@ -561,11 +561,20 @@ for _label, _lines in _cfg:
     cases.append((_label, seq(*_lines, *_reset)))
     cases.append((_label + ", RESP3", seq(("HELLO", "3"), *_lines, *_reset)))
 cases.append(("CONFIG SET in MULTI", seq(M, ("CONFIG", "SET", "maxmemory-samples", "6"), ("CONFIG", "GET", "maxmemory-samples"), ("CONFIG", "SET", "maxmemory-samples", "x"), X, *_reset)))
+# CLUSTER where the instance is not a cluster node (docs/design.md section 29): unknown subcommand and arity first, then the refusal that says so; and the
+# same checks when the command is queued in MULTI. (A cluster is compared with a real Redis Cluster by tests/cluster.py.)
+_cl = [("CLUSTER",), ("CLUSTER", "KEYSLOT"), ("CLUSTER", "KEYSLOT", "foo"), ("CLUSTER", "KEYSLOT", "a", "b"), ("CLUSTER", "INFO"), ("CLUSTER", "MYID"), ("CLUSTER", "SLOTS"), ("CLUSTER", "NODES"),
+       ("CLUSTER", "SHARDS"), ("CLUSTER", "NOSUCH"), ("CLUSTER", "nosuch", "x"), ("cluster", "keyslot", "foo"), ("CLUSTER", "INFO", "x"), ("CLUSTER", "MYID", "x"), ("CLUSTER", "SLOTS", "x"), ("READONLY",), ("READWRITE",), ("READONLY", "x"),
+       ("READWRITE", "x"), ("SELECT", "0")]
+cases.append(("CLUSTER and READONLY without a cluster", seq(*_cl)))
+cases.append(("CLUSTER and READONLY without a cluster, RESP3", seq(("HELLO", "3"), *_cl)))
+cases.append(("CLUSTER checked as it is queued in MULTI", seq(M, ("CLUSTER", "KEYSLOT"), ("CLUSTER", "NOSUCH"), ("CLUSTER",), ("CLUSTER", "KEYSLOT", "foo"), X)))
+cases.append(("CLUSTER queued in MULTI, a good line", seq(M, ("CLUSTER", "KEYSLOT", "foo"), ("READONLY",), X)))
 # Arity: a command queued with one word too few, exactly enough and one too many is accepted or refused as Redis does. The commands the
 # transaction does not queue (MULTI, EXEC, DISCARD, WATCH, QUIT, RESET), and the ones whose answers are not the same twice (HELLO, INFO,
 # COMMAND, CLIENT, CONFIG, AUTH with arguments), are not swept.
 for name in ["GET", "SET", "PING", "ECHO", "DEL", "UNLINK", "EXISTS", "TOUCH", "INCR", "DECR", "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
-             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT", "EXPIREAT", "PEXPIREAT", "EXPIRETIME", "PEXPIRETIME"]:
+             "SETNX", "SETEX", "PSETEX", "GETSET", "GETDEL", "MGET", "MSET", "STRLEN", "TYPE", "DBSIZE", "FLUSHALL", "FLUSHDB", "UNWATCH", "APPEND", "SETRANGE", "GETRANGE", "SUBSTR", "GETEX", "MSETNX", "KEYS", "SCAN", "RANDOMKEY", "RENAME", "RENAMENX", "COPY", "OBJECT", "READONLY", "READWRITE", "EXPIREAT", "PEXPIREAT", "EXPIRETIME", "PEXPIRETIME"]:
     for given in range(0, 5):
         numeric = name in ("INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "SETEX", "PSETEX")
         args = ["1" if numeric and i == 1 else "t:k" for i in range(given)]

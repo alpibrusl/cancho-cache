@@ -2,6 +2,7 @@ edition 5;
 
 module commands;
 
+import cluster;
 import glob;
 import reply;
 import session;
@@ -937,9 +938,18 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
             return reply.not_an_integer(sc, at);
         }
         if n != 0 {
+            if cluster.enabled(world) {
+                return reply.put(sc, at, "-ERR SELECT is not allowed in cluster mode\r\n");
+            }
             return reply.put(sc, at, "-ERR DB index is out of range\r\n");
         }
         return reply.put(sc, at, "+OK\r\n");
+    }
+    if reply.is_word(name, "CLUSTER") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") {
+        if reply.is_word(name, "CLUSTER") && argc < 2 || !reply.is_word(name, "CLUSTER") && argc != 1 {
+            return reply.wrong_arguments(sc, at, name);
+        }
+        return cluster.command(view, table, sc, at, world, link[3]);
     }
     // The commands about the connection and the server (`src/session.cho`).
     if reply.is_word(name, "HELLO") {
@@ -2031,13 +2041,13 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "HSET") || reply.is_word(name, "HMSET") || reply.is_word(name, "HSETNX") {
         return 0 - 4;
     }
-    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
+    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
         return 1;
     }
     if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
         return 0 - 1;
     }
-    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") {
+    if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") || reply.is_word(name, "CLUSTER") {
         return 0 - 2;
     }
     if reply.is_word(name, "SET") || reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "EXPIREAT") || reply.is_word(name, "PEXPIREAT") || reply.is_word(name, "MSET") || reply.is_word(name, "MSETNX") || reply.is_word(name, "COPY") {

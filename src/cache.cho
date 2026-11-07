@@ -3,6 +3,7 @@ edition 5;
 import std.buffer;
 import std.conns;
 import std.io;
+import cluster;
 import commands;
 import pool;
 import reply;
@@ -393,8 +394,21 @@ fn process[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [conn_write,
                     qlo = st[p + 12] * size;
                     qhi = qlo + size;
                 }
-                let (after, status) = txn.handle(view, tb, sc, at, core.store, tx, qall[qlo..qhi], st[p + 5..p + 10], n);
-                at = after;
+                // In cluster mode a command whose keys another node owns is refused here, before the transaction layer sees it: queued inside `MULTI` it is
+                // refused when it is queued and `EXEC` then answers `EXECABORT`, as in Redis (`docs/design.md` section 29).
+                let refused = cluster.route(view, tb, sc, at, contents(core.info));
+                var status = 0;
+                if refused != at {
+                    at = refused;
+                    if tx[0] == 1 {
+                        tx[1] = 1;
+                    }
+                    status = 1;
+                } else {
+                    let (after, handled) = txn.handle(view, tb, sc, at, core.store, tx, qall[qlo..qhi], st[p + 5..p + 10], n);
+                    at = after;
+                    status = handled;
+                }
                 if status == 0 {
                     // A `GET` of a value too long for a buffer is sent in pieces.
                     let (after, ge) = stream.get_begin(view, tb, sc, at, core.store);
@@ -675,7 +689,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port: int, memory: int, max_keys: int, policy: int, seed: int) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port: int, memory: int, max_keys: int, policy: int, seed: int, clustered: bool, map: &c [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -683,8 +697,9 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, 8, 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
             var tab = conns.empty(heap, 64);
+            var bad_map = false;
             borrow mut core as &!cw in {
                 pool.fill(contents(cw.inpool));
                 pool.fill(contents(cw.pendpool));
@@ -693,8 +708,12 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
                 store.set_wall(cw.store, clock_unix_ms(clock));
                 contents(cw.info)[1] = store.now_of(cw.store);
                 contents(cw.info)[4] = port;
+                if clustered && cluster.configure(contents(cw.info), map[10..len(map)], port) != 0 {
+                    bad_map = true;
+                }
             }
-            while true {
+            // A map that is not one stops the start (status 2), after the state is given back like any other stop.
+            while !bad_map {
                 var ready = 0 - 1;
                 borrow mut core as &!cw in {
                     // Wake often enough to take keys whose time has come, but only if there are any.
@@ -777,12 +796,30 @@ fn run[&h, &l, &k](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port
             unbox_slice(heap, txns);
             unbox_slice(heap, queues);
             store.close(heap, store);
+            if bad_map {
+                return 2;
+            }
             return 0;
         }
         Polling::Failed(e) => {
             return 4;
         }
     }
+}
+
+// Whether `text` begins with `prefix`.
+fn has_prefix[&t](text: &t [byte], prefix: &static [byte]) -> [] bool {
+    if len(text) < len(prefix) {
+        return false;
+    }
+    var i = 0;
+    while i < len(prefix) {
+        if text[i] != prefix[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
 }
 
 fn number_of[&t](text: &t [byte]) -> [] int {
@@ -834,6 +871,7 @@ fn main(world: World) -> [] int {
     var max_keys = 1000000;
     var policy = store.evict_none();
     var seed = 0 - 1;
+    var cluster_at = 0;
     borrow args as &g in {
         if arg_count(g) > 4 {
             let named = store.policy_named(arg(g, 4));
@@ -852,6 +890,14 @@ fn main(world: World) -> [] int {
         }
         if arg_count(g) > 5 {
             seed = number_of(arg(g, 5));
+        }
+        // `--cluster=0-5460=127.0.0.1:7000,...`: the static slot map (any argument after the sixth).
+        var k = 6;
+        while k < arg_count(g) {
+            if has_prefix(arg(g, k), "--cluster=") {
+                cluster_at = k;
+            }
+            k = k + 1;
         }
     }
     let rnd = narrow(fs, "/dev/urandom");
@@ -881,7 +927,9 @@ fn main(world: World) -> [] int {
                                 buffer.drop(h, line);
                             }
                             borrow clock as &c in {
-                                status = run(h, lh, c, port, megabytes * 1048576, max_keys, policy, seed);
+                                borrow args as &ga in {
+                                    status = run(h, lh, c, port, megabytes * 1048576, max_keys, policy, seed, cluster_at > 0, arg(ga, cluster_at));
+                                }
                             }
                         }
                     }

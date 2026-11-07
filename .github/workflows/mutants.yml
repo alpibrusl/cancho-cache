@@ -23,6 +23,8 @@ on:
       - src/cmdinfo.cho
       - src/cmddocs.cho
       - src/cmdkeys.cho
+      - src/cluster.cho
+      - tests/cluster.py
       - tests/gen_cmdinfo.py
       - src/commands.cho
       - tests/transactions.py

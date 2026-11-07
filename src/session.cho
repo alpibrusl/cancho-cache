@@ -2,6 +2,7 @@ edition 5;
 
 module session;
 
+import cluster;
 import cmddocs;
 import cmdinfo;
 import cmdkeys;
@@ -268,6 +269,14 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
         o = kv(sc, o, "compactions_forced", store.forced(st));
         o = kv(sc, o, "max_turn_ms", world[6]);
         o = reply.put(sc, o, "\r\n");
+    }
+    if wants(view, table, "CLUSTER") {
+        o = reply.put(sc, o, "# Cluster\r\n");
+        if cluster.enabled(world) {
+            o = reply.put(sc, o, "cluster_enabled:1\r\n\r\n");
+        } else {
+            o = reply.put(sc, o, "cluster_enabled:0\r\n\r\n");
+        }
     }
     if wants(view, table, "KEYSPACE") {
         o = reply.put(sc, o, "# Keyspace\r\n");

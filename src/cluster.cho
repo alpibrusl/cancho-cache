@@ -1,0 +1,675 @@
+edition 5;
+
+module cluster;
+
+import cmdkeys;
+import reply;
+
+// `cluster` -- cluster-lite (`docs/design.md` section 29): a static slot map that every node of a group is started with, the slot of a key, the redirect a
+// command gets when its keys belong to another node, and the `CLUSTER` commands that tell a client the map. No gossip, no failover, no migration.
+//
+// The state lives in the `world` array every command already receives (the loop's counters take its first `base()` ints):
+//
+//     [base()]      1 if cluster mode is on
+//     [base() + 1]  which node this process is
+//     [base() + 2]  how many nodes the map names
+//     [nodes_at()]  the nodes, `node_size()` ints each: the port, the length of the host, the host one byte to an int
+//     [slots_at()]  16384 ints, the owner of each slot (a node's number) or -1
+
+pub fn base() -> [] int {
+    return 8;
+}
+
+fn max_nodes() -> [] int {
+    return 32;
+}
+
+fn node_size() -> [] int {
+    return 66;
+}
+
+fn nodes_at() -> [] int {
+    return base() + 3;
+}
+
+fn slots_at() -> [] int {
+    return nodes_at() + max_nodes() * node_size();
+}
+
+pub fn slot_count() -> [] int {
+    return 16384;
+}
+
+// The ints `world` needs.
+pub fn world_size() -> [] int {
+    return slots_at() + slot_count();
+}
+
+// The most runs of slots with one owner a map may have, so that `CLUSTER SLOTS` fits the answer buffer.
+fn most_runs() -> [] int {
+    return 2048;
+}
+
+pub fn enabled[&w](world: &w [int]) -> [] bool {
+    return world[base()] == 1;
+}
+
+// ---------------------------------------------------------------------
+// The slot of a key
+// ---------------------------------------------------------------------
+
+// CRC16/XMODEM (polynomial 0x1021, start 0), which Redis Cluster uses.
+pub fn crc16[&k](key: &k [byte]) -> [] int {
+    var crc = 0;
+    var i = 0;
+    while i < len(key) {
+        crc = crc ^ int_of(key[i]) << 8;
+        var bit = 0;
+        while bit < 8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1 ^ 0x1021) & 0xffff;
+            } else {
+                crc = crc << 1 & 0xffff;
+            }
+            bit = bit + 1;
+        }
+        i = i + 1;
+    }
+    return crc;
+}
+
+// The slot of `key`: the CRC16 of the whole key, or, if it has a `{tag}` (a `{`, then at least one byte, then a `}`), of what is inside the first one.
+pub fn slot_of[&k](key: &k [byte]) -> [] int {
+    var open = 0;
+    while open < len(key) && int_of(key[open]) != '{' {
+        open = open + 1;
+    }
+    if open == len(key) {
+        return crc16(key) & 16383;
+    }
+    var close = open + 1;
+    while close < len(key) && int_of(key[close]) != '}' {
+        close = close + 1;
+    }
+    if close == len(key) || close == open + 1 {
+        return crc16(key) & 16383;
+    }
+    return crc16(key[open + 1..close]) & 16383;
+}
+
+// ---------------------------------------------------------------------
+// The map
+// ---------------------------------------------------------------------
+
+fn node_port[&w](world: &w [int], n: int) -> [] int {
+    return world[nodes_at() + node_size() * n];
+}
+
+fn node_host_length[&w](world: &w [int], n: int) -> [] int {
+    return world[nodes_at() + node_size() * n + 1];
+}
+
+fn owner_of[&w](world: &w [int], slot: int) -> [] int {
+    return world[slots_at() + slot];
+}
+
+// A number in `text` from `at`: `(value, where it ends)`; where it ends is `at` if there is no digit.
+fn number_at[&t](text: &t [byte], at: int) -> [] (int, int) {
+    var i = at;
+    var n = 0;
+    while i < len(text) && int_of(text[i]) >= '0' && int_of(text[i]) <= '9' && n < 100000000 {
+        n = n * 10 + (int_of(text[i]) - '0');
+        i = i + 1;
+    }
+    return (n, i);
+}
+
+// The number of the node with this host and port, adding it if there is room; -1 if there is not.
+fn node_for[&w, &t](world: &!w [int], text: &t [byte], host_from: int, host_to: int, port: int) -> [] int {
+    var n = 0;
+    while n < world[base() + 2] {
+        if node_port(world, n) == port && node_host_length(world, n) == host_to - host_from {
+            var same = true;
+            var i = 0;
+            while i < host_to - host_from {
+                if world[nodes_at() + node_size() * n + 2 + i] != int_of(text[host_from + i]) {
+                    same = false;
+                }
+                i = i + 1;
+            }
+            if same {
+                return n;
+            }
+        }
+        n = n + 1;
+    }
+    if n >= max_nodes() || host_to - host_from > 64 || host_to == host_from {
+        return 0 - 1;
+    }
+    world[nodes_at() + node_size() * n] = port;
+    world[nodes_at() + node_size() * n + 1] = host_to - host_from;
+    var i = 0;
+    while i < host_to - host_from {
+        world[nodes_at() + node_size() * n + 2 + i] = int_of(text[host_from + i]);
+        i = i + 1;
+    }
+    world[base() + 2] = n + 1;
+    return n;
+}
+
+// Read the map `spec` (`0-5460=127.0.0.1:7000,5461-10922=127.0.0.1:7001`) into `world` for the node that listens on `port`. 0: done. 1: the map is not one:
+// a bad range or entry, a slot named twice, a slot past 16383, too many nodes, too many runs of slots, or no entry for this port.
+pub fn configure[&w, &t](world: &!w [int], spec: &t [byte], port: int) -> [] int {
+    var s = 0;
+    while s < slot_count() {
+        world[slots_at() + s] = 0 - 1;
+        s = s + 1;
+    }
+    world[base() + 2] = 0;
+    var i = 0;
+    while i < len(spec) {
+        let (first, after_first) = number_at(spec, i);
+        if after_first == i || first > 16383 {
+            return 1;
+        }
+        var last = first;
+        i = after_first;
+        if i < len(spec) && int_of(spec[i]) == '-' {
+            let (second, after_second) = number_at(spec, i + 1);
+            if after_second == i + 1 || second > 16383 || second < first {
+                return 1;
+            }
+            last = second;
+            i = after_second;
+        }
+        if i >= len(spec) || int_of(spec[i]) != '=' {
+            return 1;
+        }
+        let host_from = i + 1;
+        var host_to = host_from;
+        while host_to < len(spec) && int_of(spec[host_to]) != ':' {
+            host_to = host_to + 1;
+        }
+        if host_to >= len(spec) {
+            return 1;
+        }
+        let (node_port_number, after_port) = number_at(spec, host_to + 1);
+        if after_port == host_to + 1 || node_port_number < 1 || node_port_number > 65535 {
+            return 1;
+        }
+        let node = node_for(world, spec, host_from, host_to, node_port_number);
+        if node < 0 {
+            return 1;
+        }
+        var slot = first;
+        while slot <= last {
+            if world[slots_at() + slot] != 0 - 1 {
+                return 1;
+            }
+            world[slots_at() + slot] = node;
+            slot = slot + 1;
+        }
+        i = after_port;
+        if i < len(spec) {
+            if int_of(spec[i]) != ',' {
+                return 1;
+            }
+            i = i + 1;
+        }
+    }
+    var me = 0 - 1;
+    var n = 0;
+    while n < world[base() + 2] {
+        if node_port(world, n) == port && me < 0 {
+            me = n;
+        }
+        n = n + 1;
+    }
+    if me < 0 {
+        return 1;
+    }
+    var runs = 0;
+    var before = 0 - 1;
+    s = 0;
+    while s < slot_count() {
+        if world[slots_at() + s] != before && world[slots_at() + s] >= 0 {
+            runs = runs + 1;
+        }
+        before = world[slots_at() + s];
+        s = s + 1;
+    }
+    if runs > most_runs() {
+        return 1;
+    }
+    world[base() + 1] = me;
+    world[base()] = 1;
+    return 0;
+}
+
+// ---------------------------------------------------------------------
+// Redirects
+// ---------------------------------------------------------------------
+
+// Whether this node owns every slot there is.
+fn all_assigned[&w](world: &w [int]) -> [] bool {
+    var s = 0;
+    while s < slot_count() {
+        if owner_of(world, s) < 0 {
+            return false;
+        }
+        s = s + 1;
+    }
+    return true;
+}
+
+// `host` of node `n`, byte by byte.
+fn put_host[&b, &w](sc: &!b [byte], at: int, world: &w [int], n: int) -> [] int {
+    var o = at;
+    var i = 0;
+    while i < node_host_length(world, n) {
+        o = reply.put_byte(sc, o, world[nodes_at() + node_size() * n + 2 + i]);
+        i = i + 1;
+    }
+    return o;
+}
+
+// The refusal a command line gets if the keys it names are not all this node's, written at `at`; `at` itself if the line may run here. Redis's order:
+// a line that has no keys, or that the arity check would refuse, is not looked at; keys in two slots are `CROSSSLOT` (whoever owns them); keys in one slot
+// that another node owns are `MOVED`; a slot nobody owns is `CLUSTERDOWN`.
+pub fn route[&v, &t, &b, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, world: &w [int]) -> [] int {
+    if !enabled(world) {
+        return at;
+    }
+    let argc = table[0];
+    if argc == 0 {
+        return at;
+    }
+    let name = reply.arg_of(view, table, 0);
+    var word = name[0..0];
+    if argc >= 2 {
+        word = reply.arg_of(view, table, 1);
+    }
+    let (known, arity, first, last, step) = cmdkeys.key_spec(name, word);
+    if !known || first == 0 {
+        return at;
+    }
+    if arity > 0 && argc != arity || arity < 0 && argc < 0 - arity {
+        return at;
+    }
+    var stop = last;
+    if last < 0 {
+        stop = argc + last;
+    }
+    if step < 1 || first > stop || stop >= argc {
+        return at;
+    }
+    var slot = 0 - 1;
+    var i = first;
+    while i <= stop {
+        let here = slot_of(reply.arg_of(view, table, i));
+        if slot < 0 {
+            slot = here;
+        } else if here != slot {
+            return reply.put(sc, at, "-CROSSSLOT Keys in request don't hash to the same slot\r\n");
+        }
+        i = i + step;
+    }
+    let owner = owner_of(world, slot);
+    if owner < 0 {
+        return reply.put(sc, at, "-CLUSTERDOWN Hash slot not served\r\n");
+    }
+    if owner == world[base() + 1] {
+        return at;
+    }
+    var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "-MOVED "), slot), " ");
+    o = put_host(sc, o, world, owner);
+    o = reply.put(sc, reply.put_nat(sc, reply.put_byte(sc, o, ':'), node_port(world, owner)), "\r\n");
+    return o;
+}
+
+// ---------------------------------------------------------------------
+// The CLUSTER commands
+// ---------------------------------------------------------------------
+
+// A node's id: 40 hex digits worked out from its host and port (Redis's are random, and a client treats them as opaque).
+fn put_id[&b, &w](sc: &!b [byte], at: int, world: &w [int], n: int) -> [] int {
+    var o = at;
+    var word = 0;
+    while word < 5 {
+        var x = 2166136261 + word * 40503 & 0xffffffff;
+        var i = 0;
+        while i < node_host_length(world, n) {
+            x = (x ^ world[nodes_at() + node_size() * n + 2 + i]) * 16777619 & 0xffffffff;
+            i = i + 1;
+        }
+        x = (x ^ node_port(world, n)) * 16777619 & 0xffffffff;
+        x = (x ^ n + 1) * 16777619 & 0xffffffff;
+        var shift = 28;
+        while shift >= 0 {
+            let digit = x >> shift & 15;
+            if digit < 10 {
+                o = reply.put_byte(sc, o, '0' + digit);
+            } else {
+                o = reply.put_byte(sc, o, 'a' + digit - 10);
+            }
+            shift = shift - 4;
+        }
+        word = word + 1;
+    }
+    return o;
+}
+
+// The end of the run of slots with the owner of slot `from`.
+fn run_end[&w](world: &w [int], from: int) -> [] int {
+    let owner = owner_of(world, from);
+    var s = from;
+    while s + 1 < slot_count() && owner_of(world, s + 1) == owner {
+        s = s + 1;
+    }
+    return s;
+}
+
+// A text that is `size` bytes at `at + room`, written there, moved down to follow its header: `$<size>\r\n<text>\r\n`, or in RESP3 the verbatim form
+// `=<size + 4>\r\ntxt:<text>\r\n`. `end` is where the text ends. Answers where the answer ends.
+fn finish_text[&b](sc: &!b [byte], at: int, room: int, end: int, resp3: bool) -> [] int {
+    let size = end - (at + room);
+    reply.put(sc, end, "\r\n");
+    var head = 0;
+    var digits = 1;
+    var shown = size;
+    if resp3 {
+        shown = size + 4;
+    }
+    var rest = shown / 10;
+    while rest > 0 {
+        digits = digits + 1;
+        rest = rest / 10;
+    }
+    head = 1 + digits + 2;
+    if resp3 {
+        head = head + 4;
+    }
+    var o = at + room - head;
+    if resp3 {
+        o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, "="), shown), "\r\ntxt:");
+    } else {
+        o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, "$"), shown), "\r\n");
+    }
+    copy_within(sc, at, at + room - head, head + size + 2);
+    return at + head + size + 2;
+}
+
+fn node_count[&w](world: &w [int]) -> [] int {
+    return world[base() + 2];
+}
+
+fn put_slot_runs_text[&b, &w](sc: &!b [byte], at: int, world: &w [int], n: int) -> [] int {
+    var o = at;
+    var first = true;
+    var s = 0;
+    while s < slot_count() {
+        if owner_of(world, s) == n {
+            let e = run_end(world, s);
+            if !first {
+                o = reply.put_byte(sc, o, ' ');
+            }
+            first = false;
+            o = reply.put_nat(sc, o, s);
+            if e > s {
+                o = reply.put_nat(sc, reply.put_byte(sc, o, '-'), e);
+            }
+            s = e + 1;
+        } else {
+            s = s + 1;
+        }
+    }
+    return o;
+}
+
+fn assigned_count[&w](world: &w [int]) -> [] int {
+    var s = 0;
+    var n = 0;
+    while s < slot_count() {
+        if owner_of(world, s) >= 0 {
+            n = n + 1;
+        }
+        s = s + 1;
+    }
+    return n;
+}
+
+fn nodes_with_slots[&w](world: &w [int]) -> [] int {
+    var count = 0;
+    var n = 0;
+    while n < node_count(world) {
+        var has = false;
+        var s = 0;
+        while s < slot_count() {
+            if owner_of(world, s) == n {
+                has = true;
+            }
+            s = s + 1;
+        }
+        if has {
+            count = count + 1;
+        }
+        n = n + 1;
+    }
+    return count;
+}
+
+// `CLUSTER INFO`.
+fn info_text[&b, &w](sc: &!b [byte], at: int, world: &w [int]) -> [] int {
+    var o = at;
+    let assigned = assigned_count(world);
+    if all_assigned(world) {
+        o = reply.put(sc, o, "cluster_state:ok\r\n");
+    } else {
+        o = reply.put(sc, o, "cluster_state:fail\r\n");
+    }
+    o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, "cluster_slots_assigned:"), assigned), "\r\n");
+    o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, "cluster_slots_ok:"), assigned), "\r\n");
+    o = reply.put(sc, o, "cluster_slots_pfail:0\r\ncluster_slots_fail:0\r\n");
+    o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, "cluster_known_nodes:"), node_count(world)), "\r\n");
+    o = reply.put(sc, reply.put_nat(sc, reply.put(sc, o, "cluster_size:"), nodes_with_slots(world)), "\r\n");
+    o = reply.put(sc, o, "cluster_current_epoch:0\r\ncluster_my_epoch:0\r\n");
+    o = reply.put(sc, o, "cluster_stats_messages_sent:0\r\ncluster_stats_messages_received:0\r\ntotal_cluster_links_buffer_limit_exceeded:0\r\n");
+    return o;
+}
+
+// `CLUSTER NODES`: a line for each node, with the slots it serves.
+fn nodes_text[&b, &w](sc: &!b [byte], at: int, world: &w [int]) -> [] int {
+    var o = at;
+    var n = 0;
+    while n < node_count(world) {
+        o = put_id(sc, o, world, n);
+        o = reply.put_byte(sc, o, ' ');
+        o = put_host(sc, o, world, n);
+        o = reply.put_nat(sc, reply.put_byte(sc, o, ':'), node_port(world, n));
+        o = reply.put_nat(sc, reply.put_byte(sc, o, '@'), node_port(world, n) + 10000);
+        if n == world[base() + 1] {
+            o = reply.put(sc, o, " myself,master - 0 0 ");
+        } else {
+            o = reply.put(sc, o, " master - 0 0 ");
+        }
+        o = reply.put_nat(sc, o, n + 1);
+        o = reply.put(sc, o, " connected");
+        let slots_from = o;
+        o = reply.put_byte(sc, o, ' ');
+        let after = put_slot_runs_text(sc, o, world, n);
+        if after == o {
+            o = slots_from;
+        } else {
+            o = after;
+        }
+        o = reply.put_byte(sc, o, 10);
+        n = n + 1;
+    }
+    return o;
+}
+
+// `CLUSTER SLOTS`: for each run of slots with one owner, its first and last and the node.
+fn slots_answer[&b, &w](sc: &!b [byte], at: int, world: &w [int], resp3: bool) -> [] int {
+    var runs = 0;
+    var s = 0;
+    while s < slot_count() {
+        if owner_of(world, s) >= 0 {
+            runs = runs + 1;
+        }
+        s = run_end(world, s) + 1;
+    }
+    var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), runs), "\r\n");
+    s = 0;
+    while s < slot_count() {
+        let e = run_end(world, s);
+        let owner = owner_of(world, s);
+        if owner >= 0 {
+            o = reply.put_nat(sc, reply.put(sc, o, "*3\r\n:"), s);
+            o = reply.put_nat(sc, reply.put(sc, o, "\r\n:"), e);
+            o = reply.put(sc, o, "\r\n*4\r\n$");
+            o = reply.put_nat(sc, o, node_host_length(world, owner));
+            o = put_host(sc, reply.put(sc, o, "\r\n"), world, owner);
+            o = reply.put_nat(sc, reply.put(sc, o, "\r\n:"), node_port(world, owner));
+            o = reply.put(sc, o, "\r\n$40\r\n");
+            o = put_id(sc, o, world, owner);
+            if resp3 {
+                o = reply.put(sc, o, "\r\n%0\r\n");
+            } else {
+                o = reply.put(sc, o, "\r\n*0\r\n");
+            }
+        }
+        s = e + 1;
+    }
+    return o;
+}
+
+// `CLUSTER SHARDS`: a shard for each node that serves slots (there are no replicas), with its slots and itself.
+fn shards_answer[&b, &w](sc: &!b [byte], at: int, world: &w [int], resp3: bool) -> [] int {
+    var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), nodes_with_slots(world)), "\r\n");
+    var n = 0;
+    while n < node_count(world) {
+        var ranges = 0;
+        var s = 0;
+        while s < slot_count() {
+            if owner_of(world, s) == n {
+                ranges = ranges + 1;
+                s = run_end(world, s) + 1;
+            } else {
+                s = s + 1;
+            }
+        }
+        if ranges > 0 {
+            if resp3 {
+                o = reply.put(sc, o, "%2\r\n$5\r\nslots\r\n*");
+            } else {
+                o = reply.put(sc, o, "*4\r\n$5\r\nslots\r\n*");
+            }
+            o = reply.put_nat(sc, o, 2 * ranges);
+            o = reply.put(sc, o, "\r\n");
+            s = 0;
+            while s < slot_count() {
+                if owner_of(world, s) == n {
+                    let e = run_end(world, s);
+                    o = reply.put_nat(sc, reply.put(sc, o, ":"), s);
+                    o = reply.put_nat(sc, reply.put(sc, o, "\r\n:"), e);
+                    o = reply.put(sc, o, "\r\n");
+                    s = e + 1;
+                } else {
+                    s = s + 1;
+                }
+            }
+            if resp3 {
+                o = reply.put(sc, o, "$5\r\nnodes\r\n*1\r\n%7\r\n$2\r\nid\r\n$40\r\n");
+            } else {
+                o = reply.put(sc, o, "$5\r\nnodes\r\n*1\r\n*14\r\n$2\r\nid\r\n$40\r\n");
+            }
+            o = put_id(sc, o, world, n);
+            o = reply.put_nat(sc, reply.put(sc, o, "\r\n$4\r\nport\r\n:"), node_port(world, n));
+            o = reply.put(sc, o, "\r\n$2\r\nip\r\n$");
+            o = reply.put_nat(sc, o, node_host_length(world, n));
+            o = put_host(sc, reply.put(sc, o, "\r\n"), world, n);
+            o = reply.put(sc, o, "\r\n$8\r\nendpoint\r\n$");
+            o = reply.put_nat(sc, o, node_host_length(world, n));
+            o = put_host(sc, reply.put(sc, o, "\r\n"), world, n);
+            o = reply.put(sc, o, "\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$18\r\nreplication-offset\r\n:0\r\n$6\r\nhealth\r\n$6\r\nonline\r\n");
+        }
+        n = n + 1;
+    }
+    return o;
+}
+
+// The refusal of a `CLUSTER` line whose subcommand Redis does not have or whose number of words is wrong, written at `at` (`at` itself if the line is
+// fine). A transaction asks this when it queues the command, as Redis does.
+pub fn check[&v, &t, &b](view: &v [byte], table: &t [int], sc: &!b [byte], at: int) -> [] int {
+    let argc = table[0];
+    let name = reply.arg_of(view, table, 0);
+    let sub = reply.arg_of(view, table, 1);
+    let (known, arity, ignored_first, ignored_last, ignored_step) = cmdkeys.key_spec(name, sub);
+    if !known {
+        var shown = len(sub);
+        if shown > 128 {
+            shown = 128;
+        }
+        var o = reply.put(sc, at, "-ERR unknown subcommand '");
+        o = reply.put(sc, o, sub[0..shown]);
+        return reply.put(sc, o, "'. Try CLUSTER HELP.\r\n");
+    }
+    if arity > 0 && argc != arity || arity < 0 && argc < 0 - arity {
+        var o = reply.put(sc, at, "-ERR wrong number of arguments for 'cluster|");
+        var i = 0;
+        while i < len(sub) {
+            o = reply.put_byte(sc, o, reply.lower(int_of(sub[i])));
+            i = i + 1;
+        }
+        return reply.put(sc, o, "' command\r\n");
+    }
+    return at;
+}
+
+// `CLUSTER subcommand ...` and `READONLY`/`READWRITE`. Redis's order: an unknown subcommand, a wrong number of words, then, if the instance is not a cluster
+// node, the refusal that says so.
+pub fn command[&v, &t, &b, &w](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, world: &w [int], proto: int) -> [] int {
+    let argc = table[0];
+    let resp3 = proto == 3;
+    let name = reply.arg_of(view, table, 0);
+    if !reply.is_word(name, "CLUSTER") {
+        // READONLY and READWRITE: nothing to do on a master, and refused where there is no cluster.
+        if !enabled(world) {
+            return reply.put(sc, at, "-ERR This instance has cluster support disabled\r\n");
+        }
+        return reply.put(sc, at, "+OK\r\n");
+    }
+    let refused = check(view, table, sc, at);
+    if refused != at {
+        return refused;
+    }
+    let sub = reply.arg_of(view, table, 1);
+    if !enabled(world) {
+        return reply.put(sc, at, "-ERR This instance has cluster support disabled\r\n");
+    }
+    if reply.is_word(sub, "KEYSLOT") {
+        return reply.put_integer(sc, at, slot_of(reply.arg_of(view, table, 2)));
+    }
+    if reply.is_word(sub, "MYID") {
+        var o = reply.put(sc, at, "$40\r\n");
+        o = put_id(sc, o, world, world[base() + 1]);
+        return reply.put(sc, o, "\r\n");
+    }
+    if reply.is_word(sub, "SLOTS") {
+        return slots_answer(sc, at, world, resp3);
+    }
+    if reply.is_word(sub, "SHARDS") {
+        return shards_answer(sc, at, world, resp3);
+    }
+    if reply.is_word(sub, "INFO") {
+        let room = 16;
+        return finish_text(sc, at, room, info_text(sc, at + room, world), resp3);
+    }
+    if reply.is_word(sub, "NODES") {
+        let room = 16;
+        return finish_text(sc, at, room, nodes_text(sc, at + room, world), resp3);
+    }
+    var o = reply.put(sc, at, "-ERR CLUSTER ");
+    o = reply.put(sc, o, sub);
+    return reply.put(sc, o, " is not supported by this cache: its cluster is a static map (docs/design.md section 29)\r\n");
+}

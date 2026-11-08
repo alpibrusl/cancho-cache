@@ -12,6 +12,8 @@ import os, socket, subprocess, sys, time
 CACHE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "build", "cache")
 RPORT, CPORT = 6981, 6982
 failures = []
+# A KEYS that matches nothing but takes a long time (every key is tried against six wildcards): about 150 ms in Redis and 40 ms here on 500,000 keys
+HEAVY = "*1*2*3*4*5*6*7*8*9*0"
 
 
 def cmd(*args):
@@ -97,19 +99,19 @@ try:
         same(*args)
     # --- on, and nothing to report
     for x in (r, c):
-        x.ask("CONFIG", "SET", "latency-monitor-threshold", "1")
+        x.ask("CONFIG", "SET", "latency-monitor-threshold", "10")
     same("CONFIG", "GET", "latency-monitor-threshold")
     same("LATENCY", "DOCTOR")
     same("LATENCY", "LATEST")
-    # --- a command that takes a few milliseconds: KEYS over five hundred thousand keys
+    # --- a command that takes tens of milliseconds (against a threshold of 10): KEYS over five hundred thousand keys
     for x in (r, c):
         for i in range(0, 500000, 5000):
             x.pipeline([("SET", "k%d" % j, "v") for j in range(i, i + 5000)])
-    # (on a fast machine one KEYS may read as 1 ms, which this cache does not count as more than the threshold; try again, a few times)
+    # (a stall of the machine can cost a sample, so try again, a few times)
     for x in (r, c):
         x.ask("LATENCY", "RESET")
         for _ in range(10):
-            x.ask("KEYS", "*")
+            x.ask("KEYS", HEAVY)
             if x.ask("LATENCY", "LATEST"):
                 break
         # a fast command that happened to stall for a millisecond (the machine is busy) is a true event but not one this test is about
@@ -135,21 +137,21 @@ try:
     same("LATENCY", "LATEST")
     same("LATENCY", "HISTORY", "command")
     for x in (r, c):
-        x.ask("KEYS", "*")
+        x.ask("KEYS", HEAVY)
     same("LATENCY", "RESET")
     same("LATENCY", "RESET")
     # --- a threshold nothing reaches: no samples
     for x in (r, c):
         x.ask("CONFIG", "SET", "latency-monitor-threshold", "3600000")
-        x.ask("KEYS", "*")
+        x.ask("KEYS", HEAVY)
     same("LATENCY", "LATEST")
     same("LATENCY", "HISTORY", "command")
     for x in (r, c):
-        x.ask("CONFIG", "SET", "latency-monitor-threshold", "1")
+        x.ask("CONFIG", "SET", "latency-monitor-threshold", "10")
     # --- switched off again, the samples are not taken
     for x in (r, c):
         x.ask("CONFIG", "SET", "latency-monitor-threshold", "0")
-        x.ask("KEYS", "*")
+        x.ask("KEYS", HEAVY)
     same("LATENCY", "LATEST")
     for x in (r, c):
         x.ask("FLUSHALL")

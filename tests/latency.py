@@ -101,18 +101,25 @@ try:
     same("CONFIG", "GET", "latency-monitor-threshold")
     same("LATENCY", "DOCTOR")
     same("LATENCY", "LATEST")
-    # --- a command that takes a few milliseconds: KEYS over two hundred thousand keys
+    # --- a command that takes a few milliseconds: KEYS over five hundred thousand keys
     for x in (r, c):
-        for i in range(0, 200000, 5000):
+        for i in range(0, 500000, 5000):
             x.pipeline([("SET", "k%d" % j, "v") for j in range(i, i + 5000)])
+    # (on a fast machine one KEYS may read as 1 ms, which this cache does not count as more than the threshold; try again, a few times)
     for x in (r, c):
         x.ask("LATENCY", "RESET")
-        x.ask("KEYS", "*")
+        for _ in range(10):
+            x.ask("KEYS", "*")
+            if x.ask("LATENCY", "LATEST"):
+                break
         # a fast command that happened to stall for a millisecond (the machine is busy) is a true event but not one this test is about
         x.ask("LATENCY", "RESET", "fast-command")
     now = time.time()
     latest = [x.ask("LATENCY", "LATEST") for x in (r, c)]
     check("one event in each", (len(latest[0]), len(latest[1])), (1, 1))
+    if not (latest[0] and latest[1]):
+        print("\n".join(failures))
+        sys.exit(1)
     for i, name in enumerate(("Redis", "cache")):
         e = latest[i][0]
         check("%s: the event is a command" % name, e[0], "command")

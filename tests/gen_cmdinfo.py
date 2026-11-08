@@ -437,7 +437,7 @@ def main():
             w("        return true;")
             w("    }")
         for i, subs in sorted(touch_subs.items()):
-            w("    if i == %d && (%s) {" % (i, " || ".join('reply.is_word(sub, "%s")' % x for x in subs)))
+            w("    if i == %d && %s {" % (i, " || ".join('reply.is_word(sub, "%s")' % x for x in subs) if len(subs) == 1 else "(" + " || ".join('reply.is_word(sub, "%s")' % x for x in subs) + ")"))
             w("        return true;")
             w("    }")
         w("    return false;")
@@ -451,7 +451,7 @@ def main():
             w("        return true;")
             w("    }")
         for i, subs in sorted(admin_subs.items()):
-            w("    if i == %d && (%s) {" % (i, " || ".join('reply.is_word(sub, "%s")' % x for x in subs)))
+            w("    if i == %d && %s {" % (i, " || ".join('reply.is_word(sub, "%s")' % x for x in subs) if len(subs) == 1 else "(" + " || ".join('reply.is_word(sub, "%s")' % x for x in subs) + ")"))
             w("        return true;")
             w("    }")
         w("    return false;")

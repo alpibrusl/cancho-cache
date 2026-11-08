@@ -135,7 +135,7 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <div>
     <a class="badge" href="#status"><i></i>Alpha · strings and hashes, not a Redis replacement yet</a>
     <h1>A Redis-compatible cache that says what it can do.</h1>
-    <p class="lead">Written in cancho: no <code>Ffi</code>, no <code>unsafe</code>, and an authority report, checked in CI, that names the one file it reads (<code>/dev/urandom</code>, for the hash seed) and no foreign code. <code>redis-cli</code>, <code>redis-py</code>, <code>ioredis</code>, <code>node-redis</code> and <code>redis-rs</code> connect and work.</p>
+    <p class="lead">Written in cancho: no <code>Ffi</code>, no <code>unsafe</code>, and an authority report, checked in CI, that shows no foreign code and no <code>fs_write</code>: it writes only inside the one directory <code>--dir=</code> gives it, and its filesystem row is the unnarrowed <code>fs_read("")</code> that directory needs (see the README). <code>redis-cli</code>, <code>redis-py</code>, <code>ioredis</code>, <code>node-redis</code> and <code>redis-rs</code> connect and work.</p>
     <div class="cta"><a class="btn primary" href="#start">Try it</a><a class="btn ghost" href="#proof">See the evidence</a></div>
   </div>
   <div class="term" role="img" aria-label="A redis-cli session and the authority report"><div class="bar"><i></i><i></i><i></i></div>
@@ -148,7 +148,8 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
 
 <span class="c">$</span> cancho authority src/*.cho --std
 <span class="b">performs:</span> args, clock, conn_accept, conn_read,
-  conn_write, err_write, fs_read("/dev/urandom"), heap, net_in(""), poll
+  conn_write, dir_read, dir_write, err_write, file_read, file_write,
+  fs_read(""), heap, net_in(""), poll
 <span class="g">never touches:</span> foreign code</pre>
   </div>
 </div>
@@ -165,7 +166,7 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <div class="fitwrap"><table class="fit">
     <thead><tr><th>Question</th><th>What cancho-cache does</th></tr></thead>
     <tbody>
-      <tr><th>Can it read my files, or call into C?</th><td>One file, named in the authority report: <code>/dev/urandom</code>, read once at start for the hash seed, so a client cannot pre-compute colliding keys. No foreign code, and nothing else is read. Adding persistence later will name one directory in that report, not hide it.</td></tr>
+      <tr><th>Can it read my files, or call into C?</th><td>Without <code>--dir</code>, one file: <code>/dev/urandom</code>, read once at start for the hash seed. With it, the one directory you name, opened once and written one name at a time (<code>dump.cho</code>); the authority report shows <code>fs_read("")</code> and <code>dir_write</code> and cannot say which directory (the README says why). No foreign code.</td></tr>
       <tr><th>Will a client library work?</th><td>The five tested ones connect and run a session; the handshake they send (<code>HELLO</code>, <code>INFO</code>, <code>CLIENT</code>) is answered the way Redis answers it, and the compatibility matrix is checked against the README in CI.</td></tr>
       <tr><th>Is it faster than Redis?</th><td>On one core it measures 1.07 to 2.00 times Redis's throughput on the pre-registered cells, while doing much less. It is not a claim about Redis with the same features.</td></tr>
       <tr><th>What happens when memory is full?</th><td><code>noeviction</code> refuses with Redis's own error; <code>allkeys-lru</code> evicts, with the same hit rate as Redis at the same resident memory.</td></tr>
@@ -210,7 +211,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)
 (cd ../cancho &amp;&amp; git checkout "$REV" &amp;&amp; cargo build --release -p cancho)
 export CANCHO=$PWD/../cancho/target/release/cancho
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho -o build/cache
 build/cache 6379 &amp;
 redis-cli -p 6379 PING     # PONG</pre>
   <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru] [&lt;seed&gt;]]]</code>. Sizes are fixed at start; without a seed argument the hash seed is read from <code>/dev/urandom</code>.</p>

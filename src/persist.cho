@@ -1,0 +1,442 @@
+edition 9;
+
+module persist;
+
+import std.crc;
+import store;
+
+// `persist` -- the snapshot file (`docs/design.md` section 35): `save` writes every key the store holds to `dump.cho` beneath a directory, crash-safely (a temporary file, synced, renamed
+// over the old one, the directory synced), and `load` reads it back before the first connection is accepted. Everything here goes through a handle on one directory and one component
+// at a time: no path is spent after the directory is opened, no link is followed.
+//
+// The file, all numbers little-endian:
+//
+//     header   32 bytes   "CANCHODB", the version (1), how many keys, when it was written (Unix milliseconds)
+//     record   32 bytes   key length, value length, kind (0 string, 1 hash), when the key ends (Unix milliseconds, 0: never)
+//              then the key's bytes, then the value's bytes
+//     trailer  8 bytes    CRC-64/XZ of everything before it: the low 32 bits, then the high 32 bits
+//
+// A key's expiry is an absolute time, so the time a cache was down counts against its keys: one that ended meanwhile is not loaded.
+
+pub fn version() -> [] int {
+    return 1;
+}
+
+fn header_size() -> [] int {
+    return 32;
+}
+
+fn record_size() -> [] int {
+    return 32;
+}
+
+fn trailer_size() -> [] int {
+    return 8;
+}
+
+// The statuses `load` answers; `tag` gives the rule tag of each refusal. 0: loaded. 1: there was no file (a first start). Anything else refuses to start.
+pub fn loaded() -> [] int {
+    return 0;
+}
+
+pub fn absent() -> [] int {
+    return 1;
+}
+
+pub fn tag(status: int) -> [] &static [byte] {
+    if status == 0 {
+        return "persist.loaded";
+    }
+    if status == 1 {
+        return "persist.absent";
+    }
+    if status == 10 {
+        return "persist.truncated";
+    }
+    if status == 11 {
+        return "persist.bad-magic";
+    }
+    if status == 12 {
+        return "persist.version";
+    }
+    if status == 13 {
+        return "persist.checksum";
+    }
+    if status == 14 {
+        return "persist.record-bounds";
+    }
+    if status == 15 {
+        return "persist.count";
+    }
+    if status == 16 {
+        return "persist.no-room";
+    }
+    if status == 17 {
+        return "persist.too-large";
+    }
+    if status == 18 {
+        return "persist.bad-kind";
+    }
+    return "persist.io";
+}
+
+fn put_u64[&b](buf: &!b [byte], at: int, n: int) -> [] int {
+    var i = 0;
+    var rest = n;
+    while i < 8 {
+        buf[at + i] = byte_of(rest & 255);
+        rest = rest >> 8;
+        i = i + 1;
+    }
+    return at + 8;
+}
+
+fn get_u64[&b](buf: &b [byte], at: int) -> [] int {
+    var n = 0;
+    var i = 7;
+    while i >= 0 {
+        n = n << 8 | int_of(buf[at + i]);
+        i = i - 1;
+    }
+    return n;
+}
+
+fn put_u32[&b](buf: &!b [byte], at: int, n: int) -> [] int {
+    var i = 0;
+    var rest = n;
+    while i < 4 {
+        buf[at + i] = byte_of(rest & 255);
+        rest = rest >> 8;
+        i = i + 1;
+    }
+    return at + 4;
+}
+
+fn get_u32[&b](buf: &b [byte], at: int) -> [] int {
+    var n = 0;
+    var i = 3;
+    while i >= 0 {
+        n = n << 8 | int_of(buf[at + i]);
+        i = i - 1;
+    }
+    return n;
+}
+
+// ---------------------------------------------------------------------
+// save
+// ---------------------------------------------------------------------
+
+// All of `bytes` to the file: 0, or the errno.
+fn write_all[&w, &b](file: &!w File, bytes: &b [byte]) -> [file_write] int {
+    var at = 0;
+    while at < len(bytes) {
+        match file_write(file, bytes[at..len(bytes)]) {
+            Done::Ok(n) => {
+                at = at + n;
+            }
+            Done::Failed(e) => {
+                return e;
+            }
+        }
+    }
+    return 0;
+}
+
+// `bytes` to the file and into the running checksum `acc` (`acc[0]` the first errno, `acc[1]` and `acc[2]` the halves of the state).
+fn emit[&w, &a, &b](file: &!w File, acc: &!a [int], bytes: &b [byte]) -> [file_write] int {
+    if acc[0] != 0 {
+        return acc[0];
+    }
+    let state = crc.crc64_update((acc[1], acc[2]), bytes);
+    acc[1] = state.0;
+    acc[2] = state.1;
+    acc[0] = write_all(file, bytes);
+    return acc[0];
+}
+
+// How many keys `save` will write: the ones that have not run out.
+fn count_visible[&s](st: &s store.Store) -> [] int {
+    var n = 0;
+    var e = 0;
+    while e < store.entries(st) {
+        if store.visible(st, e) {
+            n = n + 1;
+        }
+        e = e + 1;
+    }
+    return n;
+}
+
+// The whole file into `file`.
+fn write_snapshot[&w, &s](file: &!w File, st: &s store.Store, now_ms: int) -> [file_write] int {
+    region r {
+        let acc = alloc_slice[r](3, 0);
+        let head = alloc_slice[r](32, byte_of(0));
+        acc[1] = crc.crc64_start().0;
+        acc[2] = crc.crc64_start().1;
+        var i = 0;
+        while i < 8 {
+            head[i] = byte_of(int_of("CANCHODB"[i]));
+            i = i + 1;
+        }
+        put_u64(head, 8, version());
+        put_u64(head, 16, count_visible(st));
+        put_u64(head, 24, now_ms);
+        emit(file, acc, head);
+        var e = 0;
+        while e < store.entries(st) && acc[0] == 0 {
+            if store.visible(st, e) {
+                let key = store.key_at(st, e);
+                let value = store.value(st, e);
+                var expiry = 0;
+                if store.expiry_of(st, e) != 0 {
+                    expiry = store.wall_of(st) + store.expiry_of(st, e);
+                }
+                put_u64(head, 0, len(key));
+                put_u64(head, 8, len(value));
+                put_u64(head, 16, store.kind_of(st, e));
+                put_u64(head, 24, expiry);
+                emit(file, acc, head);
+                emit(file, acc, key);
+                emit(file, acc, value);
+            }
+            e = e + 1;
+        }
+        if acc[0] == 0 {
+            let done = crc.crc64_finish((acc[1], acc[2]));
+            put_u32(head, 0, done.1);
+            put_u32(head, 4, done.0);
+            acc[0] = write_all(file, head[0..8]);
+        }
+        return acc[0];
+    }
+}
+
+// Save the store as `dump.cho` beneath the directory `dir` is a handle on: written to `dump.tmp`, synced, renamed over the old file, and the directory synced. 0, or the errno of the first
+// step that failed (the old `dump.cho` is then as it was).
+fn save_in[&d, &s](dir: &d Dir, st: &s store.Store, now_ms: int) -> [dir_write, file_write] int {
+    // A temporary file left by a crash is in the way of `open_new`.
+    match dir_remove(dir, "dump.tmp") {
+        Done::Ok(n) => {
+        }
+        Done::Failed(e) => {
+        }
+    }
+    var status = 0;
+    match dir_open_new_mode(dir, "dump.tmp", 420) {
+        Opened::Ok(opened) => {
+            var file = opened;
+            borrow mut file as &!w in {
+                status = write_snapshot(w, st, now_ms);
+                if status == 0 {
+                    match file_sync(w) {
+                        Done::Ok(n) => {
+                        }
+                        Done::Failed(e) => {
+                            status = e;
+                        }
+                    }
+                }
+            }
+            file_close(file);
+        }
+        Opened::Failed(e) => {
+            status = e;
+        }
+    }
+    if status == 0 {
+        match dir_rename(dir, "dump.tmp", "dump.cho") {
+            Done::Ok(n) => {
+            }
+            Done::Failed(e) => {
+                status = e;
+            }
+        }
+    }
+    if status == 0 {
+        match dir_sync(dir) {
+            Done::Ok(n) => {
+            }
+            Done::Failed(e) => {
+                status = e;
+            }
+        }
+    }
+    return status;
+}
+
+// `save_in` for the directory at `path`: 0, or an errno.
+pub fn save[&f, &p, &s](fs: &f Fs(""), path: &p [byte], st: &s store.Store, now_ms: int) -> [fs_read(""), dir_write, file_write] int {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var status = 0;
+            borrow dir as &d in {
+                status = save_in(d, st, now_ms);
+            }
+            dir_close(dir);
+            return status;
+        }
+        DirOpened::Failed(e) => {
+            return e;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// load
+// ---------------------------------------------------------------------
+
+// The most a snapshot file may be (it is read whole): a gigabyte.
+fn most_bytes() -> [] int {
+    return 1073741824;
+}
+
+// Check and read the snapshot `bytes` (the whole file) into the store: a status (see `tag`) and how many keys it held. A key whose time has passed is left out.
+fn read_snapshot[&b, &s](bytes: &b [byte], st: &!s store.Store) -> [] (int, int) {
+    let size = len(bytes);
+    if size < header_size() + trailer_size() {
+        return (10, 0);
+    }
+    var i = 0;
+    while i < 8 {
+        if int_of(bytes[i]) != int_of("CANCHODB"[i]) {
+            return (11, 0);
+        }
+        i = i + 1;
+    }
+    if get_u64(bytes, 8) != version() {
+        return (12, 0);
+    }
+    let sum = crc.crc64_of(bytes[0..size - trailer_size()]);
+    if get_u32(bytes, size - 8) != sum.1 || get_u32(bytes, size - 4) != sum.0 {
+        return (13, 0);
+    }
+    let count = get_u64(bytes, 16);
+    let end = size - trailer_size();
+    var at = header_size();
+    var read = 0;
+    var kept = 0;
+    while read < count {
+        if at + record_size() > end {
+            return (14, kept);
+        }
+        let klen = get_u64(bytes, at);
+        let vlen = get_u64(bytes, at + 8);
+        let kind = get_u64(bytes, at + 16);
+        let ends = get_u64(bytes, at + 24);
+        if klen < 0 || vlen < 0 || klen > end || vlen > end || at + record_size() + klen + vlen > end {
+            return (14, kept);
+        }
+        if kind != store.kind_string() && kind != store.kind_hash() {
+            return (18, kept);
+        }
+        let key = bytes[at + record_size()..at + record_size() + klen];
+        let value = bytes[at + record_size() + klen..at + record_size() + klen + vlen];
+        var live = true;
+        var relative = 0;
+        if ends != 0 {
+            relative = ends - store.wall_of(st);
+            if relative <= store.now_of(st) {
+                live = false;
+            }
+        }
+        if live {
+            let h = store.hash_of(st, key);
+            if store.set(st, key, h, value, relative) != 0 {
+                return (16, kept);
+            }
+            let e = store.peek(st, key, h);
+            if e >= 0 {
+                store.set_kind(st, e, kind);
+            }
+            kept = kept + 1;
+        }
+        at = at + record_size() + klen + vlen;
+        read = read + 1;
+    }
+    if at != end {
+        return (15, kept);
+    }
+    return (0, kept);
+}
+
+// Load `dump.cho` from the directory `dir` is a handle on into the store: the status and the number of keys (see `tag`). `heap` holds the file while it is checked.
+fn load_in[&d, &h, &s](dir: &d Dir, heap: &!h Heap, st: &!s store.Store) -> [heap, dir_read, file_read] (int, int) {
+    match dir_open_read(dir, "dump.cho") {
+        Opened::Ok(opened) => {
+            var file = opened;
+            var status = 0;
+            var kept = 0;
+            var size = 0;
+            borrow mut file as &!w in {
+                match file_size(w) {
+                    Done::Ok(n) => {
+                        size = n;
+                    }
+                    Done::Failed(e) => {
+                        status = 19;
+                    }
+                }
+            }
+            if status == 0 && size > most_bytes() {
+                status = 17;
+            }
+            if status == 0 {
+                let space = box_slice(heap, size, byte_of(0));
+                var got = 0;
+                borrow mut file as &!w in {
+                    borrow mut space as &!sp in {
+                        while got < size && status == 0 {
+                            match file_pread(w, got, contents(sp)[got..size]) {
+                                Read::Got(n) => {
+                                    got = got + n;
+                                }
+                                Read::End => {
+                                    status = 10;
+                                }
+                                Read::Failed(e) => {
+                                    status = 19;
+                                }
+                            }
+                        }
+                    }
+                }
+                if status == 0 {
+                    borrow space as &sp in {
+                        let (s2, k2) = read_snapshot(contents(sp), st);
+                        status = s2;
+                        kept = k2;
+                    }
+                }
+                unbox_slice(heap, space);
+            }
+            file_close(file);
+            return (status, kept);
+        }
+        Opened::Failed(e) => {
+            if e == 2 {
+                return (1, 0);
+            }
+            return (19, 0);
+        }
+    }
+}
+
+// `load_in` for the directory at `path`. A directory that cannot be opened is `persist.io`.
+pub fn load[&f, &p, &h, &s](fs: &f Fs(""), path: &p [byte], heap: &!h Heap, st: &!s store.Store) -> [heap, fs_read(""), dir_read, file_read] (int, int) {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var answer = (0, 0);
+            borrow dir as &d in {
+                answer = load_in(d, heap, st);
+            }
+            dir_close(dir);
+            return answer;
+        }
+        DirOpened::Failed(e) => {
+            return (19, 0);
+        }
+    }
+}

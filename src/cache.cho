@@ -9,6 +9,7 @@ import cluster;
 import cmdnames;
 import commands;
 import latency;
+import persist;
 import pool;
 import reply;
 import resp;
@@ -124,6 +125,9 @@ res struct Core {
     txns: Box[[int]],
     queues: Box[[byte]],
     store: store.Store,
+    // The directory of the snapshot (`--dir=`, `docs/design.md` section 35): its path, and how long it is (0: no persistence).
+    dir: Box[[byte]],
+    dir_len: int,
     // When the sweep for expired keys last ran, in the store's milliseconds.
     swept: int,
 }
@@ -413,7 +417,7 @@ fn monitor_feed[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int
 }
 
 // Run the command `tb` describes in `view`: `CLIENT LIST`, `INFO` and `KILL`, which look at other connections, are answered here (`src/clients.cho`), every other by `commands`.
-fn execute_in[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], sc: &!b [byte], at: int) -> [] int {
+fn execute_in[&t, &c, &v, &w, &b, &z](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], sc: &!b [byte], at: int, fs: &z Fs("")) -> [fs_read(""), dir_write, file_write] int {
     let st = contents(core.state);
     let p = stride() * k;
     if tb[0] >= 1 && reply.is_word(reply.arg_of(view, tb, 0), "MONITOR") {
@@ -440,6 +444,20 @@ fn execute_in[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, 
         } else if tb[0] >= 1 && cmdnames.touches_keyspace(cmdnames.index_of(reply.arg_of(view, tb, 0)), sub) {
             return reply.put(sc, at, "-ERR Replica can't interact with the keyspace\r\n");
         }
+    }
+    if tb[0] >= 1 && reply.is_word(reply.arg_of(view, tb, 0), "SAVE") {
+        if tb[0] != 1 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'save' command\r\n");
+        }
+        if core.dir_len == 0 {
+            return reply.put(sc, at, "-ERR persistence is off: start the cache with --dir=<directory> (docs/design.md section 35)\r\n");
+        }
+        let failed = persist.save(fs, contents(core.dir)[0..core.dir_len], core.store, store.wall_of(core.store) + store.now_of(core.store));
+        if failed != 0 {
+            let o = reply.put_nat(sc, reply.put(sc, at, "-ERR the snapshot could not be written (errno "), failed);
+            return reply.put(sc, o, ")\r\n");
+        }
+        return reply.put(sc, at, "+OK\r\n");
     }
     if tb[0] >= 2 && reply.is_word(reply.arg_of(view, tb, 0), "CLIENT") {
         let sub = reply.arg_of(view, tb, 1);
@@ -478,7 +496,7 @@ fn execute_in[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, 
     return commands.execute(view, tb, sc, at, core.store, contents(core.tmp), st[p + 5..p + 10], contents(core.names)[k * 64..k * 64 + 64], contents(core.info));
 }
 
-fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q Clock) -> [conn_write, poll, clock] int {
+fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q Clock, fs: &z Fs("")) -> [conn_write, poll, clock, fs_read(""), dir_write, file_write] int {
     let st = contents(core.state);
     let bf = contents(core.bufs);
     let pd = contents(core.pends);
@@ -678,7 +696,7 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                         if timed {
                             began = clock_ms(clock);
                         }
-                        at = execute_in(tab, core, k, view, tb, sc, at);
+                        at = execute_in(tab, core, k, view, tb, sc, at, fs);
                         if timed {
                             slow_after(tab, core, k, view, tb, began, clock, sc, reply_from, at);
                         }
@@ -726,7 +744,7 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                                 if timed {
                                     began = clock_ms(clock);
                                 }
-                                at = execute_in(tab, core, k, qview, tb, sc, at);
+                                at = execute_in(tab, core, k, qview, tb, sc, at, fs);
                                 if timed {
                                     slow_after(tab, core, k, qview, tb, began, clock, sc, exec_from, at);
                                 }
@@ -832,7 +850,7 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
 }
 
 // The poller said connection `k` is ready.
-fn step[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int, clock: &q Clock) -> [conn_read, conn_write, poll, clock] int {
+fn step[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int, clock: &q Clock, fs: &z Fs("")) -> [conn_read, conn_write, poll, clock, fs_read(""), dir_write, file_write] int {
     let st = contents(core.state);
     let bf = contents(core.bufs);
     let pd = contents(core.pends);
@@ -852,7 +870,7 @@ fn step[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int
     if st[p + 13] == 4 && st[p + 2] == 0 {
         // A value is being sent and the last of it went: the connection is watched for room to write, and has some.
         if readiness % 4 >= 2 {
-            process(tab, core, k, clock);
+            process(tab, core, k, clock, fs);
         } else if readiness % 2 == 1 {
             shut(tab, core, k);
         }
@@ -876,7 +894,7 @@ fn step[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int
                             // Held back while the last answers were being sent.
                             pool.give(contents(core.pendpool), st[p + 11]);
                             st[p + 11] = 0 - 1;
-                            process(tab, core, k, clock);
+                            process(tab, core, k, clock, fs);
                         }
                     }
                 }
@@ -897,7 +915,7 @@ fn step[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, readiness: int
         match conns.read(tab, k, bf[base + st[p]..base + size]) {
             Received::Data(got) => {
                 st[p] = st[p] + got;
-                process(tab, core, k, clock);
+                process(tab, core, k, clock, fs);
             }
             Received::End => {
                 shut(tab, core, k);
@@ -978,7 +996,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, port: int, memory: int, max_keys: int, policy: int, seed: int, clustered: bool, map: &c [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock] int {
+fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, fs: &z Fs(""), dirpath: &d [byte], port: int, memory: int, max_keys: int, policy: int, seed: int, clustered: bool, map: &c [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, fs_read(""), dir_read, dir_write, file_read, file_write] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -986,9 +1004,10 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size() + stats.size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size() + stats.size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), dir: box_slice(heap, 4096, byte_of(0)), dir_len: 0, swept: 0 };
             var tab = conns.empty(heap, 64);
             var bad_map = false;
+            var bad_dump = 0;
             borrow mut core as &!cw in {
                 pool.fill(contents(cw.inpool));
                 pool.fill(contents(cw.pendpool));
@@ -1000,9 +1019,24 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                 if clustered && cluster.configure(contents(cw.info), map[10..len(map)], port) != 0 {
                     bad_map = true;
                 }
+                // The snapshot, if there is a directory for one, is loaded before the first connection is accepted. A file that is there and is not a snapshot (truncated, altered,
+                // from another version) stops the start: the cache does not run on half of what it was given (`docs/design.md` section 35).
+                if len(dirpath) > 0 && len(dirpath) <= 4096 && !bad_map {
+                    let copy = contents(cw.dir);
+                    var j = 0;
+                    while j < len(dirpath) {
+                        copy[j] = dirpath[j];
+                        j = j + 1;
+                    }
+                    cw.dir_len = len(dirpath);
+                    let (loaded, kept) = persist.load(fs, dirpath, heap, cw.store);
+                    if loaded > persist.absent() {
+                        bad_dump = loaded;
+                    }
+                }
             }
             // A map that is not one stops the start (status 2), after the state is given back like any other stop.
-            while !bad_map {
+            while !bad_map && bad_dump == 0 {
                 var ready = 0 - 1;
                 borrow mut core as &!cw in {
                     // Wake often enough to take keys whose time has come, but only if there are any.
@@ -1036,7 +1070,7 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                         borrow mut tab as &!tw in {
                             borrow mut core as &!cw in {
                                 if contents(cw.state)[stride() * (token - 1) + 1] == 1 {
-                                    step(tw, cw, token - 1, readiness, clock);
+                                    step(tw, cw, token - 1, readiness, clock, fs);
                                 }
                             }
                         }
@@ -1070,7 +1104,7 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
                 }
             }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, inpool, pendpool, qpool, table, scratch, tmp, names, info, txns, queues, store, swept } = core;
+            let Core { poller, events, state, bufs, pends, inpool, pendpool, qpool, table, scratch, tmp, names, info, txns, queues, store, dir, dir_len, swept } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
@@ -1086,9 +1120,13 @@ fn run[&h, &l, &k, &c](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, 
             unbox_slice(heap, info);
             unbox_slice(heap, txns);
             unbox_slice(heap, queues);
+            unbox_slice(heap, dir);
             store.close(heap, store);
             if bad_map {
                 return 2;
+            }
+            if bad_dump != 0 {
+                return 100 + bad_dump;
             }
             return 0;
         }
@@ -1132,7 +1170,7 @@ fn number_of[&t](text: &t [byte]) -> [] int {
 
 // The seed the server hashes keys with: eight bytes of the OS entropy (issue #12). 0, the old
 // constant, if `/dev/urandom` cannot be read, so a host without one still starts.
-fn seed_from[&f](fs: &f Fs("/dev/urandom")) -> [fs_read("/dev/urandom")] int {
+fn seed_from[&f](fs: &f Fs("")) -> [fs_read("")] int {
     region a {
         let raw = alloc_slice[a](8, byte_of(0));
         let got = fs_read(fs, "/dev/urandom", raw);
@@ -1163,6 +1201,7 @@ fn main(world: World) -> [] int {
     var policy = store.evict_none();
     var seed = 0 - 1;
     var cluster_at = 0;
+    var dir_at = 0;
     borrow args as &g in {
         if arg_count(g) > 4 {
             let named = store.policy_named(arg(g, 4));
@@ -1188,16 +1227,18 @@ fn main(world: World) -> [] int {
             if has_prefix(arg(g, k), "--cluster=") {
                 cluster_at = k;
             }
+            // `--dir=/var/lib/cache`: where the snapshot is kept (`docs/design.md` section 35).
+            if has_prefix(arg(g, k), "--dir=") {
+                dir_at = k;
+            }
             k = k + 1;
         }
     }
-    let rnd = narrow(fs, "/dev/urandom");
     if seed < 0 {
-        borrow rnd as &f in {
+        borrow fs as &f in {
             seed = seed_from(f);
         }
     }
-    release(rnd);
     var status = 2;
     if port > 0 && port < 65536 && megabytes > 0 && megabytes <= 4096 && max_keys > 0 && max_keys <= 100000000 {
         status = 3;
@@ -1218,8 +1259,26 @@ fn main(world: World) -> [] int {
                                 buffer.drop(h, line);
                             }
                             borrow clock as &c in {
-                                borrow args as &ga in {
-                                    status = run(h, lh, c, port, megabytes * 1048576, max_keys, policy, seed, cluster_at > 0, arg(ga, cluster_at));
+                                borrow fs as &fr in {
+                                    borrow args as &ga in {
+                                        var dirpath = arg(ga, 0)[0..0];
+                                        if dir_at > 0 {
+                                            dirpath = arg(ga, dir_at)[6..len(arg(ga, dir_at))];
+                                        }
+                                        status = run(h, lh, c, fr, dirpath, port, megabytes * 1048576, max_keys, policy, seed, cluster_at > 0, arg(ga, cluster_at));
+                                        if status >= 100 {
+                                            borrow mut io as &!i in {
+                                                var refusal = buffer.append(h, buffer.empty(h, 64), "refusing to start: ");
+                                                refusal = buffer.append(h, refusal, persist.tag(status - 100));
+                                                refusal = buffer.push(h, refusal, byte_of(10));
+                                                borrow refusal as &rb in {
+                                                    io.error_all(i, buffer.bytes(rb));
+                                                }
+                                                buffer.drop(h, refusal);
+                                            }
+                                            status = 4;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1234,6 +1293,7 @@ fn main(world: World) -> [] int {
     release(net);
     release(clock);
     release(args);
+    release(fs);
     release(io);
     release(heap);
     return status;

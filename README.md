@@ -4,9 +4,9 @@
 
 [![ci](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-cache/actions/workflows/ci.yml)
 
-**A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that names the one file it reads (`/dev/urandom`, for the hash seed) and no other, and no foreign code. One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis`, `node-redis` and `redis-rs` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
+**A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and an LRU eviction policy over RESP2 and RESP3, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that shows it has no foreign code and writes no path (`fs_write` is absent; it can write only inside the one directory `--dir=` gives it, one name at a time), and that its only reach into the filesystem is the unnarrowed `fs_read("")` the snapshot needs (below). One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis`, `node-redis` and `redis-rs` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha, a string-and-hash cache and not a Redis replacement.** It answers 75 of Redis 7.0's 240 commands; the data structures are strings and hashes (15 `H*` commands), no persistence, replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+**Status: alpha, a string-and-hash cache and not a Redis replacement.** It answers 75 of Redis 7.0's 240 commands; the data structures are strings and hashes (15 `H*` commands), a snapshot (`SAVE`, loaded at start; no append-only log and no background save yet), no replication or TLS, and one database. Transactions (`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`) work, so a default `redis-py` `pipeline()` does, with three deliberate differences (below). The gaps to pairing with Redis, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## What you get
 
@@ -37,7 +37,7 @@ REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision
 export CANCHO=$PWD/../cancho/standalone/cancho
 
 mkdir -p build
-$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho -o build/cache
+$CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho -o build/cache
 
 build/cache 6379 &                     # port; optional: arena MiB, most keys, eviction policy (noeviction | allkeys-lru | allkeys-random | volatile-lru | volatile-random | volatile-ttl)
 redis-cli -p 6379 PING                 # PONG
@@ -45,6 +45,8 @@ redis-cli -p 6379 PING                 # PONG
 
 The arguments are `cache <port> [<arena MiB> [<most keys> [<policy>]]]`, a policy being any of the six above, with 64 MiB, 1,000,000 keys and
 `noeviction` by default. Sizes are fixed at start.
+
+To keep the data across restarts, add `--dir=/path/to/directory` after the sixth argument (the seed; give any number): the cache then loads `dump.cho` from it before accepting connections (a file that is not a valid snapshot stops the start, status 4, with a rule tag on standard error), and `SAVE` writes it, whole and crash-safely. Without `--dir`, `SAVE` is an error that says so. See `docs/design.md` section 35.
 
 ## Examples
 
@@ -79,13 +81,17 @@ r.get("k")                          # b'v'
 **See what it is allowed to do** (this is checked in CI, not assumed):
 
 ```sh
-$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho --std
-# performs: args, clock, conn_accept, conn_read, conn_write, err_write, fs_read("/dev/urandom"), heap, net_in(""), poll
+$CANCHO authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho --std
+# performs: args, clock, conn_accept, conn_read, conn_write, dir_read, dir_write, err_write, file_read, file_write, fs_read(""), heap, net_in(""), poll
 # never touches: foreign code
 
-(the filesystem row widened from "never" to one named file, /dev/urandom, when the hash seed stopped
-being a constant: a client that can choose keys must not be able to pick ones that collide. `--seed N`
-fixes the seed for reproducible tests and benchmarks; the sixth argument of `cache`.)
+(The filesystem row widened twice. First from "never" to one named file, `/dev/urandom`, when the hash seed stopped being a constant: a client that
+can choose keys must not be able to pick ones that collide; `--seed N` fixes the seed for reproducible tests and benchmarks, the sixth argument of
+`cache`. Then, with the snapshot, to `fs_read("")`: the directory is chosen by an argument (`--dir=`), and `narrow` takes only a literal, so the
+report can no longer name it (cancho#330). What the program does is open that one directory with `open_dir`, once, and then work beneath the handle
+one name at a time (`dump.cho`, `dump.tmp`), following no link; the report shows `dir_write` and `file_write` and no `fs_write`, because no path is
+ever spent to write. It cannot prove which directory that is, and this README no longer says it can. Without `--dir`, nothing is opened but
+`/dev/urandom`.)
 ```
 
 ## Commands
@@ -179,6 +185,7 @@ src/slowlog.cho    the slow log: what is kept of a slow command, and SLOWLOG GET
 src/clients.cho    CLIENT LIST, INFO and KILL: the commands that look at other connections
 src/latency.cho    the latency monitor: LATENCY LATEST, HISTORY, RESET, DOCTOR
 src/memory.cho     MEMORY USAGE, STATS, DOCTOR, PURGE
+src/persist.cho    the snapshot: SAVE, and loading it at start (--dir=)
 src/reply.cho      reply helpers shared by the two
 src/store.cho      the memory: arena, key table, expiry, eviction, compaction
 tests/            unit tests (cancho) and harnesses (Python, with Redis as the oracle)
@@ -187,7 +194,7 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings and hashes. No lists, sets or sorted sets, and no persistence, replication, TLS, pub/sub or scripting. One database. A value may be as large as the arena (up to Redis's 512 MiB): `SET`, `SETEX` and `PSETEX` take it in pieces and `GET` sends it in pieces, but only a `SET` whose value is the last argument (so not `SET key value EX 10` with a value over 16 KiB, which is refused as a command too large), and a big `SET` cannot be queued in `MULTI`. Every other command refuses a value over 16 KiB with `-ERR value too large for this command` (`GETSET`, `GETDEL`, `GETEX`, `SET … GET`, a `GETRANGE` of more than 16 KiB, an element of `MGET`, the replies of `EXEC`), and `APPEND` and `SETRANGE` cannot build one; Redis has none of these refusals. While a value arrives its old one stays, so replacing a value needs room for both until the last byte is here, and a `GET` of a value that is written, deleted or flushed while it is being sent closes that connection. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 10,000 connections, served from pools of lent buffers (1,024 partial commands held at once, 256 connections with output waiting, 128 open transactions; past a pool the connection is closed or, for a queue, the command refused), and a 16 KiB command (fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
+Strings and hashes. No lists, sets or sorted sets, and no replication, TLS, pub/sub or scripting; persistence is a snapshot only (`docs/design.md` section 35). One database. A value may be as large as the arena (up to Redis's 512 MiB): `SET`, `SETEX` and `PSETEX` take it in pieces and `GET` sends it in pieces, but only a `SET` whose value is the last argument (so not `SET key value EX 10` with a value over 16 KiB, which is refused as a command too large), and a big `SET` cannot be queued in `MULTI`. Every other command refuses a value over 16 KiB with `-ERR value too large for this command` (`GETSET`, `GETDEL`, `GETEX`, `SET … GET`, a `GETRANGE` of more than 16 KiB, an element of `MGET`, the replies of `EXEC`), and `APPEND` and `SETRANGE` cannot build one; Redis has none of these refusals. While a value arrives its old one stays, so replacing a value needs room for both until the last byte is here, and a `GET` of a value that is written, deleted or flushed while it is being sent closes that connection. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 10,000 connections, served from pools of lent buffers (1,024 partial commands held at once, 256 connections with output waiting, 128 open transactions; past a pool the connection is closed or, for a queue, the command refused), and a 16 KiB command (fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` is refused: the settings are fixed at start. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8).
 
 ## Contributing
 

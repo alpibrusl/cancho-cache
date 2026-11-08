@@ -14,8 +14,7 @@ S = ("py", "latency.py")
 # (name, file, old text, new text, how to test)
 MUTANTS = [
     ("the monitor is on whatever the threshold", "cache.cho", "    let lat = store.lat_threshold_of(core.store);\n    if (limit", "    let lat = 1;\n    if (limit", S),
-        ("an event is noted whatever the threshold", "cache.cho", "|| lat > 0 && ms > lat) && !stats", "|| lat > 0 && ms >= 0) && !stats", S),
-    ("an event is noted whatever the threshold (the second test)", "cache.cho", "        if lat > 0 && ms > lat {\n            var event = 1;", "        if lat > 0 && ms >= 0 {\n            var event = 1;", S),
+                ("an event is noted whatever the threshold", "cache.cho", "|| lat > 0 && ms > lat) && !stats.did_not_run(sc, from, to) {\n        if limit >= 0 && took >= limit {\n            slow_note(tab, core, k, view, tb, took);\n        }\n        if lat > 0 && ms > lat {", "|| lat > 0 && ms >= 0) && !stats.did_not_run(sc, from, to) {\n        if limit >= 0 && took >= limit {\n            slow_note(tab, core, k, view, tb, took);\n        }\n        if lat > 0 && ms >= 0 {", S),
     ("a slow command is a fast-command event", "cache.cho", "                event = 0;", "                event = 1;", S),
         ("LATEST leaves out the maximum", "latency.cho", "                o = reply.put_integer(sc, o, ints[b + 1]);\n", "", S),
         ("LATEST lists events with no sample", "latency.cho", "            if seen(st, e) {\n                let b = base(e);", "            if true {\n                let b = base(e);", S),

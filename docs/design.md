@@ -912,4 +912,4 @@ The commands that look at other connections, in `src/clients.cho`. The loop (`sr
 
 **Not the same.** A `SET` whose value is too long for a block and arrives in pieces (`docs/design.md` section 22) is not shown. The time has the loop's resolution (a millisecond), so the microseconds are always a multiple of 1,000. A refused `EXEC` (aborted by a `WATCH`) is shown like any other.
 
-**Mutants.** `tests/monitor_mutants.py` (19) must be failed by `tests/monitor.py`.
+**Mutants.** `tests/monitor_mutants.py` (18) must be failed by `tests/monitor.py`.

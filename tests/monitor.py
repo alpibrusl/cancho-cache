@@ -89,6 +89,10 @@ try:
         mon[i].drain()
         mon2[i].drain()
     time.sleep(0.2)
+    # a MONITOR that comes while others watch is not shown to them
+    late = [Conn(p) for p in ports]
+    for i in (0, 1):
+        check("a late watcher", late[i].ask("MONITOR"), b"+OK\r\n")
 
     script = [("SET", "k", "v"), ("get", "k"), ("AUTH", "pw"), ("AUTH", "u", "pw"), ("HELLO", "3", "AUTH", "u", "pw"), ("HELLO", "2"), ("PING",), ("MULTI",), ("SET", "a", "1"), ("INCR", "a"),
               ("EXEC",), ("CLIENT", "SETNAME", "x"), ("INFO",), ("SLOWLOG", "LEN"), ("NOSUCH",), ("SET", "a"), ("CONFIG", "GET", "port"), ("CLIENT", "LIST"), ("LATENCY", "LATEST"),
@@ -105,6 +109,22 @@ try:
     check("what the second watcher was shown", got2[1], got2[0])
     check("both watchers were shown the same", got2[1], got[1])
     check("something was shown", len(got[1]) > 20, True)
+    check("no MONITOR in what was shown", [l for l in got[1] if b'"MONITOR"' in l], [])
+    # the time and the address, which the comparison above leaves out: the address is the one the commands came from, and the microseconds are not always zero
+    for i in (0, 1):
+        cl[i].ask("SET", "t", "1")
+    time.sleep(0.2)
+    samples = []
+    for n in range(40):
+        for i in (1,):
+            cl[i].ask("GET", "t")
+    time.sleep(0.2)
+    stream = mon[1].drain()
+    me = "127.0.0.1:%d" % cl[1].s.getsockname()[1]
+    heads = re.findall(rb"^\+(\d+)\.(\d{6}) \[0 ([^\]]*)\]", stream, re.M)
+    check("lines have a time near now, in seconds", all(abs(int(h[0]) - time.time()) < 60 for h in heads) and len(heads) >= 40, True)
+    check("every line names the client that ran the command", set(h[2].decode() for h in heads), {me})
+    check("the microseconds are not all zero", any(h[1] != b"000000" for h in heads), True)
 
     # what a watching connection may run itself
     for i in (0, 1):

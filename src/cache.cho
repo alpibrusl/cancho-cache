@@ -341,7 +341,7 @@ fn put_repr[&b, &d](sc: &!b [byte], at: int, data: &d [byte]) -> [] int {
 }
 
 // Show the command `tb` describes in `view`, which connection `k` has just run, to every connection in `MONITOR` mode (`docs/design.md` section 34): `+<seconds>.<microseconds> [0
-// <address>] "arg" ...`, the arguments of `AUTH` redacted, the commands `MONITOR` leaves out (`cmdnames.skips_monitor`) not shown. The line is built in `sc` after `at`; a watching
+// <address>] "arg" ...`, the arguments of `AUTH` redacted, the commands `MONITOR` leaves out (`cmdnames.skips_monitor`, which includes `MONITOR`) not shown. The line is built in `sc` after `at`; a watching
 // connection that cannot take it (its queue is full) is closed, as Redis closes a client that falls too far behind. If `k` is itself watching its line goes after its own answer:
 // the answer is `at` bytes, and the new `at` is answered.
 fn monitor_feed[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], sc: &!b [byte], at: int) -> [conn_write, poll] int {
@@ -353,7 +353,7 @@ fn monitor_feed[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int
     if tb[0] >= 2 {
         sub = reply.arg_of(view, tb, 1);
     }
-    if reply.is_word(reply.arg_of(view, tb, 0), "MONITOR") || cmdnames.skips_monitor(idx, sub) {
+    if cmdnames.skips_monitor(idx, sub) {
         return at;
     }
     let st = contents(core.state);

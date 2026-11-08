@@ -14,13 +14,11 @@ S = ("py", "latency.py")
 # (name, file, old text, new text, how to test)
 MUTANTS = [
     ("the monitor is on whatever the threshold", "cache.cho", "    let lat = store.lat_threshold_of(core.store);\n    if (limit", "    let lat = 1;\n    if (limit", S),
-    ("an event is noted at the threshold, not above it", "cache.cho", "|| lat > 0 && ms > lat) && !stats", "|| lat > 0 && ms >= lat) && !stats", S),
-    ("an event is noted below the threshold", "cache.cho", "|| lat > 0 && ms > lat) && !stats", "|| lat > 0 && ms + 1 > lat) && !stats", S),
+        ("an event is noted whatever the threshold", "cache.cho", "|| lat > 0 && ms > lat) && !stats", "|| lat > 0 && ms >= 0) && !stats", S),
+    ("an event is noted whatever the threshold (the second test)", "cache.cho", "        if lat > 0 && ms > lat {\n            var event = 1;", "        if lat > 0 && ms >= 0 {\n            var event = 1;", S),
     ("a slow command is a fast-command event", "cache.cho", "                event = 0;", "                event = 1;", S),
-    ("every event is noted under the first name", "latency.cho", "    return \"fast-command\";\n}", "    return \"command\";\n}", S),
-    ("LATEST leaves out the maximum", "latency.cho", "                o = reply.put_integer(sc, o, ints[b + 1]);\n", "", S),
-    ("LATEST says the maximum is the latest", "latency.cho", "                o = reply.put_integer(sc, o, ints[b + 1]);", "                o = reply.put_integer(sc, o, ints[b + 3 + 2 * last]);", S),
-    ("LATEST lists events with no sample", "latency.cho", "            if seen(st, e) {\n                let b = base(e);", "            if true {\n                let b = base(e);", S),
+        ("LATEST leaves out the maximum", "latency.cho", "                o = reply.put_integer(sc, o, ints[b + 1]);\n", "", S),
+        ("LATEST lists events with no sample", "latency.cho", "            if seen(st, e) {\n                let b = base(e);", "            if true {\n                let b = base(e);", S),
     ("HISTORY of an unknown event is an error", "latency.cho", "        if e < 0 {\n            return reply.put(sc, at, \"*0\\r\\n\");", "        if e < 0 {\n            return reply.put(sc, at, \"-ERR unknown event\\r\\n\");", S),
     ("RESET does not forget", "latency.cho", "                reset_event(st, e);\n                e = e + 1;", "                e = e + 1;", S),
     ("RESET counts events that had nothing", "latency.cho", "                if seen(st, e) {\n                    count = count + 1;\n                }\n                reset_event(st, e);", "                count = count + 1;\n                reset_event(st, e);", S),

@@ -131,6 +131,14 @@ try:
         x.ask("KEYS", "*")
     same("LATENCY", "RESET")
     same("LATENCY", "RESET")
+    # --- a threshold nothing reaches: no samples
+    for x in (r, c):
+        x.ask("CONFIG", "SET", "latency-monitor-threshold", "3600000")
+        x.ask("KEYS", "*")
+    same("LATENCY", "LATEST")
+    same("LATENCY", "HISTORY", "command")
+    for x in (r, c):
+        x.ask("CONFIG", "SET", "latency-monitor-threshold", "1")
     # --- switched off again, the samples are not taken
     for x in (r, c):
         x.ask("CONFIG", "SET", "latency-monitor-threshold", "0")
@@ -156,6 +164,12 @@ try:
     c.ask("SET", "k2", "v" * 1000)
     check("a longer value takes more", c.ask("MEMORY", "USAGE", "k2") > c.ask("MEMORY", "USAGE", "k"), True)
     stats = [x.ask("MEMORY", "STATS") for x in (r, c)]
+    # with more than 5 MiB of data neither instance is "empty or using very little memory"
+    for x in (r, c):
+        for i in range(0, 400, 100):
+            x.pipeline([("SET", "big%d" % j, "v" * 16000) for j in range(i, i + 100)])
+    # (Redis writes an analysis of what it finds; this cache has nothing to analyse and says so in the same voice)
+    check("MEMORY DOCTOR with data to look at", c.ask("MEMORY", "DOCTOR").startswith("Hi Sam, I can't find any memory issue"), True)
     rs = dict(zip(stats[0][0::2], stats[0][1::2]))
     cs = dict(zip(stats[1][0::2], stats[1][1::2]))
     check("MEMORY STATS names are Redis's", sorted(set(cs) - set(rs)), [])

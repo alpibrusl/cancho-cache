@@ -169,13 +169,16 @@ try:
                 c.ask("SET", key, value)
             model[key] = ("string", value, ttl)
     c.ask("SET", "ends-soon", "x", "PX", "300")
+    c.ask("SET", "ends-while-down", "x", "PX", "1500")
     time.sleep(0.5)
     check("SAVE of the dataset", c.ask("SAVE"), ("+", "OK"))
     snap1 = open(os.path.join(d, "dump.cho"), "rb").read()
     stop(p)
+    time.sleep(1.5)
     # --- restart and compare
     p, c = start(d)
     check("DBSIZE after restart", c.ask("DBSIZE"), len(model))
+    check("a key that ended while the cache was down is not there", c.ask("GET", "ends-while-down"), None)
     wrong = 0
     for key, (kind, value, ttl) in model.items():
         if kind == "string":
@@ -198,7 +201,17 @@ try:
     # --- the same bytes again
     check("SAVE after the load", c.ask("SAVE"), ("+", "OK"))
     snap2 = open(os.path.join(d, "dump.cho"), "rb").read()
-    check("the records of a snapshot of a loaded cache are the same bytes", snap2[32:-8], snap1[32:-8])
+    def records(snapshot):
+        out, at = [], 32
+        while at < len(snapshot) - 8:
+            klen, vlen, kind, ends = struct.unpack("<QQQQ", snapshot[at:at + 32])
+            end = at + 32 + klen + vlen
+            out.append((snapshot[at + 32:at + 32 + klen], snapshot[at:end]))
+            at = end
+        return out
+
+    kept = [r for k, r in records(snap1) if k != b"ends-while-down"]
+    check("a snapshot of a loaded cache has the same records, in the same order, but for the key that ended", [r for k, r in records(snap2)], kept)
     stop(p)
 
     # --- every way a file can be wrong
@@ -240,6 +253,13 @@ try:
     open(os.path.join(dd, "dump.cho"), "wb").write(seal(header(1) + record(b"k", b"v" * (3 << 20))))
     p, c = start(dd)
     check("the same value fits a 64 MiB arena", c.ask("STRLEN", "k"), 3 << 20)
+    stop(p)
+    # a key that has already ended is not loaded at all: this one would not fit a 1 MiB arena, and the start does not notice it
+    dd = os.path.join(work, "ended")
+    os.mkdir(dd)
+    open(os.path.join(dd, "dump.cho"), "wb").write(seal(header(1) + record(b"k", b"v" * (3 << 20), ends=1)))
+    p, c = start(dd, memory="1")
+    check("an ended key too big for the arena is not loaded, and not refused", c.ask("DBSIZE") if c else "refused", 0)
     stop(p)
     # --- the directory
     got = refused(os.path.join(work, "no-such-dir"))
@@ -291,6 +311,22 @@ try:
         check("create, sync the file, rename, sync the directory (in that order)", events, ["create", "sync-file", "rename", "sync-dir"])
     else:
         print("SKIPPED the order of the calls (no strace)")
+    # a SAVE that cannot be written says so, and leaves the old snapshot as it was
+    dd = os.path.join(work, "blocked")
+    os.mkdir(dd)
+    p, c = start(dd)
+    c.ask("SET", "a", "1")
+    check("a first SAVE", c.ask("SAVE"), ("+", "OK"))
+    before = open(os.path.join(dd, "dump.cho"), "rb").read()
+    c.ask("SET", "b", "2")
+    os.mkdir(os.path.join(dd, "dump.tmp"))
+    got = c.ask("SAVE")
+    check("a SAVE that cannot be written is an error", got[0], "-")
+    check("and says why", "could not be written" in got[1], True)
+    check("and the old snapshot is as it was", open(os.path.join(dd, "dump.cho"), "rb").read(), before)
+    os.rmdir(os.path.join(dd, "dump.tmp"))
+    check("the next SAVE works", c.ask("SAVE"), ("+", "OK"))
+    stop(p)
     # an absent file is a first start
     dd = os.path.join(work, "empty")
     os.mkdir(dd)

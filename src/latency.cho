@@ -1,0 +1,207 @@
+edition 5;
+
+module latency;
+
+import reply;
+import store;
+
+// `latency` -- the latency monitor (`docs/design.md` section 33): `LATENCY LATEST`, `HISTORY`, `RESET` and `DOCTOR`, and `record`, which the loop calls for a command that took
+// `latency-monitor-threshold` milliseconds or more. Two events, `command` and `fast-command` (a command that cannot be slow, `cmdnames.may_be_slow`); each keeps its last
+// 160 samples in the store (`store.lat_block()` ints), a sample once a second at most (a second sample in the same second keeps the longer, as Redis does).
+
+pub fn event_name(i: int) -> [] &static [byte] {
+    if i == 0 {
+        return "command";
+    }
+    return "fast-command";
+}
+
+fn base(event: int) -> [] int {
+    return event * store.lat_block();
+}
+
+// Note that `event` took `ms` milliseconds, at `secs` (time of day, never 0).
+pub fn record[&s](st: &!s store.Store, event: int, secs: int, ms: int) -> [] int {
+    let ints = store.lat_ints(st);
+    let b = base(event);
+    let last = (ints[b] + store.lat_samples() - 1) % store.lat_samples();
+    if ints[b + 2 + 2 * last] == secs {
+        if ms > ints[b + 3 + 2 * last] {
+            ints[b + 3 + 2 * last] = ms;
+        }
+    } else {
+        let next = ints[b];
+        ints[b + 2 + 2 * next] = secs;
+        ints[b + 3 + 2 * next] = ms;
+        ints[b] = (next + 1) % store.lat_samples();
+    }
+    if ms > ints[b + 1] {
+        ints[b + 1] = ms;
+    }
+    return 0;
+}
+
+// Whether the event has any sample.
+fn seen[&s](st: &!s store.Store, event: int) -> [] bool {
+    let ints = store.lat_ints(st);
+    let b = base(event);
+    var i = 0;
+    while i < store.lat_samples() {
+        if ints[b + 2 + 2 * i] != 0 {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn reset_event[&s](st: &!s store.Store, event: int) -> [] int {
+    let ints = store.lat_ints(st);
+    let b = base(event);
+    var i = 0;
+    while i < store.lat_block() {
+        ints[b + i] = 0;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn event_named[&n](name: &n [byte]) -> [] int {
+    var i = 0;
+    while i < store.lat_events() {
+        if reply.is_word_exact(name, event_name(i)) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn unsupported[&b](sc: &!b [byte], at: int, what: &static [byte]) -> [] int {
+    return reply.put(sc, reply.put(sc, reply.put(sc, at, "-ERR LATENCY "), what), " is not supported by this cache (docs/design.md section 33)\r\n");
+}
+
+// `LATENCY LATEST|HISTORY event|RESET [event ...]|DOCTOR`.
+pub fn command[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], at: int, st: &!s store.Store) -> [] int {
+    let argc = table[0];
+    let sub = reply.arg_of(view, table, 1);
+    let ints = store.lat_ints(st);
+    if reply.is_word(sub, "LATEST") {
+        if argc != 2 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'latency|latest' command\r\n");
+        }
+        var n = 0;
+        var e = 0;
+        while e < store.lat_events() {
+            if seen(st, e) {
+                n = n + 1;
+            }
+            e = e + 1;
+        }
+        var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), n), "\r\n");
+        e = 0;
+        while e < store.lat_events() {
+            if seen(st, e) {
+                let b = base(e);
+                let last = (ints[b] + store.lat_samples() - 1) % store.lat_samples();
+                o = reply.put(sc, o, "*4\r\n");
+                o = reply.put_bulk(sc, o, event_name(e));
+                o = reply.put_integer(sc, o, ints[b + 2 + 2 * last]);
+                o = reply.put_integer(sc, o, ints[b + 3 + 2 * last]);
+                o = reply.put_integer(sc, o, ints[b + 1]);
+            }
+            e = e + 1;
+        }
+        return o;
+    }
+    if reply.is_word(sub, "HISTORY") {
+        if argc != 3 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'latency|history' command\r\n");
+        }
+        let e = event_named(reply.arg_of(view, table, 2));
+        if e < 0 {
+            return reply.put(sc, at, "*0\r\n");
+        }
+        let b = base(e);
+        var n = 0;
+        var j = 0;
+        while j < store.lat_samples() {
+            if ints[b + 2 + 2 * ((ints[b] + j) % store.lat_samples())] != 0 {
+                n = n + 1;
+            }
+            j = j + 1;
+        }
+        var o = reply.put(sc, reply.put_nat(sc, reply.put(sc, at, "*"), n), "\r\n");
+        j = 0;
+        while j < store.lat_samples() {
+            let i = (ints[b] + j) % store.lat_samples();
+            if ints[b + 2 + 2 * i] != 0 {
+                o = reply.put(sc, o, "*2\r\n");
+                o = reply.put_integer(sc, o, ints[b + 2 + 2 * i]);
+                o = reply.put_integer(sc, o, ints[b + 3 + 2 * i]);
+            }
+            j = j + 1;
+        }
+        return o;
+    }
+    if reply.is_word(sub, "RESET") {
+        var count = 0;
+        if argc == 2 {
+            var e = 0;
+            while e < store.lat_events() {
+                if seen(st, e) {
+                    count = count + 1;
+                }
+                reset_event(st, e);
+                e = e + 1;
+            }
+        } else {
+            var i = 2;
+            while i < argc {
+                let e = event_named(reply.arg_of(view, table, i));
+                if e >= 0 && seen(st, e) {
+                    count = count + 1;
+                    reset_event(st, e);
+                }
+                i = i + 1;
+            }
+        }
+        return reply.put_integer(sc, at, count);
+    }
+    if reply.is_word(sub, "DOCTOR") {
+        if argc != 2 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'latency|doctor' command\r\n");
+        }
+        if store.lat_threshold_of(st) == 0 {
+            return reply.put_bulk(sc, at, "I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Redis instance. You may use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it. If we weren't in a deep space mission I'd suggest to take a look at https://redis.io/topics/latency-monitor.\n");
+        }
+        var any = false;
+        var e = 0;
+        while e < store.lat_events() {
+            if seen(st, e) {
+                any = true;
+            }
+            e = e + 1;
+        }
+        if any {
+            return unsupported(sc, at, "DOCTOR with events to report");
+        }
+        return reply.put_bulk(sc, at, "Dave, no latency spike was observed during the lifetime of this Redis instance, not in the slightest bit. I honestly think you ought to sit down calmly, take a stress pill, and think things over.\n");
+    }
+    if reply.is_word(sub, "GRAPH") {
+        return unsupported(sc, at, "GRAPH");
+    }
+    if reply.is_word(sub, "HISTOGRAM") {
+        return unsupported(sc, at, "HISTOGRAM");
+    }
+    if reply.is_word(sub, "HELP") {
+        return unsupported(sc, at, "HELP");
+    }
+    var shown = len(sub);
+    if shown > 128 {
+        shown = 128;
+    }
+    var o = reply.put(sc, at, "-ERR unknown subcommand '");
+    o = reply.put(sc, o, sub[0..shown]);
+    return reply.put(sc, o, "'. Try LATENCY HELP.\r\n");
+}

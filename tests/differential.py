@@ -494,7 +494,7 @@ cases += [
 import glob as _glob
 _names = sorted({n for f in _glob.glob(os.path.join(os.path.dirname(__file__), "..", "src", "*.cho")) if not f.endswith("cmdinfo.cho") for n in re.findall(r'is_word\(name, "([A-Z]+)"\)', open(f).read())})
 # Not these: Redis lists their subcommands in a different order in each process; tests/keyspace.py compares them with the subcommands sorted.
-for _n in [n for n in _names if n not in ("CLIENT", "CLUSTER", "COMMAND", "CONFIG", "OBJECT", "SLOWLOG")]:
+for _n in [n for n in _names if n not in ("CLIENT", "CLUSTER", "COMMAND", "CONFIG", "OBJECT", "SLOWLOG", "LATENCY", "MEMORY")]:
     cases.append(("COMMAND INFO %s" % _n.lower(), seq(("COMMAND", "INFO", _n.lower()))))
     cases.append(("COMMAND INFO %s, RESP3" % _n.lower(), seq(("HELLO", "3"), ("COMMAND", "INFO", _n))))
     cases.append(("COMMAND DOCS %s" % _n.lower(), seq(("COMMAND", "DOCS", _n.lower()))))

@@ -280,6 +280,18 @@ pub fn put_docs[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -
         }
         return (true, reply.put(sc, at, "$4\r\nkeys\r\n*10\r\n$7\r\nsummary\r\n$40\r\nFind all keys matching the given pattern\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$152\r\nO(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$7\r\npattern\r\n$4\r\ntype\r\n$7\r\npattern\r\n"));
     }
+    if reply.is_word(name, "LATENCY") {
+        if resp3 {
+            return (true, reply.put(sc, at, "$7\r\nlatency\r\n%5\r\n$7\r\nsummary\r\n$44\r\nA container for latency diagnostics commands\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$22\r\nDepends on subcommand.\r\n$11\r\nsubcommands\r\n%7\r\n$12\r\nlatency|help\r\n%4\r\n$7\r\nsummary\r\n$50\r\nShow helpful text about the different subcommands.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$13\r\nlatency|graph\r\n%5\r\n$7\r\nsummary\r\n$37\r\nReturn a latency graph for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%2\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$13\r\nlatency|reset\r\n%5\r\n$7\r\nsummary\r\n$42\r\nReset latency data for one or more events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n~2\r\n+optional\r\n+multiple\r\n$14\r\nlatency|doctor\r\n%4\r\n$7\r\nsummary\r\n$48\r\nReturn a human readable latency analysis report.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$14\r\nlatency|latest\r\n%4\r\n$7\r\nsummary\r\n$49\r\nReturn the latest latency samples for all events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$15\r\nlatency|history\r\n%5\r\n$7\r\nsummary\r\n$47\r\nReturn timestamp-latency samples for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%2\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$17\r\nlatency|histogram\r\n%5\r\n$7\r\nsummary\r\n$79\r\nReturn the cumulative distribution of latencies of a subset of commands or all.\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$80\r\nO(N) where N is the number of commands with latency information being retrieved.\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$7\r\ncommand\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n~2\r\n+optional\r\n+multiple\r\n"));
+        }
+        return (true, reply.put(sc, at, "$7\r\nlatency\r\n*10\r\n$7\r\nsummary\r\n$44\r\nA container for latency diagnostics commands\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$22\r\nDepends on subcommand.\r\n$11\r\nsubcommands\r\n*14\r\n$12\r\nlatency|help\r\n*8\r\n$7\r\nsummary\r\n$50\r\nShow helpful text about the different subcommands.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$13\r\nlatency|graph\r\n*10\r\n$7\r\nsummary\r\n$37\r\nReturn a latency graph for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$13\r\nlatency|reset\r\n*10\r\n$7\r\nsummary\r\n$42\r\nReset latency data for one or more events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n*2\r\n+optional\r\n+multiple\r\n$14\r\nlatency|doctor\r\n*8\r\n$7\r\nsummary\r\n$48\r\nReturn a human readable latency analysis report.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$14\r\nlatency|latest\r\n*8\r\n$7\r\nsummary\r\n$49\r\nReturn the latest latency samples for all events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$15\r\nlatency|history\r\n*10\r\n$7\r\nsummary\r\n$47\r\nReturn timestamp-latency samples for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$17\r\nlatency|histogram\r\n*10\r\n$7\r\nsummary\r\n$79\r\nReturn the cumulative distribution of latencies of a subset of commands or all.\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$80\r\nO(N) where N is the number of commands with latency information being retrieved.\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$7\r\ncommand\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n*2\r\n+optional\r\n+multiple\r\n"));
+    }
+    if reply.is_word(name, "MEMORY") {
+        if resp3 {
+            return (true, reply.put(sc, at, "$6\r\nmemory\r\n%5\r\n$7\r\nsummary\r\n$43\r\nA container for memory diagnostics commands\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$22\r\nDepends on subcommand.\r\n$11\r\nsubcommands\r\n%6\r\n$11\r\nmemory|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$12\r\nmemory|purge\r\n%4\r\n$7\r\nsummary\r\n$35\r\nAsk the allocator to release memory\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n$12\r\nmemory|stats\r\n%4\r\n$7\r\nsummary\r\n$25\r\nShow memory usage details\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$12\r\nmemory|usage\r\n%5\r\n$7\r\nsummary\r\n$34\r\nEstimate the memory usage of a key\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$38\r\nO(N) where N is the number of samples.\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n%4\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$7\r\nSAMPLES\r\n$5\r\nflags\r\n~1\r\n+optional\r\n$13\r\nmemory|doctor\r\n%4\r\n$7\r\nsummary\r\n$30\r\nOutputs memory problems report\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$19\r\nmemory|malloc-stats\r\n%4\r\n$7\r\nsummary\r\n$29\r\nShow allocator internal stats\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n"));
+        }
+        return (true, reply.put(sc, at, "$6\r\nmemory\r\n*10\r\n$7\r\nsummary\r\n$43\r\nA container for memory diagnostics commands\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$22\r\nDepends on subcommand.\r\n$11\r\nsubcommands\r\n*12\r\n$11\r\nmemory|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$12\r\nmemory|purge\r\n*8\r\n$7\r\nsummary\r\n$35\r\nAsk the allocator to release memory\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n$12\r\nmemory|stats\r\n*8\r\n$7\r\nsummary\r\n$25\r\nShow memory usage details\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$12\r\nmemory|usage\r\n*10\r\n$7\r\nsummary\r\n$34\r\nEstimate the memory usage of a key\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$38\r\nO(N) where N is the number of samples.\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n*8\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$7\r\nSAMPLES\r\n$5\r\nflags\r\n*1\r\n+optional\r\n$13\r\nmemory|doctor\r\n*8\r\n$7\r\nsummary\r\n$30\r\nOutputs memory problems report\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$19\r\nmemory|malloc-stats\r\n*8\r\n$7\r\nsummary\r\n$29\r\nShow allocator internal stats\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n"));
+    }
     if reply.is_word(name, "MGET") {
         if resp3 {
             return (true, reply.put(sc, at, "$4\r\nmget\r\n%5\r\n$7\r\nsummary\r\n$36\r\nGet the values of all the given keys\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\nstring\r\n$10\r\ncomplexity\r\n$47\r\nO(N) where N is the number of keys to retrieve.\r\n$9\r\narguments\r\n*1\r\n%4\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n$5\r\nflags\r\n~1\r\n+multiple\r\n"));
@@ -827,6 +839,88 @@ pub fn put_sub_docs[&w, &s, &b](name: &w [byte], sub: &s [byte], sc: &!b [byte],
             return (true, reply.put(sc, at, "$10\r\nconfig|set\r\n*12\r\n$7\r\nsummary\r\n$48\r\nSet configuration parameters to the given values\r\n$5\r\nsince\r\n$5\r\n2.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$62\r\nO(N) when N is the number of configuration parameters provided\r\n$7\r\nhistory\r\n*1\r\n*2\r\n$5\r\n7.0.0\r\n$57\r\nAdded the ability to set multiple parameters in one call.\r\n$9\r\narguments\r\n*1\r\n*8\r\n$4\r\nname\r\n$15\r\nparameter_value\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\nflags\r\n*1\r\n+multiple\r\n$9\r\narguments\r\n*2\r\n*4\r\n$4\r\nname\r\n$9\r\nparameter\r\n$4\r\ntype\r\n$6\r\nstring\r\n*4\r\n$4\r\nname\r\n$5\r\nvalue\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
         }
     }
+    if reply.is_word(name, "LATENCY") {
+        if reply.is_word(sub, "DOCTOR") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nlatency|doctor\r\n%4\r\n$7\r\nsummary\r\n$48\r\nReturn a human readable latency analysis report.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nlatency|doctor\r\n*8\r\n$7\r\nsummary\r\n$48\r\nReturn a human readable latency analysis report.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "GRAPH") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$13\r\nlatency|graph\r\n%5\r\n$7\r\nsummary\r\n$37\r\nReturn a latency graph for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%2\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+            }
+            return (true, reply.put(sc, at, "$13\r\nlatency|graph\r\n*10\r\n$7\r\nsummary\r\n$37\r\nReturn a latency graph for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nlatency|help\r\n%4\r\n$7\r\nsummary\r\n$50\r\nShow helpful text about the different subcommands.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nlatency|help\r\n*8\r\n$7\r\nsummary\r\n$50\r\nShow helpful text about the different subcommands.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "HISTOGRAM") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$17\r\nlatency|histogram\r\n%5\r\n$7\r\nsummary\r\n$79\r\nReturn the cumulative distribution of latencies of a subset of commands or all.\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$80\r\nO(N) where N is the number of commands with latency information being retrieved.\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$7\r\ncommand\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n~2\r\n+optional\r\n+multiple\r\n"));
+            }
+            return (true, reply.put(sc, at, "$17\r\nlatency|histogram\r\n*10\r\n$7\r\nsummary\r\n$79\r\nReturn the cumulative distribution of latencies of a subset of commands or all.\r\n$5\r\nsince\r\n$5\r\n7.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$80\r\nO(N) where N is the number of commands with latency information being retrieved.\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$7\r\ncommand\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n*2\r\n+optional\r\n+multiple\r\n"));
+        }
+        if reply.is_word(sub, "HISTORY") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$15\r\nlatency|history\r\n%5\r\n$7\r\nsummary\r\n$47\r\nReturn timestamp-latency samples for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%2\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+            }
+            return (true, reply.put(sc, at, "$15\r\nlatency|history\r\n*10\r\n$7\r\nsummary\r\n$47\r\nReturn timestamp-latency samples for the event.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*4\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
+        }
+        if reply.is_word(sub, "LATEST") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$14\r\nlatency|latest\r\n%4\r\n$7\r\nsummary\r\n$49\r\nReturn the latest latency samples for all events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$14\r\nlatency|latest\r\n*8\r\n$7\r\nsummary\r\n$49\r\nReturn the latest latency samples for all events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "RESET") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$13\r\nlatency|reset\r\n%5\r\n$7\r\nsummary\r\n$42\r\nReset latency data for one or more events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n%3\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n~2\r\n+optional\r\n+multiple\r\n"));
+            }
+            return (true, reply.put(sc, at, "$13\r\nlatency|reset\r\n*10\r\n$7\r\nsummary\r\n$42\r\nReset latency data for one or more events.\r\n$5\r\nsince\r\n$6\r\n2.8.13\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n$9\r\narguments\r\n*1\r\n*6\r\n$4\r\nname\r\n$5\r\nevent\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\nflags\r\n*2\r\n+optional\r\n+multiple\r\n"));
+        }
+    }
+    if reply.is_word(name, "MEMORY") {
+        if reply.is_word(sub, "DOCTOR") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$13\r\nmemory|doctor\r\n%4\r\n$7\r\nsummary\r\n$30\r\nOutputs memory problems report\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$13\r\nmemory|doctor\r\n*8\r\n$7\r\nsummary\r\n$30\r\nOutputs memory problems report\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "HELP") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$11\r\nmemory|help\r\n%4\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$11\r\nmemory|help\r\n*8\r\n$7\r\nsummary\r\n$49\r\nShow helpful text about the different subcommands\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "MALLOC-STATS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$19\r\nmemory|malloc-stats\r\n%4\r\n$7\r\nsummary\r\n$29\r\nShow allocator internal stats\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n"));
+            }
+            return (true, reply.put(sc, at, "$19\r\nmemory|malloc-stats\r\n*8\r\n$7\r\nsummary\r\n$29\r\nShow allocator internal stats\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n"));
+        }
+        if reply.is_word(sub, "PURGE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nmemory|purge\r\n%4\r\n$7\r\nsummary\r\n$35\r\nAsk the allocator to release memory\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nmemory|purge\r\n*8\r\n$7\r\nsummary\r\n$35\r\nAsk the allocator to release memory\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$54\r\nDepends on how much memory is allocated, could be slow\r\n"));
+        }
+        if reply.is_word(sub, "STATS") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nmemory|stats\r\n%4\r\n$7\r\nsummary\r\n$25\r\nShow memory usage details\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nmemory|stats\r\n*8\r\n$7\r\nsummary\r\n$25\r\nShow memory usage details\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
+        }
+        if reply.is_word(sub, "USAGE") {
+            if resp3 {
+                return (true, reply.put(sc, at, "$12\r\nmemory|usage\r\n%5\r\n$7\r\nsummary\r\n$34\r\nEstimate the memory usage of a key\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$38\r\nO(N) where N is the number of samples.\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n%4\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$7\r\nSAMPLES\r\n$5\r\nflags\r\n~1\r\n+optional\r\n"));
+            }
+            return (true, reply.put(sc, at, "$12\r\nmemory|usage\r\n*10\r\n$7\r\nsummary\r\n$34\r\nEstimate the memory usage of a key\r\n$5\r\nsince\r\n$5\r\n4.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$38\r\nO(N) where N is the number of samples.\r\n$9\r\narguments\r\n*2\r\n*6\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n*8\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$7\r\nSAMPLES\r\n$5\r\nflags\r\n*1\r\n+optional\r\n"));
+        }
+    }
     if reply.is_word(name, "OBJECT") {
         if reply.is_word(sub, "ENCODING") {
             if resp3 {
@@ -936,6 +1030,8 @@ pub fn put_all_docs[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_docs("INCRBY", sc, o, resp3).1;
     o = put_docs("INFO", sc, o, resp3).1;
     o = put_docs("KEYS", sc, o, resp3).1;
+    o = put_docs("LATENCY", sc, o, resp3).1;
+    o = put_docs("MEMORY", sc, o, resp3).1;
     o = put_docs("MGET", sc, o, resp3).1;
     o = put_docs("MSET", sc, o, resp3).1;
     o = put_docs("MSETNX", sc, o, resp3).1;

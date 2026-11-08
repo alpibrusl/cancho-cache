@@ -8,6 +8,7 @@ import clients;
 import cluster;
 import cmdnames;
 import commands;
+import latency;
 import pool;
 import reply;
 import resp;
@@ -255,16 +256,31 @@ fn pump_get[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int, ops: int, ope:
 fn slow_timed[&c, &v, &w](core: &c Core, view: &v [byte], tb: &w [int], idx: int) -> [] bool {
     let limit = store.slow_threshold_of(core.store);
     // `CONFIG` is always timed: it may be the command that switches the log on, and it is then judged by the new threshold.
-    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx)) || tb[0] > 0 && reply.is_word(reply.arg_of(view, tb, 0), "CONFIG");
+    // The latency monitor (`docs/design.md` section 33) reads the same clock: with a threshold of a millisecond any command may reach it.
+    let lat = store.lat_threshold_of(core.store);
+    return limit >= 0 && (limit <= 1000 || tb[0] > 8 || cmdnames.may_be_slow(idx)) || lat > 0 && (lat <= 1 || tb[0] > 8 || cmdnames.may_be_slow(idx)) || tb[0] > 0 && reply.is_word(reply.arg_of(view, tb, 0), "CONFIG");
 }
 
 // After a timed command ran: it took until now from `began`; if that is as long as the threshold (as it is *now*, so that the command that sets it is judged by the new
 // value, as in Redis) it is logged.
 fn slow_after[&t, &c, &v, &w, &q, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], began: int, clock: &q Clock, sc: &b [byte], from: int, to: int) -> [clock] int {
-    let took = (clock_ms(clock) - began) * 1000;
+    // The clock counts whole milliseconds, so a command that took 0.1 ms across a tick reads as 1: an event is noted only when the reading is *more* than the threshold, which
+    // means the command really took longer (`docs/design.md` section 33).
+    let ms = clock_ms(clock) - began;
+    let took = ms * 1000;
     let limit = store.slow_threshold_of(core.store);
-    if limit >= 0 && took >= limit && !stats.did_not_run(sc, from, to) {
-        slow_note(tab, core, k, view, tb, took);
+    let lat = store.lat_threshold_of(core.store);
+    if (limit >= 0 && took >= limit || lat > 0 && ms > lat) && !stats.did_not_run(sc, from, to) {
+        if limit >= 0 && took >= limit {
+            slow_note(tab, core, k, view, tb, took);
+        }
+        if lat > 0 && ms > lat {
+            var event = 1;
+            if cmdnames.may_be_slow(cmdnames.index_of(reply.arg_of(view, tb, 0))) {
+                event = 0;
+            }
+            latency.record(core.store, event, (store.wall_of(core.store) + store.now_of(core.store)) / 1000, ms);
+        }
     }
     return 0;
 }

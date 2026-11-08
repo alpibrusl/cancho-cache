@@ -310,6 +310,51 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
     if reply.is_word(name, "KEYS") {
         return (true, 2, 0, 0, 0);
     }
+    if reply.is_word(name, "LATENCY") {
+        if reply.is_word(sub, "DOCTOR") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "GRAPH") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HISTOGRAM") {
+            return (true, -2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HISTORY") {
+            return (true, 3, 0, 0, 0);
+        }
+        if reply.is_word(sub, "LATEST") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "RESET") {
+            return (true, -2, 0, 0, 0);
+        }
+        return (false, 0, 0, 0, 0);
+    }
+    if reply.is_word(name, "MEMORY") {
+        if reply.is_word(sub, "DOCTOR") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "HELP") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "MALLOC-STATS") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "PURGE") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "STATS") {
+            return (true, 2, 0, 0, 0);
+        }
+        if reply.is_word(sub, "USAGE") {
+            return (true, -3, 2, 2, 1);
+        }
+        return (false, 0, 0, 0, 0);
+    }
     if reply.is_word(name, "MGET") {
         return (true, -2, 1, -1, 1);
     }
@@ -601,6 +646,11 @@ pub fn spec_info[&w, &s](name: &w [byte], sub: &s [byte], n: int) -> [] (int, in
     if reply.is_word(name, "INCRBY") {
         if n == 0 {
             return (1, 0, 1);
+        }
+    }
+    if reply.is_word(name, "MEMORY") && reply.is_word(sub, "USAGE") {
+        if n == 0 {
+            return (2, 0, 1);
         }
     }
     if reply.is_word(name, "MGET") {
@@ -996,6 +1046,14 @@ pub fn put_spec_flags[&w, &s, &b](name: &w [byte], sub: &s [byte], n: int, sc: &
                 return reply.put(sc, at, "~3\r\n+RW\r\n+access\r\n+update\r\n");
             }
             return reply.put(sc, at, "*3\r\n+RW\r\n+access\r\n+update\r\n");
+        }
+    }
+    if reply.is_word(name, "MEMORY") && reply.is_word(sub, "USAGE") {
+        if n == 0 {
+            if resp3 {
+                return reply.put(sc, at, "~1\r\n+RO\r\n");
+            }
+            return reply.put(sc, at, "*1\r\n+RO\r\n");
         }
     }
     if reply.is_word(name, "MGET") {

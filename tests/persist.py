@@ -16,6 +16,7 @@ import os, random, shutil, socket, struct, subprocess, sys, tempfile, time
 CACHE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "build", "cache")
 PORT = 6921
 failures = []
+processes = []
 
 
 def check(what, got, want):
@@ -76,6 +77,7 @@ def start(directory, *extra, memory="64"):
         pass
     argv = [CACHE, str(PORT), memory, "1000000", "noeviction", "1"] + (["--dir=" + directory] if directory else []) + list(extra)
     p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    processes.append(p)
     for _ in range(100):
         if p.poll() is not None:
             return p, None
@@ -251,6 +253,44 @@ try:
     check("SAVE over a left-over temporary file", c.ask("SAVE"), ("+", "OK"))
     check("only the snapshot is left", sorted(os.listdir(dd)), ["dump.cho"])
     stop(p)
+    # --- the order of the calls, read from the kernel's side: the file is synced before it is renamed into place, and the directory after
+    if shutil.which("strace"):
+        dd = os.path.join(work, "traced")
+        os.mkdir(dd)
+        trace = os.path.join(work, "trace.txt")
+        argv = ["strace", "-f", "-o", trace, "-e", "trace=openat,fsync,fdatasync,rename,renameat,renameat2", CACHE, str(PORT), "64", "1000000", "noeviction", "1", "--dir=" + dd]
+        tp = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        processes.append(tp)
+        c = None
+        for _ in range(100):
+            try:
+                c = Client()
+                break
+            except OSError:
+                time.sleep(0.05)
+        c.ask("SET", "a", "1")
+        check("SAVE under strace", c.ask("SAVE"), ("+", "OK"))
+        # strace's child is the cache: stop that, and strace ends with it
+        subprocess.run(["pkill", "-TERM", "-P", str(tp.pid)])
+        tp.wait(timeout=20)
+        lines = open(trace).read().split("\n")
+        events = []
+        fd_tmp, fd_dir = None, None
+        for l in lines:
+            body = l.split(None, 1)[1] if len(l.split(None, 1)) > 1 else l
+            if "dump.tmp" in body and "openat" in body and "O_CREAT" in body and "= " in body and not body.rstrip().endswith("-1 ENOENT"):
+                fd_tmp = int(body.rsplit("= ", 1)[1].split()[0])
+                events.append("create")
+            elif "openat" in body and "O_DIRECTORY" in body and dd in body and "= " in body:
+                fd_dir = int(body.rsplit("= ", 1)[1].split()[0])
+            elif body.startswith("fsync(") or body.startswith("fdatasync("):
+                fd = int(body[body.index("(") + 1:body.index(")")])
+                events.append("sync-file" if fd == fd_tmp else "sync-dir" if fd == fd_dir else "sync-other")
+            elif body.startswith("rename") and "dump.tmp" in body and "dump.cho" in body:
+                events.append("rename")
+        check("create, sync the file, rename, sync the directory (in that order)", events, ["create", "sync-file", "rename", "sync-dir"])
+    else:
+        print("SKIPPED the order of the calls (no strace)")
     # an absent file is a first start
     dd = os.path.join(work, "empty")
     os.mkdir(dd)
@@ -258,6 +298,11 @@ try:
     check("a first start has nothing", c.ask("DBSIZE"), 0)
     stop(p)
 finally:
+    # whatever happened, no server is left running to fool the next run
+    for p in processes:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
     shutil.rmtree(work, ignore_errors=True)
 
 if failures:

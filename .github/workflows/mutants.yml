@@ -78,7 +78,7 @@ jobs:
           mkdir -p target/release && cp standalone/cancho target/release/cancho
 
       - name: Redis, the oracle
-        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server
+        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server strace
 
       - name: Client libraries
         working-directory: cache

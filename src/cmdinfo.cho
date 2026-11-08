@@ -9,7 +9,7 @@ import reply;
 
 // How many commands the table holds.
 pub fn count() -> [] int {
-    return 81;
+    return 82;
 }
 
 // Write the entry of the command `name` (any case) from `at` and answer `(true, where it ends)`, or `(false, at)` if it is not in the table.
@@ -301,6 +301,12 @@ pub fn put_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) 
             return (true, reply.put(sc, at, "*10\r\n$4\r\nmget\r\n:-2\r\n~2\r\n+readonly\r\n+fast\r\n:1\r\n:-1\r\n:1\r\n~3\r\n+@read\r\n+@string\r\n+@fast\r\n~1\r\n$26\r\nrequest_policy:multi_shard\r\n~1\r\n%3\r\n$5\r\nflags\r\n~2\r\n+RO\r\n+access\r\n$12\r\nbegin_search\r\n%2\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n%1\r\n$5\r\nindex\r\n:1\r\n$9\r\nfind_keys\r\n%2\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n%3\r\n$7\r\nlastkey\r\n:-1\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n~0\r\n"));
         }
         return (true, reply.put(sc, at, "*10\r\n$4\r\nmget\r\n:-2\r\n*2\r\n+readonly\r\n+fast\r\n:1\r\n:-1\r\n:1\r\n*3\r\n+@read\r\n+@string\r\n+@fast\r\n*1\r\n$26\r\nrequest_policy:multi_shard\r\n*1\r\n*6\r\n$5\r\nflags\r\n*2\r\n+RO\r\n+access\r\n$12\r\nbegin_search\r\n*4\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n*2\r\n$5\r\nindex\r\n:1\r\n$9\r\nfind_keys\r\n*4\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n*6\r\n$7\r\nlastkey\r\n:-1\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n*0\r\n"));
+    }
+    if reply.is_word(name, "MONITOR") {
+        if resp3 {
+            return (true, reply.put(sc, at, "*10\r\n$7\r\nmonitor\r\n:1\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~0\r\n~0\r\n~0\r\n"));
+        }
+        return (true, reply.put(sc, at, "*10\r\n$7\r\nmonitor\r\n:1\r\n*4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*0\r\n*0\r\n*0\r\n"));
     }
     if reply.is_word(name, "MSET") {
         if resp3 {
@@ -647,6 +653,9 @@ pub fn known[&w](name: &w [byte]) -> [] bool {
         return true;
     }
     if reply.is_word(name, "MGET") {
+        return true;
+    }
+    if reply.is_word(name, "MONITOR") {
         return true;
     }
     if reply.is_word(name, "MSET") {
@@ -1314,6 +1323,7 @@ pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     o = reply.put_bulk(sc, o, "latency");
     o = reply.put_bulk(sc, o, "memory");
     o = reply.put_bulk(sc, o, "mget");
+    o = reply.put_bulk(sc, o, "monitor");
     o = reply.put_bulk(sc, o, "mset");
     o = reply.put_bulk(sc, o, "msetnx");
     o = reply.put_bulk(sc, o, "multi");
@@ -1401,6 +1411,7 @@ pub fn put_all[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_entry("LATENCY", sc, o, resp3).1;
     o = put_entry("MEMORY", sc, o, resp3).1;
     o = put_entry("MGET", sc, o, resp3).1;
+    o = put_entry("MONITOR", sc, o, resp3).1;
     o = put_entry("MSET", sc, o, resp3).1;
     o = put_entry("MSETNX", sc, o, resp3).1;
     o = put_entry("MULTI", sc, o, resp3).1;

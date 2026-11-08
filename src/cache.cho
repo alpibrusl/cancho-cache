@@ -94,8 +94,9 @@ fn output_size() -> [] int {
 //     18 when it connected (the store's milliseconds)
 //     19 when it last ran a command, and 20 which (`cmdnames.index_of`; -1 none): what `CLIENT LIST` shows as `idle` and `cmd`
 //     21 1 if `CLIENT KILL` chose it: the loop closes it (`docs/design.md` section 32)
+//     22 1 if it is in `MONITOR` mode (`docs/design.md` section 34)
 fn stride() -> [] int {
-    return 22;
+    return 23;
 }
 
 res struct Core {
@@ -186,6 +187,10 @@ fn return_blocks[&c](core: &!c Core, k: int) -> [] int {
 
 fn shut[&t, &c](tab: &!t conns.Table, core: &!c Core, k: int) -> [] int {
     let st = contents(core.state);
+    if st[stride() * k + 22] == 1 {
+        st[stride() * k + 22] = 0;
+        stats.add_monitors(contents(core.info), 0 - 1);
+    }
     conns.close(tab, k);
     // A value that was arriving is given up.
     if st[stride() * k + 13] != 0 && st[stride() * k + 13] != 4 && st[stride() * k + 14] >= 0 && st[stride() * k + 17] == store.epoch_of(core.store) {
@@ -304,10 +309,138 @@ fn slow_note[&t, &c, &v, &w](tab: &!t conns.Table, core: &!c Core, k: int, view:
     return 0;
 }
 
+// The text of `data` as Redis's `MONITOR` shows an argument: in quotes, `\\`, `\"`, `\n`, `\r`, `\t`, `\a` and `\b` escaped, other bytes outside 32..126 as `\xHH`.
+fn put_repr[&b, &d](sc: &!b [byte], at: int, data: &d [byte]) -> [] int {
+    let digits = "0123456789abcdef";
+    var o = reply.put_byte(sc, at, '"');
+    var i = 0;
+    while i < len(data) {
+        let ch = int_of(data[i]);
+        if ch == '\\' || ch == '"' {
+            o = reply.put_byte(sc, reply.put_byte(sc, o, '\\'), ch);
+        } else if ch == 10 {
+            o = reply.put(sc, o, "\\n");
+        } else if ch == 13 {
+            o = reply.put(sc, o, "\\r");
+        } else if ch == 9 {
+            o = reply.put(sc, o, "\\t");
+        } else if ch == 7 {
+            o = reply.put(sc, o, "\\a");
+        } else if ch == 8 {
+            o = reply.put(sc, o, "\\b");
+        } else if ch >= 32 && ch < 127 {
+            o = reply.put_byte(sc, o, ch);
+        } else {
+            o = reply.put(sc, o, "\\x");
+            o = reply.put_byte(sc, o, int_of(digits[ch / 16]));
+            o = reply.put_byte(sc, o, int_of(digits[ch % 16]));
+        }
+        i = i + 1;
+    }
+    return reply.put_byte(sc, o, '"');
+}
+
+// Show the command `tb` describes in `view`, which connection `k` has just run, to every connection in `MONITOR` mode (`docs/design.md` section 34): `+<seconds>.<microseconds> [0
+// <address>] "arg" ...`, the arguments of `AUTH` redacted, the commands `MONITOR` leaves out (`cmdnames.skips_monitor`) not shown. The line is built in `sc` after `at`; a watching
+// connection that cannot take it (its queue is full) is closed, as Redis closes a client that falls too far behind. If `k` is itself watching its line goes after its own answer:
+// the answer is `at` bytes, and the new `at` is answered.
+fn monitor_feed[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], sc: &!b [byte], at: int) -> [conn_write, poll] int {
+    if stats.monitors(contents(core.info)) == 0 || tb[0] < 1 {
+        return at;
+    }
+    let idx = cmdnames.index_of(reply.arg_of(view, tb, 0));
+    var sub = view[0..0];
+    if tb[0] >= 2 {
+        sub = reply.arg_of(view, tb, 1);
+    }
+    if reply.is_word(reply.arg_of(view, tb, 0), "MONITOR") || cmdnames.skips_monitor(idx, sub) {
+        return at;
+    }
+    let st = contents(core.state);
+    let pd = contents(core.pends);
+    let ms = store.wall_of(core.store) + store.now_of(core.store);
+    var o = reply.put_byte(sc, reply.put_nat(sc, reply.put_byte(sc, at, '+'), ms / 1000), '.');
+    let us = ms % 1000 * 1000;
+    var div = 100000;
+    while div > 0 {
+        o = reply.put_byte(sc, o, '0' + us / div % 10);
+        div = div / 10;
+    }
+    o = reply.put(sc, o, " [0 ");
+    region r {
+        let buf = alloc_slice[r](64, byte_of(0));
+        let m = clients.peer_text(tab, k, buf);
+        o = reply.put(sc, o, buf[0..m]);
+    }
+    o = reply.put_byte(sc, o, ']');
+    var i = 0;
+    while i < tb[0] {
+        o = reply.put_byte(sc, o, ' ');
+        if slowlog.redacted(view, tb, i) {
+            o = put_repr(sc, o, "(redacted)");
+        } else {
+            o = put_repr(sc, o, reply.arg_of(view, tb, i));
+        }
+        i = i + 1;
+    }
+    o = reply.put(sc, o, "\r\n");
+    var q = 0;
+    while q < conns.slots(tab) {
+        let pq = stride() * q;
+        if st[pq + 1] == 1 && st[pq + 22] == 1 && q != k {
+            if st[pq + 11] < 0 && st[pq + 2] == 0 {
+                st[pq + 11] = pool.take(contents(core.pendpool));
+            }
+            var ops = 0;
+            var ope = 0;
+            if st[pq + 11] >= 0 {
+                ops = st[pq + 11] * output_size();
+                ope = ops + output_size();
+            }
+            st[pq + 2] = emit(tab, q, sc[at..o], pd[ops..ope], st[pq + 2]);
+            if st[pq + 2] < 0 {
+                shut(tab, core, q);
+            } else {
+                settle(tab, core, q);
+            }
+        }
+        q = q + 1;
+    }
+    if st[stride() * k + 22] == 1 {
+        return o;
+    }
+    return at;
+}
+
 // Run the command `tb` describes in `view`: `CLIENT LIST`, `INFO` and `KILL`, which look at other connections, are answered here (`src/clients.cho`), every other by `commands`.
 fn execute_in[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int, view: &v [byte], tb: &w [int], sc: &!b [byte], at: int) -> [] int {
     let st = contents(core.state);
     let p = stride() * k;
+    if tb[0] >= 1 && reply.is_word(reply.arg_of(view, tb, 0), "MONITOR") {
+        if tb[0] != 1 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'monitor' command\r\n");
+        }
+        if st[p + 22] == 1 {
+            // Already watching: Redis ignores it and does not answer.
+            return at;
+        }
+        st[p + 22] = 1;
+        stats.add_monitors(contents(core.info), 1);
+        return reply.put(sc, at, "+OK\r\n");
+    }
+    if st[p + 22] == 1 {
+        // A connection that is watching is a replica as far as Redis is concerned: it may not touch the keyspace, and `RESET` ends the watching.
+        var sub = view[0..0];
+        if tb[0] >= 2 {
+            sub = reply.arg_of(view, tb, 1);
+        }
+        if tb[0] >= 1 && reply.is_word(reply.arg_of(view, tb, 0), "RESET") {
+            st[p + 22] = 0;
+            stats.add_monitors(contents(core.info), 0 - 1);
+        } else if tb[0] >= 1 && cmdnames.touches_keyspace(cmdnames.index_of(reply.arg_of(view, tb, 0)), sub) {
+            return reply.put(sc, at, "-ERR Replica can't interact with the keyspace\r\n");
+        }
+    }
     if tb[0] >= 2 && reply.is_word(reply.arg_of(view, tb, 0), "CLIENT") {
         let sub = reply.arg_of(view, tb, 1);
         let listing = reply.is_word(sub, "LIST");
@@ -563,6 +696,9 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                     // The command is counted for `INFO commandstats`, and an error reply for `errorstats` (`docs/design.md` section 30).
                     if tb[0] > 0 {
                         stats.record(contents(core.info), cmd_idx, sc, reply_from, at);
+                        if st[p + 9] == 0 && status != 2 && !stats.did_not_run(sc, reply_from, at) {
+                            at = monitor_feed(tab, core, k, view, tb, sc, at);
+                        }
                     }
                 }
                 if status == 2 {
@@ -594,6 +730,9 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                                 if timed {
                                     slow_after(tab, core, k, qview, tb, began, clock, sc, exec_from, at);
                                 }
+                                if st[p + 9] == 0 && !stats.did_not_run(sc, exec_from, at) {
+                                    at = monitor_feed(tab, core, k, qview, tb, sc, at);
+                                }
                                 if st[p + 9] != 0 {
                                     // Part way through a command that answers in pieces: what it wrote goes out, and it is called again.
                                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
@@ -622,6 +761,10 @@ fn process[&t, &c, &q](tab: &!t conns.Table, core: &!c Core, k: int, clock: &q C
                         n = 0;
                     } else {
                         txn.clear(tx);
+                        // `EXEC` itself is shown after the commands it ran.
+                        if resp.parse(view, tb) > 0 {
+                            at = monitor_feed(tab, core, k, view, tb, sc, at);
+                        }
                     }
                 }
                 if st[p + 7] == 1 {
@@ -809,6 +952,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
                         st[p + 19] = store.now_of(core.store);
                         st[p + 20] = 0 - 1;
                         st[p + 21] = 0;
+                        st[p + 22] = 0;
                         txn.clear(contents(core.txns)[txn.stride() * slot..txn.stride() * slot + txn.stride()]);
                         contents(core.info)[3] = contents(core.info)[3] + 1;
                         borrow mut table as &!ct in {

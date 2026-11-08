@@ -298,6 +298,12 @@ pub fn put_docs[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -
         }
         return (true, reply.put(sc, at, "$4\r\nmget\r\n*10\r\n$7\r\nsummary\r\n$36\r\nGet the values of all the given keys\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\nstring\r\n$10\r\ncomplexity\r\n$47\r\nO(N) where N is the number of keys to retrieve.\r\n$9\r\narguments\r\n*1\r\n*8\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n$5\r\nflags\r\n*1\r\n+multiple\r\n"));
     }
+    if reply.is_word(name, "MONITOR") {
+        if resp3 {
+            return (true, reply.put(sc, at, "$7\r\nmonitor\r\n%3\r\n$7\r\nsummary\r\n$59\r\nListen for all requests received by the server in real time\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n"));
+        }
+        return (true, reply.put(sc, at, "$7\r\nmonitor\r\n*6\r\n$7\r\nsummary\r\n$59\r\nListen for all requests received by the server in real time\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n"));
+    }
     if reply.is_word(name, "MSET") {
         if resp3 {
             return (true, reply.put(sc, at, "$4\r\nmset\r\n%5\r\n$7\r\nsummary\r\n$36\r\nSet multiple keys to multiple values\r\n$5\r\nsince\r\n$5\r\n1.0.1\r\n$5\r\ngroup\r\n$6\r\nstring\r\n$10\r\ncomplexity\r\n$42\r\nO(N) where N is the number of keys to set.\r\n$9\r\narguments\r\n*1\r\n%4\r\n$4\r\nname\r\n$9\r\nkey_value\r\n$4\r\ntype\r\n$5\r\nblock\r\n$5\r\nflags\r\n~1\r\n+multiple\r\n$9\r\narguments\r\n*2\r\n%3\r\n$4\r\nname\r\n$3\r\nkey\r\n$4\r\ntype\r\n$3\r\nkey\r\n$14\r\nkey_spec_index\r\n:0\r\n%2\r\n$4\r\nname\r\n$5\r\nvalue\r\n$4\r\ntype\r\n$6\r\nstring\r\n"));
@@ -1033,6 +1039,7 @@ pub fn put_all_docs[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_docs("LATENCY", sc, o, resp3).1;
     o = put_docs("MEMORY", sc, o, resp3).1;
     o = put_docs("MGET", sc, o, resp3).1;
+    o = put_docs("MONITOR", sc, o, resp3).1;
     o = put_docs("MSET", sc, o, resp3).1;
     o = put_docs("MSETNX", sc, o, resp3).1;
     o = put_docs("MULTI", sc, o, resp3).1;

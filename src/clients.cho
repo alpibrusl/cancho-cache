@@ -92,7 +92,7 @@ fn entry[&b, &s, &n, &a, &x](sc: &!b [byte], at: int, st: &s [int], slot: int, s
 }
 
 // The address of connection `slot` as text in `out`: how many bytes (0: unknown).
-fn peer_text[&t, &o](tab: &!t conns.Table, slot: int, out: &!o [byte]) -> [] int {
+pub fn peer_text[&t, &o](tab: &!t conns.Table, slot: int, out: &!o [byte]) -> [] int {
     var n = 0;
     match conns.peer(tab, slot) {
         conns.Peered::Known(peer) => {

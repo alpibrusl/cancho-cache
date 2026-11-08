@@ -40,7 +40,7 @@ fn put_argument[&b, &d](text: &!b [byte], o: int, data: &d [byte]) -> [] int {
 }
 
 // Whether argument `i` of the line is one whose value Redis does not log: everything after `AUTH`, and the two words after `AUTH` in `HELLO`.
-fn redacted[&v, &t](view: &v [byte], table: &t [int], i: int) -> [] bool {
+pub fn redacted[&v, &t](view: &v [byte], table: &t [int], i: int) -> [] bool {
     let name = reply.arg_of(view, table, 0);
     if reply.is_word(name, "AUTH") {
         return i >= 1;

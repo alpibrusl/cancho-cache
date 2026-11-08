@@ -34,6 +34,7 @@ on:
       - tests/slowlog.py
       - tests/client_commands.py
       - tests/latency.py
+      - tests/monitor.py
       - tests/cluster.py
       - tests/gen_cmdinfo.py
       - src/commands.cho
@@ -86,7 +87,7 @@ jobs:
       - name: Every mutant still applies to the source, exactly once (fast)
         working-directory: cache
         run: |
-          for f in txn string keyspace pieces slowlog clients latency; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
+          for f in txn string keyspace pieces slowlog clients latency monitor; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
 
       - name: Every transaction mutant is caught
         working-directory: cache
@@ -115,3 +116,7 @@ jobs:
       - name: LATENCY and MEMORY mutants
         working-directory: cache
         run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/latency_mutants.py
+
+      - name: MONITOR mutants
+        working-directory: cache
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/monitor_mutants.py

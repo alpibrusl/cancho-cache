@@ -954,6 +954,10 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return slowlog.command(view, table, sc, at, st);
     }
+    if reply.is_word(name, "MONITOR") {
+        // Answered by the loop (`src/cache.cho`, `execute_in`), which knows the connections; this is here so that the command is in the tables.
+        return reply.put(sc, at, "-ERR MONITOR is answered by the loop\r\n");
+    }
     if reply.is_word(name, "LATENCY") {
         if argc < 2 {
             return reply.wrong_arguments(sc, at, name);
@@ -2062,7 +2066,7 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "HSET") || reply.is_word(name, "HMSET") || reply.is_word(name, "HSETNX") {
         return 0 - 4;
     }
-    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
+    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "MONITOR") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
         return 1;
     }
     if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {

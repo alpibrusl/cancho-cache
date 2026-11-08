@@ -27,12 +27,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SET") {
-                return 68;
+                return 69;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TTL") {
-                return 76;
+                return 77;
             }
         }
     }
@@ -92,30 +92,30 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 47;
             }
             if reply.is_word(name, "MSET") {
-                return 48;
+                return 49;
             }
         }
         if first == 'P' {
             if reply.is_word(name, "PING") {
-                return 56;
+                return 57;
             }
             if reply.is_word(name, "PTTL") {
-                return 58;
+                return 59;
             }
         }
         if first == 'Q' {
             if reply.is_word(name, "QUIT") {
-                return 59;
+                return 60;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SCAN") {
-                return 66;
+                return 67;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TYPE") {
-                return 77;
+                return 78;
             }
         }
     }
@@ -147,30 +147,30 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'M' {
             if reply.is_word(name, "MULTI") {
-                return 50;
+                return 51;
             }
         }
         if first == 'R' {
             if reply.is_word(name, "RESET") {
-                return 65;
+                return 66;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SETEX") {
-                return 69;
+                return 70;
             }
             if reply.is_word(name, "SETNX") {
-                return 70;
+                return 71;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TOUCH") {
-                return 75;
+                return 76;
             }
         }
         if first == 'W' {
             if reply.is_word(name, "WATCH") {
-                return 80;
+                return 81;
             }
         }
     }
@@ -227,38 +227,38 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 46;
             }
             if reply.is_word(name, "MSETNX") {
-                return 49;
+                return 50;
             }
         }
         if first == 'O' {
             if reply.is_word(name, "OBJECT") {
-                return 51;
+                return 52;
             }
         }
         if first == 'P' {
             if reply.is_word(name, "PSETEX") {
-                return 57;
+                return 58;
             }
         }
         if first == 'R' {
             if reply.is_word(name, "RENAME") {
-                return 63;
+                return 64;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SELECT") {
-                return 67;
+                return 68;
             }
             if reply.is_word(name, "STRLEN") {
-                return 73;
+                return 74;
             }
             if reply.is_word(name, "SUBSTR") {
-                return 74;
+                return 75;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNLINK") {
-                return 78;
+                return 79;
             }
         }
     }
@@ -300,22 +300,27 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 45;
             }
         }
+        if first == 'M' {
+            if reply.is_word(name, "MONITOR") {
+                return 48;
+            }
+        }
         if first == 'P' {
             if reply.is_word(name, "PERSIST") {
-                return 52;
+                return 53;
             }
             if reply.is_word(name, "PEXPIRE") {
-                return 53;
+                return 54;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SLOWLOG") {
-                return 72;
+                return 73;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNWATCH") {
-                return 79;
+                return 80;
             }
         }
     }
@@ -337,30 +342,30 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'R' {
             if reply.is_word(name, "READONLY") {
-                return 61;
+                return 62;
             }
             if reply.is_word(name, "RENAMENX") {
-                return 64;
+                return 65;
             }
         }
         if first == 'S' {
             if reply.is_word(name, "SETRANGE") {
-                return 71;
+                return 72;
             }
         }
     }
     if len(name) == 9 {
         if first == 'P' {
             if reply.is_word(name, "PEXPIREAT") {
-                return 54;
+                return 55;
             }
         }
         if first == 'R' {
             if reply.is_word(name, "RANDOMKEY") {
-                return 60;
+                return 61;
             }
             if reply.is_word(name, "READWRITE") {
-                return 62;
+                return 63;
             }
         }
     }
@@ -379,7 +384,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
     if len(name) == 11 {
         if first == 'P' {
             if reply.is_word(name, "PEXPIRETIME") {
-                return 55;
+                return 56;
             }
         }
     }
@@ -533,102 +538,105 @@ pub fn name_at(i: int) -> [] &static [byte] {
         return "mget";
     }
     if i == 48 {
-        return "mset";
+        return "monitor";
     }
     if i == 49 {
-        return "msetnx";
+        return "mset";
     }
     if i == 50 {
-        return "multi";
+        return "msetnx";
     }
     if i == 51 {
-        return "object";
+        return "multi";
     }
     if i == 52 {
-        return "persist";
+        return "object";
     }
     if i == 53 {
-        return "pexpire";
+        return "persist";
     }
     if i == 54 {
-        return "pexpireat";
+        return "pexpire";
     }
     if i == 55 {
-        return "pexpiretime";
+        return "pexpireat";
     }
     if i == 56 {
-        return "ping";
+        return "pexpiretime";
     }
     if i == 57 {
-        return "psetex";
+        return "ping";
     }
     if i == 58 {
-        return "pttl";
+        return "psetex";
     }
     if i == 59 {
-        return "quit";
+        return "pttl";
     }
     if i == 60 {
-        return "randomkey";
+        return "quit";
     }
     if i == 61 {
-        return "readonly";
+        return "randomkey";
     }
     if i == 62 {
-        return "readwrite";
+        return "readonly";
     }
     if i == 63 {
-        return "rename";
+        return "readwrite";
     }
     if i == 64 {
-        return "renamenx";
+        return "rename";
     }
     if i == 65 {
-        return "reset";
+        return "renamenx";
     }
     if i == 66 {
-        return "scan";
+        return "reset";
     }
     if i == 67 {
-        return "select";
+        return "scan";
     }
     if i == 68 {
-        return "set";
+        return "select";
     }
     if i == 69 {
-        return "setex";
+        return "set";
     }
     if i == 70 {
-        return "setnx";
+        return "setex";
     }
     if i == 71 {
-        return "setrange";
+        return "setnx";
     }
     if i == 72 {
-        return "slowlog";
+        return "setrange";
     }
     if i == 73 {
-        return "strlen";
+        return "slowlog";
     }
     if i == 74 {
-        return "substr";
+        return "strlen";
     }
     if i == 75 {
-        return "touch";
+        return "substr";
     }
     if i == 76 {
-        return "ttl";
+        return "touch";
     }
     if i == 77 {
-        return "type";
+        return "ttl";
     }
     if i == 78 {
-        return "unlink";
+        return "type";
     }
     if i == 79 {
-        return "unwatch";
+        return "unlink";
     }
     if i == 80 {
+        return "unwatch";
+    }
+    if i == 81 {
         return "watch";
     }
     return "";
@@ -641,7 +649,217 @@ pub fn may_be_slow(i: int) -> [] bool {
         return false;
     }
     if i < 62 {
-        return 3264719037949049 >> i & 1 == 1;
+        return 6360943781766265 >> i & 1 == 1;
     }
-    return 340502 >> i - 62 & 1 == 1;
+    return 681004 >> i - 62 & 1 == 1;
+}
+
+// Whether command `i` (with subcommand `sub`) reads or writes the keyspace, or may be replicated: a connection in `MONITOR` mode is a replica as far as Redis is concerned and may
+// not run one (`docs/design.md` section 34).
+pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {
+    if i == 0 {
+        return true;
+    }
+    if i == 6 {
+        return true;
+    }
+    if i == 7 {
+        return true;
+    }
+    if i == 8 {
+        return true;
+    }
+    if i == 9 {
+        return true;
+    }
+    if i == 10 {
+        return true;
+    }
+    if i == 14 {
+        return true;
+    }
+    if i == 15 {
+        return true;
+    }
+    if i == 16 {
+        return true;
+    }
+    if i == 17 {
+        return true;
+    }
+    if i == 18 {
+        return true;
+    }
+    if i == 19 {
+        return true;
+    }
+    if i == 20 {
+        return true;
+    }
+    if i == 21 {
+        return true;
+    }
+    if i == 22 {
+        return true;
+    }
+    if i == 23 {
+        return true;
+    }
+    if i == 24 {
+        return true;
+    }
+    if i == 25 {
+        return true;
+    }
+    if i == 27 {
+        return true;
+    }
+    if i == 28 {
+        return true;
+    }
+    if i == 29 {
+        return true;
+    }
+    if i == 30 {
+        return true;
+    }
+    if i == 31 {
+        return true;
+    }
+    if i == 32 {
+        return true;
+    }
+    if i == 33 {
+        return true;
+    }
+    if i == 34 {
+        return true;
+    }
+    if i == 35 {
+        return true;
+    }
+    if i == 36 {
+        return true;
+    }
+    if i == 37 {
+        return true;
+    }
+    if i == 38 {
+        return true;
+    }
+    if i == 39 {
+        return true;
+    }
+    if i == 40 {
+        return true;
+    }
+    if i == 41 {
+        return true;
+    }
+    if i == 42 {
+        return true;
+    }
+    if i == 44 {
+        return true;
+    }
+    if i == 47 {
+        return true;
+    }
+    if i == 49 {
+        return true;
+    }
+    if i == 50 {
+        return true;
+    }
+    if i == 53 {
+        return true;
+    }
+    if i == 54 {
+        return true;
+    }
+    if i == 55 {
+        return true;
+    }
+    if i == 56 {
+        return true;
+    }
+    if i == 58 {
+        return true;
+    }
+    if i == 59 {
+        return true;
+    }
+    if i == 61 {
+        return true;
+    }
+    if i == 64 {
+        return true;
+    }
+    if i == 65 {
+        return true;
+    }
+    if i == 67 {
+        return true;
+    }
+    if i == 69 {
+        return true;
+    }
+    if i == 70 {
+        return true;
+    }
+    if i == 71 {
+        return true;
+    }
+    if i == 72 {
+        return true;
+    }
+    if i == 74 {
+        return true;
+    }
+    if i == 75 {
+        return true;
+    }
+    if i == 76 {
+        return true;
+    }
+    if i == 77 {
+        return true;
+    }
+    if i == 78 {
+        return true;
+    }
+    if i == 79 {
+        return true;
+    }
+    if i == 46 && reply.is_word(sub, "USAGE") {
+        return true;
+    }
+    if i == 52 && (reply.is_word(sub, "ENCODING") || reply.is_word(sub, "FREQ") || reply.is_word(sub, "IDLETIME") || reply.is_word(sub, "REFCOUNT")) {
+        return true;
+    }
+    return false;
+}
+
+// Whether `MONITOR` leaves command `i` (with subcommand `sub`, if it has them) out of what it shows: Redis does not show the commands flagged `admin` (`CONFIG`, `SLOWLOG`,
+// `CLIENT LIST`, ...), read from the oracle's `COMMAND INFO` (`docs/design.md` section 34).
+pub fn skips_monitor[&w](i: int, sub: &w [byte]) -> [] bool {
+    if i == 48 {
+        return true;
+    }
+    if i == 2 && (reply.is_word(sub, "KILL") || reply.is_word(sub, "LIST") || reply.is_word(sub, "NO-EVICT") || reply.is_word(sub, "PAUSE") || reply.is_word(sub, "UNBLOCK") || reply.is_word(sub, "UNPAUSE")) {
+        return true;
+    }
+    if i == 3 && (reply.is_word(sub, "ADDSLOTS") || reply.is_word(sub, "ADDSLOTSRANGE") || reply.is_word(sub, "BUMPEPOCH") || reply.is_word(sub, "COUNT-FAILURE-REPORTS") || reply.is_word(sub, "DELSLOTS") || reply.is_word(sub, "DELSLOTSRANGE") || reply.is_word(sub, "FAILOVER") || reply.is_word(sub, "FLUSHSLOTS") || reply.is_word(sub, "FORGET") || reply.is_word(sub, "MEET") || reply.is_word(sub, "REPLICAS") || reply.is_word(sub, "REPLICATE") || reply.is_word(sub, "RESET") || reply.is_word(sub, "SAVECONFIG") || reply.is_word(sub, "SET-CONFIG-EPOCH") || reply.is_word(sub, "SETSLOT") || reply.is_word(sub, "SLAVES")) {
+        return true;
+    }
+    if i == 5 && (reply.is_word(sub, "GET") || reply.is_word(sub, "RESETSTAT") || reply.is_word(sub, "REWRITE") || reply.is_word(sub, "SET")) {
+        return true;
+    }
+    if i == 45 && (reply.is_word(sub, "DOCTOR") || reply.is_word(sub, "GRAPH") || reply.is_word(sub, "HISTOGRAM") || reply.is_word(sub, "HISTORY") || reply.is_word(sub, "LATEST") || reply.is_word(sub, "RESET")) {
+        return true;
+    }
+    if i == 73 && (reply.is_word(sub, "GET") || reply.is_word(sub, "LEN") || reply.is_word(sub, "RESET")) {
+        return true;
+    }
+    return false;
 }

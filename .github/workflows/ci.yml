@@ -107,6 +107,10 @@ jobs:
         working-directory: cache
         run: python3 tests/latency.py build/cache
 
+      - name: MONITOR agrees with Redis
+        working-directory: cache
+        run: python3 tests/monitor.py build/cache
+
       - name: Cluster-lite against a real Redis Cluster (three nodes of each, compared line for line)
         working-directory: cache
         run: python3 tests/cluster.py build/cache

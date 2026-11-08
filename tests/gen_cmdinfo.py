@@ -408,6 +408,55 @@ def main():
         w("    return %d >> i - 62 & 1 == 1;" % mask[1])
         w("}")
         w("")
+
+        def flags_of(node):
+            return {leaf[1:-2].decode() for leaf in node[1][2][1]}
+
+        admin_top, admin_subs = [], {}
+        for i, n in enumerate(order):
+            node = entries[0][n][1]
+            if "admin" in flags_of(node):
+                admin_top.append(i)
+            for sub in node[1][9][1]:
+                if "admin" in flags_of(sub):
+                    admin_subs.setdefault(i, []).append(name_of(sub).decode().split("|")[1].upper())
+        keyspace_flags = {"readonly", "write", "may_replicate"}
+        touch_top, touch_subs = [], {}
+        for i, n in enumerate(order):
+            node = entries[0][n][1]
+            if flags_of(node) & keyspace_flags:
+                touch_top.append(i)
+            for sub in node[1][9][1]:
+                if flags_of(sub) & keyspace_flags:
+                    touch_subs.setdefault(i, []).append(name_of(sub).decode().split("|")[1].upper())
+        w("// Whether command `i` (with subcommand `sub`) reads or writes the keyspace, or may be replicated: a connection in `MONITOR` mode is a replica as far as Redis is concerned and may")
+        w("// not run one (`docs/design.md` section 34).")
+        w("pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {")
+        for i in touch_top:
+            w("    if i == %d {" % i)
+            w("        return true;")
+            w("    }")
+        for i, subs in sorted(touch_subs.items()):
+            w("    if i == %d && %s {" % (i, " || ".join('reply.is_word(sub, "%s")' % x for x in subs) if len(subs) == 1 else "(" + " || ".join('reply.is_word(sub, "%s")' % x for x in subs) + ")"))
+            w("        return true;")
+            w("    }")
+        w("    return false;")
+        w("}")
+        w("")
+        w("// Whether `MONITOR` leaves command `i` (with subcommand `sub`, if it has them) out of what it shows: Redis does not show the commands flagged `admin` (`CONFIG`, `SLOWLOG`,")
+        w("// `CLIENT LIST`, ...), read from the oracle's `COMMAND INFO` (`docs/design.md` section 34).")
+        w("pub fn skips_monitor[&w](i: int, sub: &w [byte]) -> [] bool {")
+        for i in admin_top:
+            w("    if i == %d {" % i)
+            w("        return true;")
+            w("    }")
+        for i, subs in sorted(admin_subs.items()):
+            w("    if i == %d && %s {" % (i, " || ".join('reply.is_word(sub, "%s")' % x for x in subs) if len(subs) == 1 else "(" + " || ".join('reply.is_word(sub, "%s")' % x for x in subs) + ")"))
+            w("        return true;")
+            w("    }")
+        w("    return false;")
+        w("}")
+        w("")
         w = w_keep
         while names_lines[-1] == "":
             names_lines.pop()

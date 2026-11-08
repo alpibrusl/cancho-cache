@@ -12,6 +12,7 @@ import reply;
 //
 //     [at()]        replies that were errors
 //     [at() + 1]    where the next sample goes
+//     [at() + 2]    how many connections are in `MONITOR` mode (`docs/design.md` section 34)
 //     [errors_at()] the errors by code, `codes()` of them (the last is every code not listed)
 //     [samples_at()] 16 samples: when (the store's milliseconds) and how many commands had been answered by then
 //     [commands_at()] 128 commands, three ints each: calls, calls whose reply was an error, and commands refused before they ran (`rejected_calls`)
@@ -25,7 +26,7 @@ fn codes() -> [] int {
 }
 
 fn errors_at() -> [] int {
-    return at() + 2;
+    return at() + 3;
 }
 
 fn samples_at() -> [] int {
@@ -123,7 +124,7 @@ pub fn did_not_run[&b](sc: &b [byte], from: int, to: int) -> [] bool {
     if to <= from {
         return false;
     }
-    if reply_starts(sc, from, to, "+QUEUED") || reply_starts(sc, from, to, "-ERR unknown command") {
+    if reply_starts(sc, from, to, "+QUEUED") || reply_starts(sc, from, to, "-ERR unknown command") || reply_starts(sc, from, to, "-ERR Replica can't interact") {
         return true;
     }
     return int_of(sc[from]) == '-' && is_rejected(sc, from, to, code_of(sc, from, to));
@@ -153,6 +154,15 @@ pub fn record[&w, &b](world: &!w [int], i: int, sc: &b [byte], from: int, to: in
         world[at()] = world[at()] + 1;
         world[errors_at() + c] = world[errors_at() + c] + 1;
     }
+    return 0;
+}
+
+pub fn monitors[&w](world: &w [int]) -> [] int {
+    return world[at() + 2];
+}
+
+pub fn add_monitors[&w](world: &!w [int], n: int) -> [] int {
+    world[at() + 2] = world[at() + 2] + n;
     return 0;
 }
 

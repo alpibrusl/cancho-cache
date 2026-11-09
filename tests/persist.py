@@ -238,6 +238,11 @@ try:
         open(os.path.join(dd, "dump.cho"), "wb").write(bytes(data))
         got = refused(dd)
         check("a bit altered at %d refuses to start" % at, got is not None and got[0] == 4 and got[1].startswith("refusing to start: persist."), True)
+    # each of the eight bytes of the checksum, one at a time (both halves of it count)
+    for n in range(8):
+        data = bytearray(good)
+        data[len(good) - 8 + n] ^= 0x55
+        with_file("trailer-byte-%d" % n, bytes(data), "persist.checksum")
     with_file("magic", seal(header(0, magic=b"NOTMINE!")), "persist.bad-magic")
     with_file("version", seal(header(0, version=2)), "persist.version")
     with_file("count-too-many", seal(header(2) + record(b"k", b"v")), "persist.record-bounds")

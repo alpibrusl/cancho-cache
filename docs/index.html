@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cancho-cache</title>
-<meta name="description" content="A Redis-compatible cache written in cancho: no Ffi, no unsafe, and an authority report that says it never touches the filesystem. RESP2 and RESP3, expiry, LRU eviction. Alpha.">
+<meta name="description" content="A Redis-compatible cache written in cancho: no Ffi, no unsafe, and an authority report that shows no foreign code and no fs_write. Strings and hashes over RESP2 and RESP3, expiry, six eviction policies, a snapshot, and the observability an exporter reads. Alpha.">
 <meta property="og:title" content="cancho-cache: a Redis-compatible cache, written in cancho">
-<meta property="og:description" content="Strings, expiry and LRU eviction over RESP2/RESP3. One thread, a fixed arena, nothing allocated after start, and a checkable authority report.">
+<meta property="og:description" content="Strings and hashes, expiry, eviction and a snapshot over RESP2/RESP3. One thread, a fixed arena, nothing allocated after start, and a checkable authority report.">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:image" content="https://alpibrusl.github.io/cancho-cache/og.png">
@@ -155,9 +155,9 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
 </div>
 
 <div class="three">
-  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 515 differential cases, four framings each. RESP2 and RESP3 over TCP.</p></div>
-  <div><h3>A fixed arena</h3><p>Sized at start; nothing is allocated afterwards. Expiry, an approximate LRU, and a compaction whose worst pause is a slice of work, not the arena.</p></div>
-  <div><h3>An authority you can read</h3><p>The report lists exactly what the program may do. It is checked in CI, not assumed.</p></div>
+  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 947 differential cases, four framings each, and compared with Redis again for <code>SLOWLOG</code>, <code>CLIENT</code>, <code>LATENCY</code>, <code>MEMORY</code> and <code>MONITOR</code>. RESP2 and RESP3 over TCP.</p></div>
+  <div><h3>A fixed arena</h3><p>Sized at start; nothing is allocated afterwards. Expiry, six eviction policies, a snapshot that survives a restart, and a compaction whose worst pause is a slice of work, not the arena.</p></div>
+  <div><h3>An authority you can read</h3><p>The report lists what the program may do: no foreign code and no <code>fs_write</code>. It is checked in CI, not assumed. Where it is weaker than it was (the snapshot directory is chosen at run time), the README says so.</p></div>
 </div>
 
 <section id="why">
@@ -168,8 +168,10 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
     <tbody>
       <tr><th>Can it read my files, or call into C?</th><td>Without <code>--dir</code>, one file: <code>/dev/urandom</code>, read once at start for the hash seed. With it, the one directory you name, opened once and written one name at a time (<code>dump.cho</code>); the authority report shows <code>fs_read("")</code> and <code>dir_write</code> and cannot say which directory (the README says why). No foreign code.</td></tr>
       <tr><th>Will a client library work?</th><td>The five tested ones connect and run a session; the handshake they send (<code>HELLO</code>, <code>INFO</code>, <code>CLIENT</code>) is answered the way Redis answers it, and the compatibility matrix is checked against the README in CI.</td></tr>
-      <tr><th>Is it faster than Redis?</th><td>On one core it measures 1.07 to 2.00 times Redis's throughput on the pre-registered cells, while doing much less. It is not a claim about Redis with the same features.</td></tr>
-      <tr><th>What happens when memory is full?</th><td><code>noeviction</code> refuses with Redis's own error; <code>allkeys-lru</code> evicts, with the same hit rate as Redis at the same resident memory.</td></tr>
+      <tr><th>Is it faster than Redis?</th><td>On one core it measures about 1.1 times Redis's throughput at pipeline depth 1 and 1.0 to 2.0 times at depth 16, while doing much less. Redis itself moves by up to 15% between runs on a shared VM, so the medians are of interleaved rounds. It is not a claim about Redis with the same features.</td></tr>
+      <tr><th>What happens when memory is full?</th><td><code>noeviction</code> refuses with Redis's own error; the five other policies evict, <code>allkeys-lru</code> with the same hit rate as Redis at the same resident memory. The policy can be changed with <code>CONFIG SET</code>; the arena cannot.</td></tr>
+      <tr><th>Does it survive a restart?</th><td>With <code>--dir</code>, yes: <code>SAVE</code> writes a snapshot crash-safely and the next start loads it before accepting a connection, keeping each key's expiry as an absolute time. A damaged file stops the start with a rule tag. <code>SAVE</code> blocks every client while it writes; a background save and an append-only log are next.</td></tr>
+      <tr><th>Can I monitor it?</th><td>Yes: <code>INFO</code> with <code>commandstats</code> and <code>errorstats</code>, <code>SLOWLOG</code>, <code>CLIENT LIST</code>, <code>LATENCY</code>, <code>MEMORY</code> and <code>MONITOR</code>, compared with Redis by their own tests.</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -178,10 +180,10 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <h2>Every claim has a measurement, or says it has none.</h2>
   <p class="sub">The gate was fixed before the code. Where a claim turned out false, the design document was corrected in place.</p>
   <div class="stats">
-    <div><b>1.07&ndash;2.00&times;</b><span>Redis's throughput on one core, pre-registered cells, medians of five interleaved rounds</span></div>
+    <div><b>1.0&ndash;2.0&times;</b><span>Redis's throughput on one core, medians of interleaved rounds (about 1.1&times; unpipelined)</span></div>
     <div><b>3&ndash;8 ms</b><span>worst-case pause (a compaction slice), measured on a noisy VM; 115 ms before it was sliced</span></div>
-    <div><b>515</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
-    <div><b>69 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
+    <div><b>947</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
+    <div><b>83 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
   </div>
   <p class="note"><a href="https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md">The design document</a> holds the gate, every measurement and its caveats, and each mutant the harnesses were checked against.</p>
 </section>
@@ -190,37 +192,44 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <h2>Where it fits.</h2>
   <div class="cols">
     <div><h3>Use it for</h3><ul>
-      <li>A string and hash cache with expiry and an eviction policy</li>
+      <li>A string and hash cache with expiry, an eviction policy and a snapshot</li>
+      <li>A cache an exporter and <code>redis-cli --stat</code> can watch</li>
       <li>A host where the program's authority must be small and readable</li>
       <li>Local development and tests against a Redis-shaped server</li>
     </ul></div>
     <div class="no"><h3>Not yet</h3><ul>
-      <li>Lists, sets and sorted sets; pub/sub; scripting</li>
-      <li>Persistence, replication, cluster, TLS</li>
-            <li>One database; 256 connections; a 16 KiB command</li>
+      <li>Lists, sets, sorted sets and streams; pub/sub; scripting</li>
+      <li>A background save or an append-only log (the snapshot blocks while it writes); replication; a cluster that gossips or fails over; TLS</li>
+            <li>More than one database; ACL; a command over 16 KiB (only <code>SET</code> takes a larger value)</li>
     </ul></div>
   </div>
 </section>
 
 <section id="start">
   <h2>Try it.</h2>
-  <p class="sub">You need the cancho compiler at the revision CI uses, Rust to build it, and <code>redis-cli</code> to talk to it.</p>
+  <p class="sub">You need the cancho compiler at the revision CI uses (built from its seed with <code>clang</code>; no Rust), and <code>redis-cli</code> to talk to it.</p>
   <pre class="code">git clone https://github.com/alpibrusl/cancho
 git clone https://github.com/alpibrusl/cancho-cache &amp;&amp; cd cancho-cache
-REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)
-(cd ../cancho &amp;&amp; git checkout "$REV" &amp;&amp; cargo build --release -p cancho)
-export CANCHO=$PWD/../cancho/target/release/cancho
+
+REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)    # the revision CI uses
+# the compiler written in cancho, built from its seed by clang (no Rust); it must reproduce itself byte for byte
+(cd ../cancho &amp;&amp; git checkout "$REV" &amp;&amp; sh scripts/build-standalone.sh --out "$PWD/standalone" --rev "$REV" --seed)
+export CANCHO=$PWD/../cancho/standalone/cancho
+
 mkdir -p build
 $CANCHO build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho -o build/cache
-build/cache 6379 &amp;
+
+build/cache 6379 &amp;                     # port; optional: arena MiB, most keys, eviction policy (noeviction | allkeys-lru | allkeys-random | volatile-lru | volatile-random | volatile-ttl)
 redis-cli -p 6379 PING     # PONG</pre>
-  <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [noeviction | allkeys-lru] [&lt;seed&gt;]]]</code>. Sizes are fixed at start; without a seed argument the hash seed is read from <code>/dev/urandom</code>.</p>
+  <p class="note">Arguments: <code>cache &lt;port&gt; [&lt;arena MiB&gt; [&lt;most keys&gt; [&lt;policy&gt; [&lt;seed&gt; [--dir=&lt;directory&gt;] [--cluster=&lt;slot map&gt;]]]]]</code>, a policy being <code>noeviction</code>, <code>allkeys-lru</code>, <code>allkeys-random</code>, <code>volatile-lru</code>, <code>volatile-random</code> or <code>volatile-ttl</code>. Sizes are fixed at start; without a seed argument the hash seed is read from <code>/dev/urandom</code>. The options need a seed (any number) before them; <code>--dir</code> keeps the snapshot (<code>SAVE</code>, loaded at start).</p>
 </section>
 
 <section class="status" id="status" style="padding:1.3rem 1.5rem">
   <h2>Status: alpha</h2>
   <ul>
-    <li>Strings and hashes (15 <code>H*</code> commands), transactions, expiry and eviction. The gaps to pairing with Redis, each with its design question and gate, are tracked in <a href="https://github.com/alpibrusl/cancho-cache/issues/8">the epic</a>.</li>
+    <li><b>Built:</b> strings and hashes (15 <code>H*</code> commands), transactions, expiry, six eviction policies and <code>CONFIG SET</code> for the settings that can change while it runs, <code>INFO</code> with <code>commandstats</code>, <code>SLOWLOG</code>, <code>CLIENT LIST</code>/<code>INFO</code>/<code>KILL</code>, <code>LATENCY</code>, <code>MEMORY</code>, <code>MONITOR</code>, a static-map cluster-lite (<code>MOVED</code>, <code>CLUSTER SLOTS</code>), and a snapshot (<code>SAVE</code>, loaded at start). 83 of Redis 7.0's 240 commands.</li>
+    <li><b>Next:</b> a background save that does not stall the loop, the <code>save</code> policy, <code>LASTSAVE</code>, <code>SHUTDOWN SAVE</code> and an append-only log (<a href="https://github.com/alpibrusl/cancho-cache/issues/21">#21</a>), then a TLS listener (<a href="https://github.com/alpibrusl/cancho-cache/issues/16">#16</a>).</li>
+    <li><b>Not built:</b> lists, sets, sorted sets, streams, pub/sub, scripting, replication, TLS, ACL, more than one database, the LFU policies. The gaps to pairing with Redis, each with its design question and gate, are tracked in <a href="https://github.com/alpibrusl/cancho-cache/issues/8">the epic</a>.</li>
     <li>Not a Redis replacement: see "Not yet" above, and the Limitations in the README.</li>
   </ul>
 </section>

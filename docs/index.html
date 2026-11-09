@@ -155,7 +155,7 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
 </div>
 
 <div class="three">
-  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 947 differential cases, four framings each, and compared with Redis again for <code>SLOWLOG</code>, <code>CLIENT</code>, <code>LATENCY</code>, <code>MEMORY</code> and <code>MONITOR</code>. RESP2 and RESP3 over TCP.</p></div>
+  <div><h3>Same answers as Redis</h3><p>Byte-identical to Redis 7.0.15 on 951 differential cases, four framings each, and compared with Redis again for <code>SLOWLOG</code>, <code>CLIENT</code>, <code>LATENCY</code>, <code>MEMORY</code> and <code>MONITOR</code>. RESP2 and RESP3 over TCP.</p></div>
   <div><h3>A fixed arena</h3><p>Sized at start; nothing is allocated afterwards. Expiry, six eviction policies, a snapshot that survives a restart, and a compaction whose worst pause is a slice of work, not the arena.</p></div>
   <div><h3>An authority you can read</h3><p>The report lists what the program may do: no foreign code and no <code>fs_write</code>. It is checked in CI, not assumed. Where it is weaker than it was (the snapshot directory is chosen at run time), the README says so.</p></div>
 </div>
@@ -182,7 +182,7 @@ table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us
   <div class="stats">
     <div><b>1.0&ndash;2.0&times;</b><span>Redis's throughput on one core, medians of interleaved rounds (about 1.1&times; unpipelined)</span></div>
     <div><b>3&ndash;8 ms</b><span>worst-case pause (a compaction slice), measured on a noisy VM; 115 ms before it was sliced</span></div>
-    <div><b>947</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
+    <div><b>951</b><span>differential cases, four framings each, byte-identical to Redis 7.0.15</span></div>
     <div><b>83 / 240</b><span>of Redis 7.0's commands, stated, not rounded up</span></div>
   </div>
   <p class="note"><a href="https://github.com/alpibrusl/cancho-cache/blob/main/docs/design.md">The design document</a> holds the gate, every measurement and its caveats, and each mutant the harnesses were checked against.</p>

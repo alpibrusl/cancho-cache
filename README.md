@@ -10,7 +10,7 @@
 
 ## What you get
 
-* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (947 cases and 8 small-index cases, four framings each), and the replies of `SLOWLOG`, `CLIENT`, `LATENCY`, `MEMORY` and `MONITOR` are compared with Redis by their own harnesses. The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12 and in the section of each feature.
+* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (951 cases and 8 small-index cases, four framings each), and the replies of `SLOWLOG`, `CLIENT`, `LATENCY`, `MEMORY` and `MONITOR` are compared with Redis by their own harnesses. The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12 and in the section of each feature.
 * **Speed, measured.** On one core against Redis 7.0.15, about 1.1 times Redis's throughput at pipeline depth 1 and 1.0 to 2.0 times at depth 16 (the cell where either server may run in a faster or a slower mode), with the same hit rate at the same resident memory, while doing much less than Redis does. The ratios are medians of interleaved rounds; Redis itself moves by up to 15% from run to run on a shared VM, and at depth 16 either server may run in a faster or a slower mode, so each re-run in the design says which cells it could and could not separate from noise. The gate was fixed before the code (`docs/design.md` section 2).
 * **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before. (`SAVE` is the exception: it is blocking in this version, and a background save is next.)
 * **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and six eviction policies (`noeviction`, which refuses with Redis's own error; `allkeys-lru`, `allkeys-random`, `volatile-lru`, `volatile-random`, `volatile-ttl`). `CONFIG SET` changes the policy, `maxmemory-samples`, the slow log and the latency threshold at run time; the arena and the key table are fixed, so `maxmemory` is not settable. The LFU policies are not built.
@@ -125,7 +125,7 @@ $CANCHO test tests/glob_test.cho src/glob.cho --std        # the pattern matcher
 $CANCHO test tests/pool_test.cho src/pool.cho --std        # the lent-buffer pools
 
 # against redis-server, the oracle
-python3 tests/differential.py build/cache                 # byte for byte, four framings each (947 + 8 cases)
+python3 tests/differential.py build/cache                 # byte for byte, four framings each (951 + 8 cases)
 python3 tests/keyspace.py build/cache                     # KEYS patterns, SCAN while keys change, RENAME against a model, COMMAND tables
 python3 tests/info.py build/cache                         # INFO sections and fields, the counters the commands decide
 python3 tests/slowlog.py build/cache                      # SLOWLOG entries, counts and errors

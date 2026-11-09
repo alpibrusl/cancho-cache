@@ -47,7 +47,13 @@ env:
   CANCHO_REV: 502a57d0f0e29a485be8b1886d4d17fa33c7fa5d
 
 jobs:
-  mutants:
+  # One job for each file of mutants: they build the cache once for each mutant, and all of them in one job no longer fit an hour.
+  harness:
+    name: mutants (${{ matrix.harness }})
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [txn, pieces, keyspace, string, slowlog, clients, latency, monitor, persist]
     runs-on: ubuntu-latest
     # A step that hangs (a package mirror that does not answer, once, held a job for GitHub's six hours) fails instead.
     timeout-minutes: 60
@@ -91,38 +97,16 @@ jobs:
         run: |
           for f in txn string keyspace pieces slowlog clients latency monitor persist; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
 
-      - name: Every transaction mutant is caught
+      - name: Every mutant of this file is caught
         working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/txn_mutants.py
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/${{ matrix.harness }}_mutants.py
 
-      - name: Every mutant of the answers in pieces is caught
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/pieces_mutants.py
-
-      - name: Every keyspace mutant is caught
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/keyspace_mutants.py
-
-      - name: Every string-command mutant is caught
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/string_mutants.py
-
-      - name: Slow log mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/slowlog_mutants.py
-
-      - name: CLIENT LIST, INFO and KILL mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/clients_mutants.py
-
-      - name: LATENCY and MEMORY mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/latency_mutants.py
-
-      - name: MONITOR mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/monitor_mutants.py
-
-      - name: Snapshot mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/persist_mutants.py
+  # The one check that says all of them were: `mutants`, as before.
+  mutants:
+    needs: harness
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every harness passed
+        run: |
+          test "${{ needs.harness.result }}" = "success"

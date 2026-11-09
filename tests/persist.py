@@ -249,7 +249,7 @@ try:
         with_file("trailer-byte-%d" % n, bytes(data), "persist.checksum")
     with_file("magic", seal(header(0, magic=b"NOTMINE!")), "persist.bad-magic")
     with_file("version", seal(header(0, version=2)), "persist.version")
-    with_file("count-too-many", seal(header(2) + record(b"k", b"v")), "persist.record-bounds")
+    with_file("count-too-many", seal(header(2) + record(b"k", b"v")), "persist.count")
     with_file("count-too-few", seal(header(0) + record(b"k", b"v")), "persist.count")
     with_file("key-longer-than-file", seal(header(1) + record(b"k", b"v", klen=1 << 40)), "persist.record-bounds")
     with_file("value-longer-than-file", seal(header(1) + record(b"k", b"v", vlen=1 << 62)), "persist.record-bounds")
@@ -335,6 +335,125 @@ try:
     check("and the old snapshot is as it was", open(os.path.join(dd, "dump.cho"), "rb").read(), before)
     os.rmdir(os.path.join(dd, "dump.tmp"))
     check("the next SAVE works", c.ask("SAVE"), ("+", "OK"))
+    stop(p)
+    # --- BGSAVE: written a slice a turn, so that nobody waits for it; a snapshot whose every key is whole, if not all of one moment
+    def pipeline(c, commands):
+        c.s.sendall(b"".join(cmd(*a) for a in commands))
+        return [c.read() for _ in commands]
+
+    def wait_saved(c, limit=120):
+        end = time.time() + limit
+        while time.time() < end:
+            info = c.ask("INFO", "persistence").decode()
+            if "rdb_bgsave_in_progress:0" in info:
+                return info
+            time.sleep(0.01)
+        return info
+
+    big = os.path.join(work, "bg")
+    os.mkdir(big)
+    p, c = start(big, memory="256")
+    n, size = 300000, 300
+    base = {}
+    for i in range(0, n, 5000):
+        pipeline(c, [("SET", "k%d" % j, ("v%d-" % j).encode() * (size // 7)) for j in range(i, i + 5000)])
+    for j in (0, 1, 777, n - 1):
+        base[j] = c.ask("GET", "k%d" % j)
+    before = int(c.ask("LASTSAVE"))
+    time.sleep(2.2)
+    check("BGSAVE answers at once", c.ask("BGSAVE"), ("+", "Background saving started"))
+    check("a second BGSAVE is refused", c.ask("BGSAVE"), ("-", "ERR Background save already in progress"))
+    check("SAVE is refused too", c.ask("SAVE"), ("-", "ERR Background save already in progress"))
+    # while it runs, the cache answers, and keys change
+    worst = 0.0
+    changed = {}
+    gone = []
+    late = []
+    step = 0
+    while "rdb_bgsave_in_progress:1" in c.ask("INFO", "persistence").decode() and step < 5000:
+        t = time.time()
+        c.ask("PING")
+        worst = max(worst, time.time() - t)
+        if step < 1000:
+            key = "k%d" % step
+            new_value = b"new-%d" % step
+            c.ask("SET", key, new_value)
+            changed[key] = new_value
+            c.ask("DEL", "k%d" % (n - 1 - step))
+            gone.append("k%d" % (n - 1 - step))
+            c.ask("SET", "late:%d" % step, "x")
+            late.append("late:%d" % step)
+        step += 1
+    info = wait_saved(c)
+    print("BGSAVE of %d keys: %d turns while it ran, the longest wait of a PING %.1f ms" % (n, step, worst * 1000))
+    check("the save finished, and says so", ("rdb_last_bgsave_status:ok" in info, "rdb_bgsave_in_progress:0" in info), (True, True))
+    after = int(c.ask("LASTSAVE"))
+    check("LASTSAVE moved to the time of the save", before < after <= int(time.time()) + 1, True)
+    check("a BGSAVE over %d keys was still going on for a while (%d turns)" % (n, step), step >= 3, True)
+    check("the longest wait of a PING while it ran was under 50 ms (it was %.1f ms)" % (worst * 1000), worst < 0.05, True)
+    stop(p)
+    p, c = start(big, memory="256")
+    wrong = []
+    for j in range(1000, n - 1000, 997):
+        want = ("v%d-" % j).encode() * (size // 7)
+        if c.ask("GET", "k%d" % j) != want:
+            wrong.append(j)
+    check("keys nobody touched are there, as they were", wrong, [])
+    odd = []
+    for key, value in list(changed.items())[::37]:
+        old = ("v%s-" % key[1:]).encode() * (size // 7)
+        got = c.ask("GET", key)
+        if got not in (old, value):
+            odd.append(key)
+    check("a key changed during the save is whole, old or new", odd, [])
+    odd = []
+    for key in gone[::37]:
+        got = c.ask("GET", key)
+        if got is not None and got != ("v%s-" % key[1:]).encode() * (size // 7):
+            odd.append(key)
+    check("a key deleted during the save is gone or whole", odd, [])
+    odd = [k for k in late[::37] if c.ask("GET", k) not in (None, b"x")]
+    check("a key created during the save is absent or whole", odd, [])
+    # --- kill -9 in the middle of a BGSAVE: the last whole snapshot is what a restart finds
+    check("SAVE of the current state", c.ask("SAVE"), ("+", "OK"))
+    whole = open(os.path.join(big, "dump.cho"), "rb").read()
+    for j in range(0, 20000, 5000):
+        pipeline(c, [("SET", "after%d" % k, "y" * 300) for k in range(j, j + 5000)])
+    check("BGSAVE for the crash", c.ask("BGSAVE"), ("+", "Background saving started"))
+    p.kill()
+    p.wait()
+    p.stderr.close()
+    processes.remove(p) if p in processes else None
+    check("a snapshot that was being written is not the snapshot", open(os.path.join(big, "dump.cho"), "rb").read(), whole)
+    check("a temporary file may be left", sorted(os.listdir(big)) in (["dump.cho"], ["dump.cho", "dump.tmp"]), True)
+    p, c = start(big, memory="256")
+    check("the restart loads the last whole snapshot (it has none of what came after)", c.ask("GET", "after0"), None)
+    check("and has what the SAVE had", c.ask("GET", "k5000") is not None, True)
+    check("the next BGSAVE removes the left-over temporary file and finishes", (c.ask("BGSAVE"), "rdb_last_bgsave_status:ok" in wait_saved(c)), (("+", "Background saving started"), True))
+    check("and leaves only the snapshot", sorted(os.listdir(big)), ["dump.cho"])
+    stop(p)
+    # a BGSAVE that cannot start says so, and nothing is running
+    blocked = os.path.join(work, "bgblocked")
+    os.mkdir(blocked)
+    p, c = start(blocked)
+    os.mkdir(os.path.join(blocked, "dump.tmp"))
+    got = c.ask("BGSAVE")
+    check("a BGSAVE that cannot start is an error", (got[0], "could not be started" in got[1]), ("-", True))
+    check("and nothing is running", "rdb_bgsave_in_progress:0" in c.ask("INFO", "persistence").decode(), True)
+    check("and the status says it failed", "rdb_last_bgsave_status:err" in c.ask("INFO", "persistence").decode(), True)
+    stop(p)
+    # BGSAVE with no directory, with a bad argument, with SCHEDULE
+    p, c = start(None)
+    check("BGSAVE without --dir says so", "persistence is off" in c.ask("BGSAVE")[1], True)
+    stop(p)
+    dd = os.path.join(work, "bgargs")
+    os.mkdir(dd)
+    p, c = start(dd)
+    check("BGSAVE with a bad argument", c.ask("BGSAVE", "NOW"), ("-", "ERR syntax error"))
+    check("BGSAVE with too many", c.ask("BGSAVE", "SCHEDULE", "x"), ("-", "ERR syntax error"))
+    check("BGSAVE SCHEDULE starts one", c.ask("BGSAVE", "SCHEDULE"), ("+", "Background saving started"))
+    wait_saved(c)
+    check("LASTSAVE with an argument", c.ask("LASTSAVE", "x")[0], "-")
     stop(p)
     # an absent file is a first start
     dd = os.path.join(work, "empty")

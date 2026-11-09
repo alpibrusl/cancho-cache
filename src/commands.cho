@@ -954,6 +954,10 @@ pub fn execute[&v, &t, &b, &s, &x, &c, &n, &w](view: &v [byte], table: &t [int],
         }
         return slowlog.command(view, table, sc, at, st);
     }
+    if reply.is_word(name, "BGSAVE") || reply.is_word(name, "LASTSAVE") {
+        // Answered by the loop, like `SAVE`; here so that they are in the tables.
+        return reply.put(sc, at, "-ERR answered by the loop\r\n");
+    }
     if reply.is_word(name, "SAVE") {
         // Answered by the loop (`src/cache.cho`, `execute_in`), which holds the directory of the snapshot; this is here so that the command is in the tables.
         return reply.put(sc, at, "-ERR SAVE is answered by the loop\r\n");
@@ -2070,10 +2074,10 @@ pub fn arity[&w](name: &w [byte]) -> [] int {
     if reply.is_word(name, "HSET") || reply.is_word(name, "HMSET") || reply.is_word(name, "HSETNX") {
         return 0 - 4;
     }
-    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "MONITOR") || reply.is_word(name, "SAVE") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
+    if reply.is_word(name, "DBSIZE") || reply.is_word(name, "MONITOR") || reply.is_word(name, "SAVE") || reply.is_word(name, "LASTSAVE") || reply.is_word(name, "READONLY") || reply.is_word(name, "READWRITE") || reply.is_word(name, "RESET") || reply.is_word(name, "MULTI") || reply.is_word(name, "EXEC") || reply.is_word(name, "DISCARD") || reply.is_word(name, "UNWATCH") || reply.is_word(name, "RANDOMKEY") {
         return 1;
     }
-    if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") {
+    if reply.is_word(name, "PING") || reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") || reply.is_word(name, "HELLO") || reply.is_word(name, "INFO") || reply.is_word(name, "COMMAND") || reply.is_word(name, "QUIT") || reply.is_word(name, "BGSAVE") {
         return 0 - 1;
     }
     if reply.is_word(name, "DEL") || reply.is_word(name, "UNLINK") || reply.is_word(name, "EXISTS") || reply.is_word(name, "TOUCH") || reply.is_word(name, "MGET") || reply.is_word(name, "AUTH") || reply.is_word(name, "CLIENT") || reply.is_word(name, "CONFIG") || reply.is_word(name, "WATCH") || reply.is_word(name, "GETEX") || reply.is_word(name, "SCAN") || reply.is_word(name, "OBJECT") || reply.is_word(name, "CLUSTER") || reply.is_word(name, "SLOWLOG") || reply.is_word(name, "LATENCY") || reply.is_word(name, "MEMORY") {

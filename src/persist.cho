@@ -11,7 +11,7 @@ import store;
 //
 // The file, all numbers little-endian:
 //
-//     header   32 bytes   "CANCHODB", the version (1), how many keys, when it was written (Unix milliseconds)
+//     header   32 bytes   "CANCHODB", the version (1), how many keys (or -1: not known when it was written, as for a snapshot written a slice at a time), when it was written (Unix ms)
 //     record   32 bytes   key length, value length, kind (0 string, 1 hash), when the key ends (Unix milliseconds, 0: never)
 //              then the key's bytes, then the value's bytes
 //     trailer  8 bytes    CRC-64/XZ of everything before it: the low 32 bits, then the high 32 bits
@@ -154,6 +154,19 @@ fn emit[&w, &a, &b](file: &!w File, acc: &!a [int], bytes: &b [byte]) -> [file_w
     return acc[0];
 }
 
+// The 32 bytes before a key's own: its lengths, its kind, and when it ends (Unix ms, 0: never), as entry `e` of the store has them.
+fn put_head[&b, &s](head: &!b [byte], st: &s store.Store, e: int) -> [] int {
+    var expiry = 0;
+    if store.expiry_of(st, e) != 0 {
+        expiry = store.wall_of(st) + store.expiry_of(st, e);
+    }
+    put_u64(head, 0, len(store.key_at(st, e)));
+    put_u64(head, 8, len(store.value(st, e)));
+    put_u64(head, 16, store.kind_of(st, e));
+    put_u64(head, 24, expiry);
+    return 0;
+}
+
 // How many keys `save` will write: the ones that have not run out.
 fn count_visible[&s](st: &s store.Store) -> [] int {
     var n = 0;
@@ -188,14 +201,7 @@ fn write_snapshot[&w, &s](file: &!w File, st: &s store.Store, now_ms: int) -> [f
             if store.visible(st, e) {
                 let key = store.key_at(st, e);
                 let value = store.value(st, e);
-                var expiry = 0;
-                if store.expiry_of(st, e) != 0 {
-                    expiry = store.wall_of(st) + store.expiry_of(st, e);
-                }
-                put_u64(head, 0, len(key));
-                put_u64(head, 8, len(value));
-                put_u64(head, 16, store.kind_of(st, e));
-                put_u64(head, 24, expiry);
+                put_head(head, st, e);
                 emit(file, acc, head);
                 emit(file, acc, key);
                 emit(file, acc, value);
@@ -284,6 +290,206 @@ pub fn save[&f, &p, &s](fs: &f Fs(""), path: &p [byte], st: &s store.Store, now_
 }
 
 // ---------------------------------------------------------------------
+// the snapshot written a slice at a time (`BGSAVE`)
+// ---------------------------------------------------------------------
+//
+// The job is `stats.persist_ints()` ints of the loop's `world`:
+//
+//     0 1 while a save is under way     1 the next entry to look at     2, 3 the halves of the running checksum     4 bytes written     5 records written
+//     6 when it began (Unix ms)         7 when the last save finished (Unix s)     8 how the last one ended (0, or an errno)     9 how long it took (ms)
+//     10 the entries it will look at (those that existed when it began)     11 saves finished
+//
+// The file is opened afresh for each slice (appending to `dump.tmp`), so nothing but ints is kept between turns. A record is written whole in a slice, so every key in the file
+// is whole and was the key's value at some moment of the save; the file as a whole is not one moment (a key changed after its turn is saved as it was, one before it as it
+// became; one created after the save began is not in it) -- `docs/design.md` section 36.
+
+pub fn job_running() -> [] int {
+    return 0;
+}
+
+// Begin a save: a fresh `dump.tmp` holding the header (the count not known yet). 0, or an errno; the job is running only if it answers 0.
+pub fn begin[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, job: &!j [int], now_ms: int) -> [fs_read(""), dir_write, file_write] int {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var status = 0;
+            borrow dir as &d in {
+                match dir_remove(d, "dump.tmp") {
+                    Done::Ok(n) => {
+                    }
+                    Done::Failed(e) => {
+                    }
+                }
+                match dir_open_new_mode(d, "dump.tmp", 420) {
+                    Opened::Ok(of) => {
+                        var file = of;
+                        region r {
+                            let head = alloc_slice[r](32, byte_of(0));
+                            var i = 0;
+                            while i < 8 {
+                                head[i] = byte_of(int_of("CANCHODB"[i]));
+                                i = i + 1;
+                            }
+                            put_u64(head, 8, version());
+                            put_u64(head, 16, 0 - 1);
+                            put_u64(head, 24, now_ms);
+                            let start = crc.crc64_update(crc.crc64_start(), head);
+                            job[2] = start.0;
+                            job[3] = start.1;
+                            borrow mut file as &!w in {
+                                status = write_all(w, head);
+                            }
+                        }
+                        file_close(file);
+                    }
+                    Opened::Failed(e) => {
+                        status = e;
+                    }
+                }
+            }
+            dir_close(dir);
+            if status == 0 {
+                job[0] = 1;
+                job[1] = 0;
+                job[4] = header_size();
+                job[5] = 0;
+                job[6] = now_ms;
+                job[10] = store.entries(st);
+            }
+            return status;
+        }
+        DirOpened::Failed(e) => {
+            return e;
+        }
+    }
+}
+
+// `bytes` to the file and into the job's checksum: 0, or the errno.
+fn emit_job[&w, &j, &b](file: &!w File, job: &!j [int], bytes: &b [byte]) -> [file_write] int {
+    let state = crc.crc64_update((job[2], job[3]), bytes);
+    job[2] = state.0;
+    job[3] = state.1;
+    job[4] = job[4] + len(bytes);
+    return write_all(file, bytes);
+}
+
+// A slice's records, into the file, up to `budget` bytes (the record that crosses it is written whole): 0, or the errno.
+fn write_slice[&w, &s, &j](file: &!w File, st: &s store.Store, job: &!j [int], budget: int) -> [file_write] int {
+    region r {
+        let head = alloc_slice[r](32, byte_of(0));
+        let start = job[4];
+        var status = 0;
+        while job[1] < job[10] && job[1] < store.entries(st) && job[4] - start < budget && status == 0 {
+            let e = job[1];
+            if store.visible(st, e) {
+                let key = store.key_at(st, e);
+                let value = store.value(st, e);
+                put_head(head, st, e);
+                status = emit_job(file, job, head);
+                if status == 0 {
+                    status = emit_job(file, job, key);
+                }
+                if status == 0 {
+                    status = emit_job(file, job, value);
+                }
+                job[5] = job[5] + 1;
+            }
+            job[1] = e + 1;
+        }
+        return status;
+    }
+}
+
+// The end of a save, once every entry has been looked at: the checksum and a sync of the file (the caller renames it and syncs the directory). 0, or an errno.
+fn finish_in[&w, &j](file: &!w File, job: &!j [int]) -> [file_write] int {
+    region r {
+        let tail = alloc_slice[r](8, byte_of(0));
+        let done = crc.crc64_finish((job[2], job[3]));
+        put_u32(tail, 0, done.1);
+        put_u32(tail, 4, done.0);
+        var status = write_all(file, tail);
+        if status == 0 {
+            match file_sync(file) {
+                Done::Ok(n) => {
+                }
+                Done::Failed(e) => {
+                    status = e;
+                }
+            }
+        }
+        return status;
+    }
+}
+
+// One slice of a save under way, of about `budget` bytes. -1: more to do. 0: finished (`dump.cho` is replaced). An errno: it failed (the old `dump.cho` is as it was).
+pub fn step[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, job: &!j [int], budget: int, now_ms: int) -> [fs_read(""), dir_write, file_write] int {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var status = 0;
+            var finished = false;
+            borrow dir as &d in {
+                match dir_open_append(d, "dump.tmp") {
+                    Opened::Ok(of) => {
+                        var file = of;
+                        borrow mut file as &!w in {
+                            status = write_slice(w, st, job, budget);
+                            if status == 0 && (job[1] >= job[10] || job[1] >= store.entries(st)) {
+                                status = finish_in(w, job);
+                                finished = status == 0;
+                            }
+                        }
+                        file_close(file);
+                    }
+                    Opened::Failed(e) => {
+                        status = e;
+                    }
+                }
+                if finished {
+                    match dir_rename(d, "dump.tmp", "dump.cho") {
+                        Done::Ok(n) => {
+                        }
+                        Done::Failed(e) => {
+                            status = e;
+                        }
+                    }
+                    if status == 0 {
+                        match dir_sync(d) {
+                            Done::Ok(n) => {
+                            }
+                            Done::Failed(e) => {
+                                status = e;
+                            }
+                        }
+                    }
+                }
+            }
+            dir_close(dir);
+            if status != 0 {
+                job[0] = 0;
+                job[8] = status;
+                job[9] = now_ms - job[6];
+                return status;
+            }
+            if finished {
+                job[0] = 0;
+                job[7] = now_ms / 1000;
+                job[8] = 0;
+                job[9] = now_ms - job[6];
+                job[11] = job[11] + 1;
+                return 0;
+            }
+            return 0 - 1;
+        }
+        DirOpened::Failed(e) => {
+            job[0] = 0;
+            job[8] = e;
+            return e;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // load
 // ---------------------------------------------------------------------
 
@@ -312,12 +518,13 @@ fn read_snapshot[&b, &s](bytes: &b [byte], st: &!s store.Store) -> [] (int, int)
     if get_u32(bytes, size - 8) != sum.1 || get_u32(bytes, size - 4) != sum.0 {
         return (13, 0);
     }
+    // The number of keys the header says (0 or more), or -1: a snapshot written a slice at a time does not know it until it is done, and says so.
     let count = get_u64(bytes, 16);
     let end = size - trailer_size();
     var at = header_size();
     var read = 0;
     var kept = 0;
-    while read < count {
+    while at < end {
         if at + record_size() > end {
             return (14, kept);
         }
@@ -355,7 +562,7 @@ fn read_snapshot[&b, &s](bytes: &b [byte], st: &!s store.Store) -> [] (int, int)
         at = at + record_size() + klen + vlen;
         read = read + 1;
     }
-    if at != end {
+    if count >= 0 && count != read {
         return (15, kept);
     }
     return (0, kept);

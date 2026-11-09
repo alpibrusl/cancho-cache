@@ -452,12 +452,48 @@ fn execute_in[&t, &c, &v, &w, &b, &z](tab: &!t conns.Table, core: &!c Core, k: i
         if core.dir_len == 0 {
             return reply.put(sc, at, "-ERR persistence is off: start the cache with --dir=<directory> (docs/design.md section 35)\r\n");
         }
-        let failed = persist.save(fs, contents(core.dir)[0..core.dir_len], core.store, store.wall_of(core.store) + store.now_of(core.store));
+        let job = contents(core.info)[stats.persist_at()..stats.persist_at() + stats.persist_ints()];
+        if job[0] == 1 {
+            return reply.put(sc, at, "-ERR Background save already in progress\r\n");
+        }
+        let now_ms = store.wall_of(core.store) + store.now_of(core.store);
+        let failed = persist.save(fs, contents(core.dir)[0..core.dir_len], core.store, now_ms);
         if failed != 0 {
+            job[8] = failed;
             let o = reply.put_nat(sc, reply.put(sc, at, "-ERR the snapshot could not be written (errno "), failed);
             return reply.put(sc, o, ")\r\n");
         }
+        job[7] = now_ms / 1000;
+        job[8] = 0;
         return reply.put(sc, at, "+OK\r\n");
+    }
+    if tb[0] >= 1 && reply.is_word(reply.arg_of(view, tb, 0), "LASTSAVE") {
+        if tb[0] != 1 {
+            return reply.put(sc, at, "-ERR wrong number of arguments for 'lastsave' command\r\n");
+        }
+        return reply.put_integer(sc, at, contents(core.info)[stats.persist_at() + 7]);
+    }
+    if tb[0] >= 1 && reply.is_word(reply.arg_of(view, tb, 0), "BGSAVE") {
+        if tb[0] > 2 {
+            return reply.put(sc, at, "-ERR syntax error\r\n");
+        }
+        if tb[0] == 2 && !reply.is_word(reply.arg_of(view, tb, 1), "SCHEDULE") {
+            return reply.put(sc, at, "-ERR syntax error\r\n");
+        }
+        if core.dir_len == 0 {
+            return reply.put(sc, at, "-ERR persistence is off: start the cache with --dir=<directory> (docs/design.md section 35)\r\n");
+        }
+        let job = contents(core.info)[stats.persist_at()..stats.persist_at() + stats.persist_ints()];
+        if job[0] == 1 {
+            return reply.put(sc, at, "-ERR Background save already in progress\r\n");
+        }
+        let failed = persist.begin(fs, contents(core.dir)[0..core.dir_len], core.store, job, store.wall_of(core.store) + store.now_of(core.store));
+        if failed != 0 {
+            job[8] = failed;
+            let o = reply.put_nat(sc, reply.put(sc, at, "-ERR the snapshot could not be started (errno "), failed);
+            return reply.put(sc, o, ")\r\n");
+        }
+        return reply.put(sc, at, "+Background saving started\r\n");
     }
     if tb[0] >= 2 && reply.is_word(reply.arg_of(view, tb, 0), "CLIENT") {
         let sub = reply.arg_of(view, tb, 1);
@@ -1029,6 +1065,7 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                         j = j + 1;
                     }
                     cw.dir_len = len(dirpath);
+                    contents(cw.info)[stats.persist_at() + 7] = (store.wall_of(cw.store) + store.now_of(cw.store)) / 1000;
                     let (loaded, kept) = persist.load(fs, dirpath, heap, cw.store);
                     if loaded > persist.absent() {
                         bad_dump = loaded;
@@ -1044,8 +1081,8 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                     if store.keys_with_expiry(cw.store) > 0 {
                         wait_ms = 100;
                     }
-                    // A compaction part way through is finished while the cache is idle, a slice a turn.
-                    if store.compacting(cw.store) {
+                    // A compaction part way through is finished while the cache is idle, a slice a turn; so is a save.
+                    if store.compacting(cw.store) || contents(cw.info)[stats.persist_at()] == 1 {
                         wait_ms = 0;
                     }
                     ready = poller_wait(cw.poller, contents(cw.events), wait_ms);
@@ -1085,6 +1122,11 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                     store.note_peak(cw.store);
                     // Work the arena's reclaiming ahead of need, a slice at a time (the sets do some themselves).
                     store.reclaim(cw.store, 1024);
+                    // A save under way writes one slice of itself (`docs/design.md` section 36): about 256 KiB, so no client waits for more than that.
+                    let job = contents(cw.info)[stats.persist_at()..stats.persist_at() + stats.persist_ints()];
+                    if job[0] == 1 {
+                        persist.step(fs, contents(cw.dir)[0..cw.dir_len], cw.store, job, 262144, store.wall_of(cw.store) + store.now_of(cw.store));
+                    }
                     // Take the keys whose time has passed that nobody asked for again: at most a hundred times a second,
                     // 256 keys at a look, and again while more than a quarter of what it looked at had run out (Redis's
                     // rule), at most sixteen looks.

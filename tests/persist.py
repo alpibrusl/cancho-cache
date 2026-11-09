@@ -98,8 +98,12 @@ def refused(directory, **kw):
     """start on a directory and answer (exit status, the last line of stderr) if the cache stopped, or None if it is serving"""
     p, c = start(directory, **kw)
     if c is not None:
-        stop(p)
-        return None
+        # The socket is bound before the file is read, so a connection can be taken by the kernel just before the cache stops: give it a moment to do so.
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            stop(p)
+            return None
     err = p.stderr.read().decode()
     p.wait()
     p.stderr.close()

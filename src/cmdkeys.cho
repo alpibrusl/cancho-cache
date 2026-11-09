@@ -430,6 +430,9 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
     if reply.is_word(name, "RESET") {
         return (true, 1, 0, 0, 0);
     }
+    if reply.is_word(name, "SAVE") {
+        return (true, 1, 0, 0, 0);
+    }
     if reply.is_word(name, "SCAN") {
         return (true, -2, 0, 0, 0);
     }

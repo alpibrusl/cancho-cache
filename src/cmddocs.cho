@@ -412,6 +412,12 @@ pub fn put_docs[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) -
         }
         return (true, reply.put(sc, at, "$5\r\nreset\r\n*8\r\n$7\r\nsummary\r\n$20\r\nReset the connection\r\n$5\r\nsince\r\n$5\r\n6.2.0\r\n$5\r\ngroup\r\n$10\r\nconnection\r\n$10\r\ncomplexity\r\n$4\r\nO(1)\r\n"));
     }
+    if reply.is_word(name, "SAVE") {
+        if resp3 {
+            return (true, reply.put(sc, at, "$4\r\nsave\r\n%4\r\n$7\r\nsummary\r\n$38\r\nSynchronously save the dataset to disk\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$57\r\nO(N) where N is the total number of keys in all databases\r\n"));
+        }
+        return (true, reply.put(sc, at, "$4\r\nsave\r\n*8\r\n$7\r\nsummary\r\n$38\r\nSynchronously save the dataset to disk\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\nserver\r\n$10\r\ncomplexity\r\n$57\r\nO(N) where N is the total number of keys in all databases\r\n"));
+    }
     if reply.is_word(name, "SCAN") {
         if resp3 {
             return (true, reply.put(sc, at, "$4\r\nscan\r\n%6\r\n$7\r\nsummary\r\n$36\r\nIncrementally iterate the keys space\r\n$5\r\nsince\r\n$5\r\n2.8.0\r\n$5\r\ngroup\r\n$7\r\ngeneric\r\n$10\r\ncomplexity\r\n$169\r\nO(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.\r\n$7\r\nhistory\r\n~1\r\n*2\r\n$5\r\n6.0.0\r\n$28\r\nAdded the `TYPE` subcommand.\r\n$9\r\narguments\r\n*4\r\n%2\r\n$4\r\nname\r\n$6\r\ncursor\r\n$4\r\ntype\r\n$7\r\ninteger\r\n%4\r\n$4\r\nname\r\n$7\r\npattern\r\n$4\r\ntype\r\n$7\r\npattern\r\n$5\r\ntoken\r\n$5\r\nMATCH\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%4\r\n$4\r\nname\r\n$5\r\ncount\r\n$4\r\ntype\r\n$7\r\ninteger\r\n$5\r\ntoken\r\n$5\r\nCOUNT\r\n$5\r\nflags\r\n~1\r\n+optional\r\n%5\r\n$4\r\nname\r\n$4\r\ntype\r\n$4\r\ntype\r\n$6\r\nstring\r\n$5\r\ntoken\r\n$4\r\nTYPE\r\n$5\r\nsince\r\n$5\r\n6.0.0\r\n$5\r\nflags\r\n~1\r\n+optional\r\n"));
@@ -1058,6 +1064,7 @@ pub fn put_all_docs[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_docs("RENAME", sc, o, resp3).1;
     o = put_docs("RENAMENX", sc, o, resp3).1;
     o = put_docs("RESET", sc, o, resp3).1;
+    o = put_docs("SAVE", sc, o, resp3).1;
     o = put_docs("SCAN", sc, o, resp3).1;
     o = put_docs("SELECT", sc, o, resp3).1;
     o = put_docs("SET", sc, o, resp3).1;

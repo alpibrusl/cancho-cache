@@ -30,11 +30,13 @@ on:
       - src/clients.cho
       - src/latency.cho
       - src/memory.cho
+      - src/persist.cho
       - tests/info.py
       - tests/slowlog.py
       - tests/client_commands.py
       - tests/latency.py
       - tests/monitor.py
+      - tests/persist.py
       - tests/cluster.py
       - tests/gen_cmdinfo.py
       - src/commands.cho
@@ -45,7 +47,13 @@ env:
   CANCHO_REV: 502a57d0f0e29a485be8b1886d4d17fa33c7fa5d
 
 jobs:
-  mutants:
+  # One job for each file of mutants: they build the cache once for each mutant, and all of them in one job no longer fit an hour.
+  harness:
+    name: mutants (${{ matrix.harness }})
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [txn, pieces, keyspace, string, slowlog, clients, latency, monitor, persist]
     runs-on: ubuntu-latest
     # A step that hangs (a package mirror that does not answer, once, held a job for GitHub's six hours) fails instead.
     timeout-minutes: 60
@@ -76,7 +84,7 @@ jobs:
           mkdir -p target/release && cp standalone/cancho target/release/cancho
 
       - name: Redis, the oracle
-        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server
+        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -q redis-server strace
 
       - name: Client libraries
         working-directory: cache
@@ -87,36 +95,18 @@ jobs:
       - name: Every mutant still applies to the source, exactly once (fast)
         working-directory: cache
         run: |
-          for f in txn string keyspace pieces slowlog clients latency monitor; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
+          for f in txn string keyspace pieces slowlog clients latency monitor persist; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
 
-      - name: Every transaction mutant is caught
+      - name: Every mutant of this file is caught
         working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/txn_mutants.py
+        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/${{ matrix.harness }}_mutants.py
 
-      - name: Every mutant of the answers in pieces is caught
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/pieces_mutants.py
-
-      - name: Every keyspace mutant is caught
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/keyspace_mutants.py
-
-      - name: Every string-command mutant is caught
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/string_mutants.py
-
-      - name: Slow log mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/slowlog_mutants.py
-
-      - name: CLIENT LIST, INFO and KILL mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/clients_mutants.py
-
-      - name: LATENCY and MEMORY mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/latency_mutants.py
-
-      - name: MONITOR mutants
-        working-directory: cache
-        run: CANCHO=$PWD/../cancho/target/release/cancho python3 tests/monitor_mutants.py
+  # The one check that says all of them were: `mutants`, as before.
+  mutants:
+    needs: harness
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every harness passed
+        run: |
+          test "${{ needs.harness.result }}" = "success"

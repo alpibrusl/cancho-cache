@@ -27,12 +27,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SET") {
-                return 69;
+                return 70;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TTL") {
-                return 77;
+                return 78;
             }
         }
     }
@@ -109,13 +109,16 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
             }
         }
         if first == 'S' {
-            if reply.is_word(name, "SCAN") {
+            if reply.is_word(name, "SAVE") {
                 return 67;
+            }
+            if reply.is_word(name, "SCAN") {
+                return 68;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TYPE") {
-                return 78;
+                return 79;
             }
         }
     }
@@ -157,20 +160,20 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SETEX") {
-                return 70;
+                return 71;
             }
             if reply.is_word(name, "SETNX") {
-                return 71;
+                return 72;
             }
         }
         if first == 'T' {
             if reply.is_word(name, "TOUCH") {
-                return 76;
+                return 77;
             }
         }
         if first == 'W' {
             if reply.is_word(name, "WATCH") {
-                return 81;
+                return 82;
             }
         }
     }
@@ -247,18 +250,18 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SELECT") {
-                return 68;
+                return 69;
             }
             if reply.is_word(name, "STRLEN") {
-                return 74;
+                return 75;
             }
             if reply.is_word(name, "SUBSTR") {
-                return 75;
+                return 76;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNLINK") {
-                return 79;
+                return 80;
             }
         }
     }
@@ -315,12 +318,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SLOWLOG") {
-                return 73;
+                return 74;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNWATCH") {
-                return 80;
+                return 81;
             }
         }
     }
@@ -350,7 +353,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SETRANGE") {
-                return 72;
+                return 73;
             }
         }
     }
@@ -595,48 +598,51 @@ pub fn name_at(i: int) -> [] &static [byte] {
         return "reset";
     }
     if i == 67 {
-        return "scan";
+        return "save";
     }
     if i == 68 {
-        return "select";
+        return "scan";
     }
     if i == 69 {
-        return "set";
+        return "select";
     }
     if i == 70 {
-        return "setex";
+        return "set";
     }
     if i == 71 {
-        return "setnx";
+        return "setex";
     }
     if i == 72 {
-        return "setrange";
+        return "setnx";
     }
     if i == 73 {
-        return "slowlog";
+        return "setrange";
     }
     if i == 74 {
-        return "strlen";
+        return "slowlog";
     }
     if i == 75 {
-        return "substr";
+        return "strlen";
     }
     if i == 76 {
-        return "touch";
+        return "substr";
     }
     if i == 77 {
-        return "ttl";
+        return "touch";
     }
     if i == 78 {
-        return "type";
+        return "ttl";
     }
     if i == 79 {
-        return "unlink";
+        return "type";
     }
     if i == 80 {
-        return "unwatch";
+        return "unlink";
     }
     if i == 81 {
+        return "unwatch";
+    }
+    if i == 82 {
         return "watch";
     }
     return "";
@@ -651,7 +657,7 @@ pub fn may_be_slow(i: int) -> [] bool {
     if i < 62 {
         return 6360943781766265 >> i & 1 == 1;
     }
-    return 681004 >> i - 62 & 1 == 1;
+    return 1361996 >> i - 62 & 1 == 1;
 }
 
 // Whether command `i` (with subcommand `sub`) reads or writes the keyspace, or may be replicated: a connection in `MONITOR` mode is a replica as far as Redis is concerned and may
@@ -798,10 +804,7 @@ pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 65 {
         return true;
     }
-    if i == 67 {
-        return true;
-    }
-    if i == 69 {
+    if i == 68 {
         return true;
     }
     if i == 70 {
@@ -813,7 +816,7 @@ pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 72 {
         return true;
     }
-    if i == 74 {
+    if i == 73 {
         return true;
     }
     if i == 75 {
@@ -831,6 +834,9 @@ pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 79 {
         return true;
     }
+    if i == 80 {
+        return true;
+    }
     if i == 46 && reply.is_word(sub, "USAGE") {
         return true;
     }
@@ -846,6 +852,9 @@ pub fn skips_monitor[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 48 {
         return true;
     }
+    if i == 67 {
+        return true;
+    }
     if i == 2 && (reply.is_word(sub, "KILL") || reply.is_word(sub, "LIST") || reply.is_word(sub, "NO-EVICT") || reply.is_word(sub, "PAUSE") || reply.is_word(sub, "UNBLOCK") || reply.is_word(sub, "UNPAUSE")) {
         return true;
     }
@@ -858,7 +867,7 @@ pub fn skips_monitor[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 45 && (reply.is_word(sub, "DOCTOR") || reply.is_word(sub, "GRAPH") || reply.is_word(sub, "HISTOGRAM") || reply.is_word(sub, "HISTORY") || reply.is_word(sub, "LATEST") || reply.is_word(sub, "RESET")) {
         return true;
     }
-    if i == 73 && (reply.is_word(sub, "GET") || reply.is_word(sub, "LEN") || reply.is_word(sub, "RESET")) {
+    if i == 74 && (reply.is_word(sub, "GET") || reply.is_word(sub, "LEN") || reply.is_word(sub, "RESET")) {
         return true;
     }
     return false;

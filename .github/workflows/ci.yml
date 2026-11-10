@@ -124,6 +124,10 @@ jobs:
         working-directory: cache
         run: python3 tests/aof.py build/cache
 
+      - name: The append-only log is read at start, cut at any byte it gives a whole batch, and damage in the middle refuses
+        working-directory: cache
+        run: python3 tests/aof_replay.py build/cache
+
       - name: Cluster-lite against a real Redis Cluster (three nodes of each, compared line for line)
         working-directory: cache
         run: python3 tests/cluster.py build/cache

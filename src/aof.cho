@@ -22,6 +22,7 @@ import store;
 //     0 1 if the log is on     1 the policy: 0 `no`, 1 `everysec`, 2 `always`     2 bytes staged in the buffer, not yet written     3 the store's milliseconds at the last sync
 //     4 batches written        5 bytes written (the file's size, as far as this run knows)      6 how the last write ended (0, or an errno)      7 bytes written since the last sync
 //     8 syncs                  9 writes that failed       10 evictions that did not fit the store's ring and so are not in the log
+//     11 batches replayed at start     12 bytes of torn tail cut off at start       13 batches skipped as older than the snapshot
 
 pub fn version() -> [] int {
     return 1;
@@ -153,19 +154,9 @@ pub fn open_log[&f, &p](fs: &f Fs(""), path: &p [byte], now_ms: int) -> [fs_read
                         }
                     }
                     Opened::Failed(e) => {
-                        // 17: it is there already; then it has to be a file this cache can append to.
+                        // 17: it is there already, and `replay` has read it.
                         if e != 17 {
                             status = e;
-                        } else {
-                            match dir_open_append(d, name()) {
-                                Opened::Ok(af) => {
-                                    var existing = af;
-                                    file_close(existing);
-                                }
-                                Opened::Failed(e2) => {
-                                    status = e2;
-                                }
-                            }
                         }
                     }
                 }
@@ -347,4 +338,326 @@ pub fn log_bare[&f, &p, &s, &a, &b, &k](fs: &f Fs(""), path: &p [byte], st: &s s
     at = copy_in(buf, at + 32, key);
     ab[2] = at;
     return 0;
+}
+
+// ---------------------------------------------------------------------
+// reading it back (`docs/design.md` section 40)
+// ---------------------------------------------------------------------
+
+fn get_u64[&b](buf: &b [byte], at: int) -> [] int {
+    var n = 0;
+    var i = 7;
+    while i >= 0 {
+        n = n << 8 | int_of(buf[at + i]);
+        i = i - 1;
+    }
+    return n;
+}
+
+fn get_u32[&b](buf: &b [byte], at: int) -> [] int {
+    var n = 0;
+    var i = 3;
+    while i >= 0 {
+        n = n << 8 | int_of(buf[at + i]);
+        i = i - 1;
+    }
+    return n;
+}
+
+// The most a log may be (it is read whole, as a snapshot is): a gigabyte.
+fn most_bytes() -> [] int {
+    return 1073741824;
+}
+
+// Whether the 32 bytes at `p`, which the caller has seen are a trailer (kind 9), carry a length and a checksum that fit the bytes before them, which must start at or after `floor`.
+fn trailer_fits[&b](bytes: &b [byte], p: int, floor: int) -> [] bool {
+    let length = get_u64(bytes, p);
+    if length < 0 || length > p - floor {
+        return false;
+    }
+    let sum = crc.crc64_of(bytes[p - length..p]);
+    return get_u32(bytes, p + 24) == sum.1 && get_u32(bytes, p + 28) == sum.0;
+}
+
+// Whether any batch that verifies lies after `from`: a crash cuts the last write and leaves nothing that verifies after it, damage in the middle leaves the batches after it whole.
+fn verifying_batch_after[&b](bytes: &b [byte], from: int) -> [] bool {
+    var p = from;
+    while p + 32 <= len(bytes) {
+        // The kind is the cheap test: 9 in the low byte, 0 in the seven above.
+        if int_of(bytes[p + 16]) == kind_end() && int_of(bytes[p + 17]) == 0 && int_of(bytes[p + 23]) == 0 {
+            if trailer_fits(bytes, p, from) {
+                return true;
+            }
+        }
+        p = p + 1;
+    }
+    return false;
+}
+
+// The batch that starts at `at`: where it ends (after its trailer) if it verifies, or a negative number: -1 the file ends inside it, -2 its trailer does not fit what is before it,
+// -3 a record of a kind there is none of.
+fn batch_end[&b](bytes: &b [byte], at: int) -> [] int {
+    let size = len(bytes);
+    var p = at;
+    while true {
+        if p + 32 > size {
+            return 0 - 1;
+        }
+        let klen = get_u64(bytes, p);
+        let vlen = get_u64(bytes, p + 8);
+        let kind = get_u64(bytes, p + 16);
+        if kind == kind_end() {
+            if trailer_fits(bytes, p, at) && get_u64(bytes, p) == p - at {
+                return p + 32;
+            }
+            return 0 - 2;
+        }
+        if kind != store.kind_string() && kind != store.kind_hash() && kind != kind_gone() && kind != kind_expiry() && kind != kind_flush() {
+            return 0 - 3;
+        }
+        // A record that runs past the end is found by the test at the top of the loop, when `p` has moved there; what is checked here is a length that would not move `p` forward.
+        if klen < 0 || vlen < 0 || klen > size || vlen > size {
+            return 0 - 1;
+        }
+        p = p + 32 + klen + vlen;
+    }
+    return 0 - 1;
+}
+
+// A deadline as the store holds it: relative to the store's clock, and never already past while replaying (a later record may move it: see section 40).
+fn relative_of[&s](st: &s store.Store, ends: int) -> [] int {
+    if ends == 0 {
+        return 0;
+    }
+    var relative = ends - store.wall_of(st);
+    if relative <= store.now_of(st) {
+        relative = store.now_of(st) + 1;
+    }
+    return relative;
+}
+
+// Apply the records in `bytes[from..to]`, which verified. 0, or the status of the first that cannot be (26: no room).
+fn apply[&b, &s](bytes: &b [byte], from: int, to: int, st: &!s store.Store) -> [] int {
+    var p = from;
+    while p < to {
+        let klen = get_u64(bytes, p);
+        let vlen = get_u64(bytes, p + 8);
+        let kind = get_u64(bytes, p + 16);
+        let ends = get_u64(bytes, p + 24);
+        let key = bytes[p + 32..p + 32 + klen];
+        let value = bytes[p + 32 + klen..p + 32 + klen + vlen];
+        if kind == store.kind_string() || kind == store.kind_hash() {
+            let h = store.hash_of(st, key);
+            if store.set(st, key, h, value, relative_of(st, ends)) != 0 {
+                return 26;
+            }
+            let e = store.peek(st, key, h);
+            if e >= 0 {
+                store.set_kind(st, e, kind);
+            }
+        } else if kind == kind_gone() {
+            store.delete(st, key, store.hash_of(st, key));
+        } else if kind == kind_expiry() {
+            let e = store.peek(st, key, store.hash_of(st, key));
+            if e >= 0 {
+                store.set_expiry(st, e, relative_of(st, ends));
+            }
+        } else {
+            store.clear(st);
+        }
+        p = p + 32 + klen + vlen;
+    }
+    return 0;
+}
+
+// Replay the log `bytes` (the whole file) into the store. Answers `(status, good, torn, applied, skipped)`: the status (0, or a refusal: see `persist.tag`), how many bytes are whole
+// batches (the file is to be cut to this), how many bytes after them were a crash's torn tail, and how many batches were applied and how many skipped as older than the snapshot.
+pub fn replay_bytes[&b, &s](bytes: &b [byte], st: &!s store.Store) -> [] (int, int, int, int, int) {
+    let size = len(bytes);
+    if size < 32 {
+        // A header the crash cut short: there is no log; it is made again.
+        var i = 0;
+        while i < size {
+            if i < 8 && int_of(bytes[i]) != int_of("CANCHOLG"[i]) {
+                return (21, 0, 0, 0, 0);
+            }
+            i = i + 1;
+        }
+        return (0, 0, size, 0, 0);
+    }
+    var i = 0;
+    while i < 8 {
+        if int_of(bytes[i]) != int_of("CANCHOLG"[i]) {
+            return (21, 0, 0, 0, 0);
+        }
+        i = i + 1;
+    }
+    if get_u64(bytes, 8) != version() {
+        return (22, 0, 0, 0, 0);
+    }
+    var at = 32;
+    var applied = 0;
+    var skipped = 0;
+    while at < size {
+        let end = batch_end(bytes, at);
+        if end < 0 {
+            if end == 0 - 3 {
+                return (25, at, 0, applied, skipped);
+            }
+            if verifying_batch_after(bytes, at) {
+                if end == 0 - 2 {
+                    return (23, at, 0, applied, skipped);
+                }
+                return (24, at, 0, applied, skipped);
+            }
+            return (0, at, size - at, applied, skipped);
+        }
+        // The trailer's time is the 2nd number; a batch from before the snapshot began is in the snapshot.
+        if get_u64(bytes, end - 24) < store.snap_ms_of(st) {
+            skipped = skipped + 1;
+        } else {
+            let status = apply(bytes, at, end - 32, st);
+            if status != 0 {
+                return (status, at, 0, applied, skipped);
+            }
+            applied = applied + 1;
+        }
+        at = end;
+    }
+    return (0, at, 0, applied, skipped);
+}
+
+// Read the log beneath the directory `dir` is a handle on: `(status, good, torn, applied, skipped)` as `replay_bytes`; status 1: there is no log.
+fn replay_in[&d, &h, &s](dir: &d Dir, heap: &!h Heap, st: &!s store.Store) -> [heap, dir_read, file_read] (int, int, int, int, int) {
+    match dir_open_read(dir, name()) {
+        Opened::Ok(opened) => {
+            var file = opened;
+            var status = 0;
+            var size = 0;
+            borrow mut file as &!w in {
+                match file_size(w) {
+                    Done::Ok(n) => {
+                        size = n;
+                    }
+                    Done::Failed(e) => {
+                        status = 28;
+                    }
+                }
+            }
+            if status == 0 && size > most_bytes() {
+                status = 27;
+            }
+            var answer = (status, 0, 0, 0, 0);
+            if status == 0 {
+                let space = box_slice(heap, size, byte_of(0));
+                var got = 0;
+                borrow mut file as &!w in {
+                    borrow mut space as &!sp in {
+                        while got < size && status == 0 {
+                            match file_pread(w, got, contents(sp)[got..size]) {
+                                Read::Got(n) => {
+                                    got = got + n;
+                                }
+                                Read::End => {
+                                    status = 28;
+                                }
+                                Read::Failed(e) => {
+                                    status = 28;
+                                }
+                            }
+                        }
+                    }
+                }
+                if status != 0 {
+                    answer = (status, 0, 0, 0, 0);
+                } else {
+                    borrow space as &sp in {
+                        answer = replay_bytes(contents(sp), st);
+                    }
+                }
+                unbox_slice(heap, space);
+            }
+            file_close(file);
+            return answer;
+        }
+        Opened::Failed(e) => {
+            if e == 2 {
+                return (1, 0, 0, 0, 0);
+            }
+            return (28, 0, 0, 0, 0);
+        }
+    }
+}
+
+// Cut the log to its first `good` bytes (and sync it); a log with no whole header is removed so that it is made again. 0, or an errno.
+fn cut_in[&d](dir: &d Dir, good: int) -> [dir_write, file_write] int {
+    if good == 0 {
+        match dir_remove(dir, name()) {
+            Done::Ok(n) => {
+            }
+            Done::Failed(e) => {
+                return e;
+            }
+        }
+        match dir_sync(dir) {
+            Done::Ok(n) => {
+            }
+            Done::Failed(e) => {
+                return e;
+            }
+        }
+        return 0;
+    }
+    match dir_open_append(dir, name()) {
+        Opened::Ok(opened) => {
+            var file = opened;
+            var status = 0;
+            borrow mut file as &!w in {
+                match file_truncate(w, good) {
+                    Done::Ok(n) => {
+                    }
+                    Done::Failed(e) => {
+                        status = e;
+                    }
+                }
+                if status == 0 {
+                    match file_sync(w) {
+                        Done::Ok(n) => {
+                        }
+                        Done::Failed(e) => {
+                            status = e;
+                        }
+                    }
+                }
+            }
+            file_close(file);
+            return status;
+        }
+        Opened::Failed(e) => {
+            return e;
+        }
+    }
+}
+
+// Replay the log in the directory at `path` into the store and cut off a torn tail: `(status, good, torn, applied, skipped)`; a cut that fails is status 28.
+pub fn replay[&f, &p, &h, &s](fs: &f Fs(""), path: &p [byte], heap: &!h Heap, st: &!s store.Store) -> [heap, fs_read(""), dir_read, dir_write, file_read, file_write] (int, int, int, int, int) {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var answer = (0, 0, 0, 0, 0);
+            borrow dir as &d in {
+                answer = replay_in(d, heap, st);
+                if answer.0 == 0 && (answer.2 > 0 || answer.1 == 0) {
+                    if cut_in(d, answer.1) != 0 {
+                        answer = (28, answer.1, answer.2, answer.3, answer.4);
+                    }
+                }
+            }
+            dir_close(dir);
+            return answer;
+        }
+        DirOpened::Failed(e) => {
+            return (28, 0, 0, 0, 0);
+        }
+    }
 }

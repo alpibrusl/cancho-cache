@@ -374,6 +374,9 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
             o = kv(sc, o, "aof_fsyncs", world[stats.aof_at() + 8]);
             o = kv(sc, o, "aof_write_errors", world[stats.aof_at() + 9]);
             o = kv(sc, o, "aof_evictions_not_logged", world[stats.aof_at() + 10]);
+            o = kv(sc, o, "aof_replayed_batches", world[stats.aof_at() + 11]);
+            o = kv(sc, o, "aof_skipped_batches", world[stats.aof_at() + 13]);
+            o = kv(sc, o, "aof_truncated_bytes", world[stats.aof_at() + 12]);
         }
         o = reply.put(sc, o, "\r\n");
     }

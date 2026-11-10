@@ -105,52 +105,15 @@ def stop(p):
     p.stderr.close()
 
 
-# --- CRC-64/XZ
-_TABLE = []
-for _i in range(256):
-    _c = _i
-    for _ in range(8):
-        _c = (_c >> 1) ^ 0xC96C5795D7870F42 if _c & 1 else _c >> 1
-    _TABLE.append(_c)
-
-
-def crc64(data):
-    crc = 0xFFFFFFFFFFFFFFFF
-    for b in data:
-        crc = _TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8)
-    return crc ^ 0xFFFFFFFFFFFFFFFF
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aoflib
+from aoflib import crc64, flat
 
 
 def parse_log(path):
-    """[(unix ms of the batch, [(kind, key, value, ends)])], and the number of bytes after the last whole batch. A batch that does not check out is reported in `failures`."""
-    d = open(path, "rb").read()
-    if d[:8] != b"CANCHOLG" or struct.unpack_from("<Q", d, 8)[0] != 1:
-        failures.append("%s: not a log (%r)" % (path, d[:16]))
-        return [], len(d)
-    at = 32
-    batches, records, start_at = [], [], 32
-    while at + 32 <= len(d):
-        a, b, kind, c = struct.unpack_from("<QQQQ", d, at)
-        if kind == 9:
-            body = d[start_at:at]
-            if a != len(body) or c != crc64(body):
-                failures.append("%s: a batch at %d does not check out (length %d vs %d)" % (path, start_at, a, len(body)))
-            batches.append((b, records))
-            records = []
-            at += 32
-            start_at = at
-            continue
-        key = d[at + 32:at + 32 + a]
-        value = d[at + 32 + a:at + 32 + a + b]
-        if len(key) != a or len(value) != b:
-            break
-        records.append((kind, key, value, c))
-        at += 32 + a + b
-    return batches, len(d) - start_at
-
-
-def flat(batches):
-    return [r for _, rs in batches for r in rs]
+    batches, rest, problems = aoflib.parse(path)
+    failures.extend(problems)
+    return batches, rest
 
 
 work = tempfile.mkdtemp(prefix="aof-")
@@ -259,19 +222,7 @@ try:
     stop(p)
 
     # --- the log says what the cache holds
-    def replay(batches):
-        state = {}
-        for k, key, v, e in flat(batches):
-            if k in (0, 1):
-                state[key] = (k, v, e)
-            elif k == 2:
-                state.pop(key, None)
-            elif k == 3:
-                if key in state:
-                    state[key] = (state[key][0], state[key][1], e)
-            elif k == 4:
-                state.clear()
-        return state
+    replay = aoflib.replay
 
     for policy, memory, ops, label in (("noeviction", "64", 6000, "no pressure"), ("allkeys-lru", "1", 6000, "under eviction")):
         dd = fresh("model-" + label.replace(" ", "-"))
@@ -514,13 +465,14 @@ try:
     c.ask("SET", "a", "1")
     check("without --appendonly there is no log", os.path.exists(log(dd)), False)
     stop(p)
-    # a directory where the log cannot be made stops the start with a rule tag
+    # a directory where the log should be stops the start with a rule tag (the creation failing, `aof.open`, cannot be made to happen by a test that runs as root)
     dd = fresh("blocked")
     os.mkdir(log(dd))
     p, c = start(dd, "--appendonly=yes")
     if c is not None:
         p.wait(timeout=5)
-    check("a log that cannot be made stops the start", (p.returncode, "aof.open" in p.stderr.read().decode()), (4, True))
+    err = p.stderr.read().decode()
+    check("a log that cannot be read stops the start, with a rule tag", (p.returncode, "refusing to start: aof." in err), (4, True))
     p.stderr.close()
 finally:
     for p in processes:

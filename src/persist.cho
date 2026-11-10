@@ -80,6 +80,30 @@ pub fn tag(status: int) -> [] &static [byte] {
     if status == 20 {
         return "aof.open";
     }
+    if status == 21 {
+        return "aof.bad-magic";
+    }
+    if status == 22 {
+        return "aof.version";
+    }
+    if status == 23 {
+        return "aof.checksum";
+    }
+    if status == 24 {
+        return "aof.bounds";
+    }
+    if status == 25 {
+        return "aof.bad-kind";
+    }
+    if status == 26 {
+        return "aof.no-room";
+    }
+    if status == 27 {
+        return "aof.too-large";
+    }
+    if status == 28 {
+        return "aof.io";
+    }
     return "persist.io";
 }
 
@@ -660,6 +684,8 @@ fn read_snapshot[&b, &s](bytes: &b [byte], st: &!s store.Store) -> [] (int, int)
     if get_u64(bytes, 8) != version() {
         return (12, 0);
     }
+    // When it began, for the log to know which of its batches the snapshot already holds (`docs/design.md` section 40).
+    store.set_snap_ms(st, get_u64(bytes, 24));
     let sum = crc.crc64_of(bytes[0..size - trailer_size()]);
     if get_u32(bytes, size - 8) != sum.1 || get_u32(bytes, size - 4) != sum.0 {
         return (13, 0);

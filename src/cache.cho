@@ -1289,12 +1289,27 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                     if len(dirpath) == 0 {
                         bad_map = true;
                     } else {
-                        let opened = aof.open_log(fs, dirpath, store.wall_of(cw.store) + store.now_of(cw.store));
-                        if opened != 0 {
+                        // The log is read over the snapshot, and a torn tail is cut off, before the log is opened for appending (`docs/design.md` section 40).
+                        let (replayed, good, torn, applied, skipped) = aof.replay(fs, dirpath, heap, cw.store);
+                        if replayed != 0 && replayed != 1 {
+                            bad_dump = replayed;
+                        }
+                        var opened = 0;
+                        if bad_dump == 0 {
+                            opened = aof.open_log(fs, dirpath, store.wall_of(cw.store) + store.now_of(cw.store));
+                        }
+                        if bad_dump != 0 {
+                        } else if opened != 0 {
                             bad_dump = 20;
                         } else {
                             let ab = contents(cw.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
                             ab[0] = 1;
+                            ab[11] = applied;
+                            ab[12] = torn;
+                            ab[13] = skipped;
+                            if good > 32 {
+                                ab[5] = good - 32;
+                            }
                             ab[3] = store.now_of(cw.store);
                             store.evlog_start(cw.store);
                         }

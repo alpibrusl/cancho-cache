@@ -16,6 +16,7 @@ import reply;
 //     [errors_at()] the errors by code, `codes()` of them (the last is every code not listed)
 //     [samples_at()] 16 samples: when (the store's milliseconds) and how many commands had been answered by then
 //     [commands_at()] 128 commands, three ints each: calls, calls whose reply was an error, and commands refused before they ran (`rejected_calls`)
+//     [persist_at()]  the snapshot's job: 12 ints
 
 pub fn at() -> [] int {
     return cluster.world_size();
@@ -37,9 +38,18 @@ fn commands_at() -> [] int {
     return samples_at() + 32;
 }
 
+// The snapshot's job (`docs/design.md` section 36), `persist_ints()` ints after the commands': `persist.cho` says what each is.
+pub fn persist_at() -> [] int {
+    return commands_at() + 384;
+}
+
+pub fn persist_ints() -> [] int {
+    return 12;
+}
+
 // The ints `world` needs beyond the cluster's.
 pub fn size() -> [] int {
-    return commands_at() + 384 - cluster.world_size();
+    return persist_at() + persist_ints() - cluster.world_size();
 }
 
 // The error codes that have a counter of their own, in the order `INFO errorstats` lists them.

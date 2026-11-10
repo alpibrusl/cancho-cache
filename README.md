@@ -6,15 +6,15 @@
 
 **A Redis-compatible cache that says what it can do.** Strings and hashes, expiry and six eviction policies over RESP2 and RESP3, a snapshot that survives a restart, and the observability an exporter reads, written in [cancho](https://github.com/alpibrusl/cancho): no `Ffi`, no `unsafe`, and an authority report, checked in CI, that shows no foreign code and no `fs_write` (it can write only inside the one directory `--dir=` gives it, one name at a time; its filesystem row is the unnarrowed `fs_read("")` that directory needs, see "See what it is allowed to do" below). One thread, one poller, a fixed arena sized at start with nothing allocated afterwards. `redis-cli`, `redis-py`, `ioredis`, `node-redis` and `redis-rs` connect and work. The [project page](https://alpibrusl.github.io/cancho-cache/) has the summary.
 
-**Status: alpha. A string-and-hash cache, not a Redis replacement.** It answers 83 of Redis 7.0's 240 commands. Built: strings and hashes (15 `H*` commands), expiry, transactions (`MULTI`/`EXEC`/`WATCH`), six eviction policies, `CONFIG GET` of 14 settings and `CONFIG SET` of the five that can change while it runs, `INFO` with all its sections and `commandstats`/`errorstats`, `SLOWLOG`, `CLIENT LIST`/`INFO`/`KILL`, `LATENCY`, `MEMORY`, `MONITOR`, a static-map cluster-lite (`MOVED`, `CLUSTER SLOTS`), and a snapshot (`SAVE`, loaded at start). Not built: lists, sets, sorted sets, streams, pub/sub, scripting, replication, TLS, ACL, more than one database, an append-only log, a background save, and the LFU policies. The gaps, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8); the open ones are listed under "What is next".
+**Status: alpha. A string-and-hash cache, not a Redis replacement.** It answers 85 of Redis 7.0's 240 commands. Built: strings and hashes (15 `H*` commands), expiry, transactions (`MULTI`/`EXEC`/`WATCH`), six eviction policies, `CONFIG GET` of 14 settings and `CONFIG SET` of the five that can change while it runs, `INFO` with all its sections and `commandstats`/`errorstats`, `SLOWLOG`, `CLIENT LIST`/`INFO`/`KILL`, `LATENCY`, `MEMORY`, `MONITOR`, a static-map cluster-lite (`MOVED`, `CLUSTER SLOTS`), and a snapshot (`SAVE`, `BGSAVE`, `LASTSAVE`, loaded at start). Not built: lists, sets, sorted sets, streams, pub/sub, scripting, replication, TLS, ACL, more than one database, an append-only log, the `save <seconds> <changes>` policy and `SHUTDOWN SAVE`, and the LFU policies. The gaps, each with its design question and gate, are tracked in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8); the open ones are listed under "What is next".
 
 ## What you get
 
-* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (951 cases and 8 small-index cases, four framings each), and the replies of `SLOWLOG`, `CLIENT`, `LATENCY`, `MEMORY` and `MONITOR` are compared with Redis by their own harnesses. The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12 and in the section of each feature.
+* **The same answers as Redis.** Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py` (959 cases and 8 small-index cases, four framings each), and the replies of `SLOWLOG`, `CLIENT`, `LATENCY`, `MEMORY` and `MONITOR` are compared with Redis by their own harnesses. The deliberate divergences are listed in [`docs/design.md`](docs/design.md) section 12 and in the section of each feature.
 * **Speed, measured.** On one core against Redis 7.0.15, about 1.1 times Redis's throughput at pipeline depth 1 and 1.0 to 2.0 times at depth 16 (the cell where either server may run in a faster or a slower mode), with the same hit rate at the same resident memory, while doing much less than Redis does. The ratios are medians of interleaved rounds; Redis itself moves by up to 15% from run to run on a shared VM, and at depth 16 either server may run in a faster or a slower mode, so each re-run in the design says which cells it could and could not separate from noise. The gate was fixed before the code (`docs/design.md` section 2).
-* **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before. (`SAVE` is the exception: it is blocking in this version, and a background save is next.)
+* **A bounded pause.** Compaction is incremental: the worst-case pause is a slice of work, not the arena. 3 to 8 ms measured on a noisy VM, against 115 ms before. A background save keeps it: while `BGSAVE` writes about 100 MiB the longest wait of a `PING` was 12 ms (a blocking `SAVE` of the same data stalled everyone for 727 ms), measured in `docs/design.md` section 36.
 * **A fixed arena.** Keys and values live in one arena sized at start; expiry (lazy and swept) and six eviction policies (`noeviction`, which refuses with Redis's own error; `allkeys-lru`, `allkeys-random`, `volatile-lru`, `volatile-random`, `volatile-ttl`). `CONFIG SET` changes the policy, `maxmemory-samples`, the slow log and the latency threshold at run time; the arena and the key table are fixed, so `maxmemory` is not settable. The LFU policies are not built.
-* **A snapshot.** `--dir=<directory>` keeps `dump.cho` there: `SAVE` writes it crash-safely (a temporary file, synced, renamed, the directory synced), and the next start loads it before accepting connections, keeping each key's expiry as an absolute time. A file that is truncated, altered or from another version stops the start with a rule tag and loads nothing (`docs/design.md` section 35).
+* **A snapshot.** `--dir=<directory>` keeps `dump.cho` there: `SAVE` writes it crash-safely and blocking; `BGSAVE` writes it a slice a turn without stopping the cache, and every key in that file is whole and was true at some moment of the save, though the file is not one instant (there is no `fork` to copy from; section 36 says exactly what that means). The next start loads it before accepting connections, keeping each key's expiry as an absolute time. A file that is truncated, altered or from another version stops the start with a rule tag and loads nothing (`docs/design.md` sections 35 and 36).
 * **What an exporter reads.** `INFO` with the sections an exporter reads (a field Redis has and this cache cannot tell is absent, not invented), `commandstats` and `errorstats`, `SLOWLOG`, `CLIENT LIST`/`INFO`/`KILL`, `LATENCY`, `MEMORY`, `MONITOR`, `COMMAND INFO`/`DOCS`/`GETKEYS` from tables generated from Redis itself.
 * **An authority you can read.** `cancho authority` lists what the program may do, and CI checks it (below).
 * **Real clients.** RESP2 and RESP3, `HELLO`, `AUTH`, `CLIENT`, `INFO`, `CONFIG GET`, `COMMAND`: what a client library sends on connecting; and transactions, so `redis-py`'s default `pipeline()`, its `WATCH`-based `transaction()` and `ioredis`'s `multi().exec()` work.
@@ -98,7 +98,7 @@ ever spent to write. It cannot prove which directory that is, and this README no
 
 ## Commands
 
-83 commands, in groups (`COMMAND LIST` answers the same list):
+85 commands, in groups (`COMMAND LIST` answers the same list):
 
 * **Strings:** `GET`, `SET` (with `NX XX GET EX PX EXAT PXAT KEEPTTL`), `SETNX`, `SETEX`, `PSETEX`, `GETSET`, `GETDEL`, `GETEX`, `MGET`, `MSET`, `MSETNX`, `APPEND`, `SETRANGE`, `GETRANGE` (and `SUBSTR`), `STRLEN`, `INCR`, `DECR`, `INCRBY`, `DECRBY`.
 * **Hashes:** `HSET`, `HMSET`, `HSETNX`, `HGET`, `HMGET`, `HDEL`, `HLEN`, `HEXISTS`, `HSTRLEN`, `HGETALL`, `HKEYS`, `HVALS`, `HINCRBY`, `HRANDFIELD`, `HSCAN`.
@@ -106,7 +106,7 @@ ever spent to write. It cannot prove which directory that is, and this README no
 * **Expiry:** `EXPIRE`, `PEXPIRE` (with `NX XX GT LT`), `EXPIREAT`, `PEXPIREAT`, `EXPIRETIME`, `PEXPIRETIME`, `TTL`, `PTTL`, `PERSIST`.
 * **Transactions:** `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`.
 * **Connection:** `HELLO` (RESP2 and RESP3), `AUTH`, `CLIENT` (`ID GETNAME SETNAME LIST INFO KILL NO-EVICT`), `PING`, `ECHO`, `QUIT`, `RESET`.
-* **Server and observability:** `INFO`, `CONFIG` (`GET SET RESETSTAT`), `COMMAND` (`COUNT LIST INFO DOCS GETKEYS GETKEYSANDFLAGS`), `SLOWLOG` (`GET LEN RESET`), `LATENCY` (`LATEST HISTORY RESET DOCTOR`), `MEMORY` (`USAGE STATS DOCTOR PURGE`), `MONITOR`, `SAVE`.
+* **Server and observability:** `INFO`, `CONFIG` (`GET SET RESETSTAT`), `COMMAND` (`COUNT LIST INFO DOCS GETKEYS GETKEYSANDFLAGS`), `SLOWLOG` (`GET LEN RESET`), `LATENCY` (`LATEST HISTORY RESET DOCTOR`), `MEMORY` (`USAGE STATS DOCTOR PURGE`), `MONITOR`, `SAVE`, `BGSAVE`, `LASTSAVE`.
 * **Cluster-lite:** `CLUSTER` (`INFO SLOTS SHARDS NODES MYID KEYSLOT`), `READONLY`, `READWRITE`: a static slot map given with `--cluster=`, `MOVED` redirects and `CROSSSLOT`, no gossip and no failover (`docs/design.md` section 29).
 
 The eviction policy is `noeviction` unless the command line or `CONFIG SET maxmemory-policy` says otherwise. Every reply is byte-identical to Redis 7.0.15 for the cases in `tests/differential.py`; the deliberate divergences (inline commands refused, `CONFIG SET` of the settings that are fixed at start refused, a `MEMORY USAGE` in this cache's own bytes, the commands that are not supported refused with an error that names the section that says why) are listed in [`docs/design.md`](docs/design.md) section 12 and in each feature's section.
@@ -125,7 +125,7 @@ $CANCHO test tests/glob_test.cho src/glob.cho --std        # the pattern matcher
 $CANCHO test tests/pool_test.cho src/pool.cho --std        # the lent-buffer pools
 
 # against redis-server, the oracle
-python3 tests/differential.py build/cache                 # byte for byte, four framings each (951 + 8 cases)
+python3 tests/differential.py build/cache                 # byte for byte, four framings each (959 + 8 cases)
 python3 tests/keyspace.py build/cache                     # KEYS patterns, SCAN while keys change, RENAME against a model, COMMAND tables
 python3 tests/info.py build/cache                         # INFO sections and fields, the counters the commands decide
 python3 tests/slowlog.py build/cache                      # SLOWLOG entries, counts and errors
@@ -137,7 +137,7 @@ python3 tests/transactions.py build/cache                 # WATCH and EXEC acros
 python3 tests/session.py build/cache                      # INFO/HELLO/CLIENT/CONFIG/QUIT; redis-py, ioredis, node-redis and redis-rs connecting
 
 # on the cache alone
-python3 tests/persist.py build/cache                      # the snapshot: round trip, every damaged file, the order of the calls (strace)
+python3 tests/persist.py build/cache                      # the snapshot: round trip, every damaged file, BGSAVE under changes and a kill -9, the order of the calls (strace)
 python3 tests/expiry.py build/cache                       # expiry, the sweep, eviction under every policy
 python3 tests/limits.py build/cache                       # a full arena and a full key table
 python3 tests/connections.py build/cache                  # 10,000 connections; pools of lent buffers running out
@@ -153,7 +153,7 @@ python3 tests/slowlog_mutants.py                          # 21
 python3 tests/clients_mutants.py                          # 22
 python3 tests/latency_mutants.py                          # 16
 python3 tests/monitor_mutants.py                          # 18
-python3 tests/persist_mutants.py                          # 27
+python3 tests/persist_mutants.py                          # 42
 ```
 
 Benchmarks (reported, with the gate in the design doc):
@@ -162,6 +162,7 @@ Benchmarks (reported, with the gate in the design doc):
 python3 bench/memory.py build/cache                       # bytes per key against Redis
 python3 bench/hitrate.py build/cache                      # hit rate on a Zipf workload at equal resident memory
 python3 bench/stall.py build/cache 64                     # the worst-case pause under eviction
+python3 bench/bgsave_stall.py build/cache                 # the wait of a client while BGSAVE, and while a blocking SAVE, writes
 bench/vs_redis.sh -t set,get -P "1 16"                    # against redis-server, one core each
 ```
 
@@ -188,13 +189,13 @@ and framework smoke tests (Django, Rails, Spring, Laravel) are not run yet: issu
 
 | | |
 |---|---|
-| [docs/design.md](docs/design.md) | the claim, the pre-registered gate, the command set, the design, and one section for each step built (35 sections, from C0 to the snapshot), each with its measurements and what it did not measure |
+| [docs/design.md](docs/design.md) | the claim, the pre-registered gate, the command set, the design, and one section for each step built (36 sections, from C0 to the background save), each with its measurements and what it did not measure |
 | [The epic](https://github.com/alpibrusl/cancho-cache/issues/8) | what is left to pair with Redis, one issue per gap |
 | [The project page](https://alpibrusl.github.io/cancho-cache/) | the summary, with the numbers |
 
 ## What is next
 
-In the order the work is going: the rest of the snapshot (#21: a background `BGSAVE` that does not stall the loop, the `save <seconds> <changes>` policy, `LASTSAVE`, `SHUTDOWN SAVE`, then an append-only log), then a TLS listener (#16). Open and not started: pub/sub (#15), lists and sets (#25), sorted sets (#26), scripting (#27), replication (#23), a tiered near-cache mode (#22), multiple databases (#19), a unix-domain socket (#20), ACL (#45), key-prefix namespaces (#46), compare-and-set (#47), a test clock (#48), and a cancho client package (#44). The fixed limits (#11) are partly lifted (10,000 connections, values up to the arena) and partly not (a 16 KiB command).
+In the order the work is going: the rest of the snapshot (#21: the `save <seconds> <changes>` policy with a count of changes, `SHUTDOWN [SAVE|NOSAVE]`, then an append-only log with `appendfsync`), then a TLS listener (#16). Open and not started: pub/sub (#15), lists and sets (#25), sorted sets (#26), scripting (#27), replication (#23), a tiered near-cache mode (#22), multiple databases (#19), a unix-domain socket (#20), ACL (#45), key-prefix namespaces (#46), compare-and-set (#47), a test clock (#48), and a cancho client package (#44). The fixed limits (#11) are partly lifted (10,000 connections, values up to the arena) and partly not (a 16 KiB command).
 
 ## Layout
 
@@ -226,7 +227,7 @@ bench/            memory, hit rate, stall, and the comparison against Redis
 
 ## Limitations
 
-Strings and hashes. No lists, sets, sorted sets or streams, no replication, TLS, pub/sub, ACL or scripting; persistence is a blocking snapshot only (`docs/design.md` section 35: no background save, no append-only log, so a `SAVE` of a large arena stalls every client while it writes). One database. A value may be as large as the arena (up to Redis's 512 MiB): `SET`, `SETEX` and `PSETEX` take it in pieces and `GET` sends it in pieces, but only a `SET` whose value is the last argument (so not `SET key value EX 10` with a value over 16 KiB, which is refused as a command too large), and a big `SET` cannot be queued in `MULTI` or shown by `MONITOR`. Every other command refuses a value over 16 KiB with `-ERR value too large for this command` (`GETSET`, `GETDEL`, `GETEX`, `SET … GET`, a `GETRANGE` of more than 16 KiB, an element of `MGET`, the replies of `EXEC`), and `APPEND` and `SETRANGE` cannot build one; Redis has none of these refusals. While a value arrives its old one stays, so replacing a value needs room for both until the last byte is here, and a `GET` of a value that is written, deleted or flushed while it is being sent closes that connection. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 10,000 connections, served from pools of lent buffers (1,024 partial commands held at once, 256 connections with output waiting, 128 open transactions; past a pool the connection is closed or, for a queue, the command refused), and a 16 KiB command (fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` refuses the settings that are fixed at start (`maxmemory`, the port, ...) with Redis's error shape. `CLIENT LIST` has no `fd` or `laddr` (the standard library offers neither), `CLIENT KILL LADDR` is refused, `LATENCY` has two events and no `GRAPH`/`HISTOGRAM`, and a `MONITOR` watcher that does not read is closed when its 64 KiB of queue fills. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8) or a note in the section of the design that built it.
+Strings and hashes. No lists, sets, sorted sets or streams, no replication, TLS, pub/sub, ACL or scripting; persistence is a snapshot only, no append-only log (`docs/design.md` sections 35 and 36): `SAVE` stalls every client while it writes the arena, `BGSAVE` does not but is not a point in time, and a single value is written whole in one slice, so a value of 100 MiB is one slice that long. One database. A value may be as large as the arena (up to Redis's 512 MiB): `SET`, `SETEX` and `PSETEX` take it in pieces and `GET` sends it in pieces, but only a `SET` whose value is the last argument (so not `SET key value EX 10` with a value over 16 KiB, which is refused as a command too large), and a big `SET` cannot be queued in `MULTI` or shown by `MONITOR`. Every other command refuses a value over 16 KiB with `-ERR value too large for this command` (`GETSET`, `GETDEL`, `GETEX`, `SET … GET`, a `GETRANGE` of more than 16 KiB, an element of `MGET`, the replies of `EXEC`), and `APPEND` and `SETRANGE` cannot build one; Redis has none of these refusals. While a value arrives its old one stays, so replacing a value needs room for both until the last byte is here, and a `GET` of a value that is written, deleted or flushed while it is being sent closes that connection. A transaction queues up to 16 KiB and watches up to eight keys, and `EXEC` may abort when an unrelated key shares a bucket with a watched one. Up to 10,000 connections, served from pools of lent buffers (1,024 partial commands held at once, 256 connections with output waiting, 128 open transactions; past a pool the connection is closed or, for a queue, the command refused), and a 16 KiB command (fixed), which holds up to 2,048 arguments (`MGET` and `DEL` of a thousand keys work); `MGET` and `EXEC` answer in pieces of 64 KiB, so a client that reads slowly is waited for, not dropped, and an `EXEC` that has to wait for its client is no longer atomic with other connections' commands. `CONFIG SET` refuses the settings that are fixed at start (`maxmemory`, the port, ...) with Redis's error shape. `CLIENT LIST` has no `fd` or `laddr` (the standard library offers neither), `CLIENT KILL LADDR` is refused, `LATENCY` has two events and no `GRAPH`/`HISTOGRAM`, and a `MONITOR` watcher that does not read is closed when its 64 KiB of queue fills. Each is an issue in the [epic](https://github.com/alpibrusl/cancho-cache/issues/8) or a note in the section of the design that built it.
 
 ## Contributing
 

@@ -9,7 +9,7 @@ import reply;
 
 // How many commands the table holds.
 pub fn count() -> [] int {
-    return 83;
+    return 85;
 }
 
 // Write the entry of the command `name` (any case) from `at` and answer `(true, where it ends)`, or `(false, at)` if it is not in the table.
@@ -25,6 +25,12 @@ pub fn put_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) 
             return (true, reply.put(sc, at, "*10\r\n$4\r\nauth\r\n:-2\r\n~6\r\n+noscript\r\n+loading\r\n+stale\r\n+fast\r\n+no_auth\r\n+allow_busy\r\n:0\r\n:0\r\n:0\r\n~2\r\n+@fast\r\n+@connection\r\n~0\r\n~0\r\n~0\r\n"));
         }
         return (true, reply.put(sc, at, "*10\r\n$4\r\nauth\r\n:-2\r\n*6\r\n+noscript\r\n+loading\r\n+stale\r\n+fast\r\n+no_auth\r\n+allow_busy\r\n:0\r\n:0\r\n:0\r\n*2\r\n+@fast\r\n+@connection\r\n*0\r\n*0\r\n*0\r\n"));
+    }
+    if reply.is_word(name, "BGSAVE") {
+        if resp3 {
+            return (true, reply.put(sc, at, "*10\r\n$6\r\nbgsave\r\n:-1\r\n~3\r\n+admin\r\n+noscript\r\n+no_async_loading\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~0\r\n~0\r\n~0\r\n"));
+        }
+        return (true, reply.put(sc, at, "*10\r\n$6\r\nbgsave\r\n:-1\r\n*3\r\n+admin\r\n+noscript\r\n+no_async_loading\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*0\r\n*0\r\n*0\r\n"));
     }
     if reply.is_word(name, "CLIENT") {
         if resp3 {
@@ -284,6 +290,12 @@ pub fn put_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) 
         }
         return (true, reply.put(sc, at, "*10\r\n$4\r\nkeys\r\n:2\r\n*1\r\n+readonly\r\n:0\r\n:0\r\n:0\r\n*4\r\n+@keyspace\r\n+@read\r\n+@slow\r\n+@dangerous\r\n*2\r\n$25\r\nrequest_policy:all_shards\r\n$29\r\nnondeterministic_output_order\r\n*0\r\n*0\r\n"));
     }
+    if reply.is_word(name, "LASTSAVE") {
+        if resp3 {
+            return (true, reply.put(sc, at, "*10\r\n$8\r\nlastsave\r\n:1\r\n~3\r\n+loading\r\n+stale\r\n+fast\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@fast\r\n+@dangerous\r\n~1\r\n$23\r\nnondeterministic_output\r\n~0\r\n~0\r\n"));
+        }
+        return (true, reply.put(sc, at, "*10\r\n$8\r\nlastsave\r\n:1\r\n*3\r\n+loading\r\n+stale\r\n+fast\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@fast\r\n+@dangerous\r\n*1\r\n$23\r\nnondeterministic_output\r\n*0\r\n*0\r\n"));
+    }
     if reply.is_word(name, "LATENCY") {
         if resp3 {
             return (true, reply.put(sc, at, "*10\r\n$7\r\nlatency\r\n:-2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n*7\r\n*10\r\n$14\r\nlatency|doctor\r\n:2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$13\r\nlatency|graph\r\n:3\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$12\r\nlatency|help\r\n:2\r\n~2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n~0\r\n*10\r\n$17\r\nlatency|histogram\r\n:-2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$15\r\nlatency|history\r\n:3\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$14\r\nlatency|latest\r\n:2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$23\r\nnondeterministic_output\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:special\r\n~0\r\n~0\r\n*10\r\n$13\r\nlatency|reset\r\n:-2\r\n~4\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n~0\r\n~0\r\n"));
@@ -523,6 +535,9 @@ pub fn known[&w](name: &w [byte]) -> [] bool {
     if reply.is_word(name, "AUTH") {
         return true;
     }
+    if reply.is_word(name, "BGSAVE") {
+        return true;
+    }
     if reply.is_word(name, "CLIENT") {
         return true;
     }
@@ -650,6 +665,9 @@ pub fn known[&w](name: &w [byte]) -> [] bool {
         return true;
     }
     if reply.is_word(name, "KEYS") {
+        return true;
+    }
+    if reply.is_word(name, "LASTSAVE") {
         return true;
     }
     if reply.is_word(name, "LATENCY") {
@@ -1286,6 +1304,7 @@ pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     var o = at;
     o = reply.put_bulk(sc, o, "append");
     o = reply.put_bulk(sc, o, "auth");
+    o = reply.put_bulk(sc, o, "bgsave");
     o = reply.put_bulk(sc, o, "client");
     o = reply.put_bulk(sc, o, "cluster");
     o = reply.put_bulk(sc, o, "command");
@@ -1329,6 +1348,7 @@ pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     o = reply.put_bulk(sc, o, "incrby");
     o = reply.put_bulk(sc, o, "info");
     o = reply.put_bulk(sc, o, "keys");
+    o = reply.put_bulk(sc, o, "lastsave");
     o = reply.put_bulk(sc, o, "latency");
     o = reply.put_bulk(sc, o, "memory");
     o = reply.put_bulk(sc, o, "mget");
@@ -1375,6 +1395,7 @@ pub fn put_all[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     var o = at;
     o = put_entry("APPEND", sc, o, resp3).1;
     o = put_entry("AUTH", sc, o, resp3).1;
+    o = put_entry("BGSAVE", sc, o, resp3).1;
     o = put_entry("CLIENT", sc, o, resp3).1;
     o = put_entry("CLUSTER", sc, o, resp3).1;
     o = put_entry("COMMAND", sc, o, resp3).1;
@@ -1418,6 +1439,7 @@ pub fn put_all[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_entry("INCRBY", sc, o, resp3).1;
     o = put_entry("INFO", sc, o, resp3).1;
     o = put_entry("KEYS", sc, o, resp3).1;
+    o = put_entry("LASTSAVE", sc, o, resp3).1;
     o = put_entry("LATENCY", sc, o, resp3).1;
     o = put_entry("MEMORY", sc, o, resp3).1;
     o = put_entry("MGET", sc, o, resp3).1;

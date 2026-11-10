@@ -16,6 +16,9 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
     if reply.is_word(name, "AUTH") {
         return (true, -2, 0, 0, 0);
     }
+    if reply.is_word(name, "BGSAVE") {
+        return (true, -1, 0, 0, 0);
+    }
     if reply.is_word(name, "CLIENT") {
         if reply.is_word(sub, "CACHING") {
             return (true, 3, 0, 0, 0);
@@ -309,6 +312,9 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
     }
     if reply.is_word(name, "KEYS") {
         return (true, 2, 0, 0, 0);
+    }
+    if reply.is_word(name, "LASTSAVE") {
+        return (true, 1, 0, 0, 0);
     }
     if reply.is_word(name, "LATENCY") {
         if reply.is_word(sub, "DOCTOR") {

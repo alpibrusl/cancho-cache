@@ -161,7 +161,7 @@ python3 tests/monitor_mutants.py                          # 18
 python3 tests/persist_mutants.py                          # 42
 python3 tests/policy_mutants.py                           # 33
 python3 tests/aof_mutants.py                              # 62
-python3 tests/aof_replay_mutants.py                       # 34
+python3 tests/aof_replay_mutants.py                       # 32
 ```
 
 Benchmarks (reported, with the gate in the design doc):
@@ -197,7 +197,7 @@ and framework smoke tests (Django, Rails, Spring, Laravel) are not run yet: issu
 
 | | |
 |---|---|
-| [docs/design.md](docs/design.md) | the claim, the pre-registered gate, the command set, the design, and one section for each step built (40 sections, from C0 to reading the log at start), each with its measurements and what it did not measure |
+| [docs/design.md](docs/design.md) | the claim, the pre-registered gate, the command set, the design, and one section for each step built (41 sections, from C0 to reading the log at start), each with its measurements and what it did not measure |
 | [The epic](https://github.com/alpibrusl/cancho-cache/issues/8) | what is left to pair with Redis, one issue per gap |
 | [The project page](https://alpibrusl.github.io/cancho-cache/) | the summary, with the numbers |
 

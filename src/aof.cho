@@ -369,11 +369,8 @@ fn most_bytes() -> [] int {
     return 1073741824;
 }
 
-// Whether the 32 bytes at `p` are a trailer whose length and checksum fit the `length` bytes before it, which must start at or after `floor`.
+// Whether the 32 bytes at `p`, which the caller has seen are a trailer (kind 9), carry a length and a checksum that fit the bytes before them, which must start at or after `floor`.
 fn trailer_fits[&b](bytes: &b [byte], p: int, floor: int) -> [] bool {
-    if get_u64(bytes, p + 16) != kind_end() {
-        return false;
-    }
     let length = get_u64(bytes, p);
     if length < 0 || length > p - floor {
         return false;
@@ -418,7 +415,8 @@ fn batch_end[&b](bytes: &b [byte], at: int) -> [] int {
         if kind != store.kind_string() && kind != store.kind_hash() && kind != kind_gone() && kind != kind_expiry() && kind != kind_flush() {
             return 0 - 3;
         }
-        if klen < 0 || vlen < 0 || klen > size || vlen > size || p + 32 + klen + vlen > size {
+        // A record that runs past the end is found by the test at the top of the loop, when `p` has moved there; what is checked here is a length that would not move `p` forward.
+        if klen < 0 || vlen < 0 || klen > size || vlen > size {
             return 0 - 1;
         }
         p = p + 32 + klen + vlen;

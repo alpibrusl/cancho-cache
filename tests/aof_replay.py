@@ -290,6 +290,8 @@ try:
     first_record = mid + 32           # a record of it
     damaged("a byte changed in the middle of a batch with others after it", lambda b: b.__setitem__(first_record + 40, b[first_record + 40] ^ 0xFF), "aof.checksum|aof.bounds")
     damaged("a key length changed in the middle", lambda b: b.__setitem__(mid + 3, 0x7F), "aof.checksum|aof.bounds")
+    damaged("a length that is negative (the top bit of a value length)", lambda b: b.__setitem__(mid + 15, 0x80), "aof.checksum|aof.bounds")
+    damaged("a length that is larger than the file", lambda b: b.__setitem__(mid + 6, 0x7F), "aof.checksum|aof.bounds")
     damaged("a kind that is none", lambda b: b.__setitem__(mid + 16, 7), "aof.bad-kind")
     damaged("a trailer that lies about its length", lambda b: b.__setitem__(ends[10] - 32, b[ends[10] - 32] ^ 1), "aof.checksum|aof.bounds")
     damaged("a stretch of zeros in the middle", lambda b: b.__setitem__(slice(mid + 8, mid + 48), bytes(40)), "aof.checksum|aof.bounds|aof.bad-kind")

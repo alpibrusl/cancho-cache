@@ -243,6 +243,21 @@ try:
     check("both are in the log, whole, in order", [(key, v == (one if key == b"one" else two)) for k, key, v, e in recs], [(b"one", True), (b"two", True)])
     stop(p)
 
+    # records that do not fit beside each other in one step: the staged ones are written first, in order (RENAME makes a record of the whole value)
+    dd = fresh("boundary")
+    p, c = start(dd, "--appendonly=yes", "--appendfsync=no", memory="64")
+    c.ask("SET", "big", b"x" * 200000)
+    got = c.pipeline([("RENAME", "big", "big2"), ("RENAME", "big2", "big3")])
+    check("two renames of a 200 KB value in one go", got, [("+", "OK"), ("+", "OK")])
+    recs = flat(parse_log(log(dd))[0])
+    check("each record is whole, in order", [(key, len(v)) for k, key, v, e in recs], [(b"big", 200000), (b"big", 0), (b"big2", 200000), (b"big2", 0), (b"big3", 200000)])
+    c.ask("SET", "huge", b"y" * 400000)
+    got = c.pipeline([("SET", "first", "1"), ("RENAME", "huge", "huge2")])
+    check("a small write and then a rename of a 400 KB value (bigger than the buffer)", got, [("+", "OK"), ("+", "OK")])
+    recs = flat(parse_log(log(dd))[0])
+    check("the small record is written before the big one", [(key, len(v)) for k, key, v, e in recs][-3:], [(b"first", 1), (b"huge", 0), (b"huge2", 400000)])
+    stop(p)
+
     # --- the log says what the cache holds
     def replay(batches):
         state = {}
@@ -302,6 +317,9 @@ try:
                 c.ask("GET", k)
             else:
                 c.ask("FLUSHDB")
+        # a last stretch of fresh, big keys that nothing writes again: what it evicts is gone for good, so the log must say so or the replay keeps it
+        for i in range(40):
+            c.ask("SET", "z%d" % i, "q" * 50000)
         batches, rest = parse_log(log(dd))
         check("%s: the log ends on a batch" % label, rest, 0)
         model = replay(batches)
@@ -370,6 +388,9 @@ try:
                     events.append("reply")
             return events
 
+        events = traced("no", "header", lambda c: [c.ask("SET", "a", "1")])
+        first = [e for e in events if e in ("sync-log", "reply")]
+        check("the header is synced before the first answer", first[:2], ["sync-log", "reply"])
         events = traced("always", "always", lambda c: [c.ask("SET", "a", "1"), c.ask("SET", "b", "2"), c.ask("SET", "c", "3")])
         # the header is synced once at the start; after that every answer is preceded by a sync of the log
         tail = [e for e in events if e != "sync-other"]

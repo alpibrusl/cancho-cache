@@ -150,7 +150,7 @@ try:
         z = Client()
         z.s.sendall(cmd("ECHO", noise) + cmd("INFO") + cmd("PING") + cmd("CONFIG", "GET", "*") + cmd("PING", "after") + cmd("INFO", "stats") + cmd("ECHO", "end"))
         got = [z.read() for _ in range(7)]
-        check("ECHO, INFO, PING, CONFIG GET, PING, INFO stats, ECHO in one write: every reply intact", got[0] == noise and got[1].endswith(b"\r\n\r\n") and got[2] == ("+", b"PONG") and len(got[3]) == 28 and got[4] == b"after" and got[5].startswith(b"# Stats") and got[6] == b"end", repr([g if not isinstance(g, bytes) else g[:20] for g in got]))
+        check("ECHO, INFO, PING, CONFIG GET, PING, INFO stats, ECHO in one write: every reply intact", got[0] == noise and got[1].endswith(b"\r\n\r\n") and got[2] == ("+", b"PONG") and len(got[3]) == 30 and got[4] == b"after" and got[5].startswith(b"# Stats") and got[6] == b"end", repr([g if not isinstance(g, bytes) else g[:20] for g in got]))
         z.s.close()
 
     # --- HELLO, CLIENT

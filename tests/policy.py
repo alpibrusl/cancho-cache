@@ -127,9 +127,11 @@ try:
     check("CONFIG SET save clears", c.ask("CONFIG", "SET", "save", ""), ("+", "OK"))
     check("CONFIG GET save after clearing", c.ask("CONFIG", "GET", "save"), [b"save", b""])
     c.ask("CONFIG", "SET", "save", "60 5")
-    for bad in ("900", "900 1 300", "0 1", "900 -1", "abc", "900 x", "1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9"):
+    for bad in ("900", "900 1 300", "0 1", "900 -1", "abc", "900 x", "900x 1", "9 1x", "1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9"):
         r = c.ask("CONFIG", "SET", "save", bad)
         check("CONFIG SET save %r is refused" % bad, r[0] == "-" and "(possibly related to argument 'save')" in r[1], True)
+        if not bad.endswith("9 9"):
+            check("CONFIG SET save %r is refused as invalid" % bad, r[0] == "-" and "Invalid save parameters" in r[1], True)
         check("CONFIG SET save %r leaves the policy" % bad, c.ask("CONFIG", "GET", "save"), [b"save", b"60 5"])
     r = c.ask("CONFIG", "SET", "save", "900")
     check("the words of a refused policy", "Invalid save parameters" in r[1], True)
@@ -180,6 +182,9 @@ try:
     check("the save was a success", info(c, "rdb_last_bgsave_status"), "ok")
     last = int(c.ask("LASTSAVE"))
     check("LASTSAVE is now", abs(last - time.time()) < 5, True)
+    c.ask("SET", "three", "3")
+    check("SAVE", c.ask("SAVE"), ("+", "OK"))
+    check("SAVE settles the writes", changes(c), 0)
     first = os.stat(os.path.join(dd, "dump.cho")).st_mtime
     time.sleep(2.5)
     check("no writes, no further save", os.stat(os.path.join(dd, "dump.cho")).st_mtime, first)
@@ -221,6 +226,21 @@ try:
     p.wait(timeout=10)
     check("SHUTDOWN NOSAVE stops it anyway", p.returncode, 0)
     p.stderr.close()
+
+    # a save that fails part way settles nothing: 40,000 keys of 1 KiB take many turns, and the directory goes while it runs
+    dd = os.path.join(work, "midway")
+    os.mkdir(dd)
+    p, c = start(dd)
+    for i in range(40):
+        c.s.sendall(b"".join(cmd("SET", "k%d" % (1000 * i + j), "x" * 1024) for j in range(1000)))
+        for j in range(1000):
+            c.read()
+    before = changes(c)
+    check("BGSAVE over a big arena", c.ask("BGSAVE"), ("+", "Background saving started"))
+    shutil.rmtree(dd)
+    wait_for("the save fails", lambda: info(c, "rdb_last_bgsave_status") == "err")
+    check("a save that failed part way settles nothing", changes(c), before)
+    stop(p)
 
     # a policy without a directory does nothing, and nothing breaks
     p, c = start(None, "--save=1:1")

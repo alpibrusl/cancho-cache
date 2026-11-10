@@ -155,7 +155,7 @@ python3 tests/clients_mutants.py                          # 22
 python3 tests/latency_mutants.py                          # 16
 python3 tests/monitor_mutants.py                          # 18
 python3 tests/persist_mutants.py                          # 42
-python3 tests/policy_mutants.py                           # 35
+python3 tests/policy_mutants.py                           # 33
 ```
 
 Benchmarks (reported, with the gate in the design doc):

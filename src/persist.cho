@@ -309,14 +309,9 @@ pub fn job_running() -> [] int {
 }
 
 // The policy `save <seconds> <changes> ...`, as `CONFIG SET save "900 1 300 10"` and `--save=900:1,300:10` give it: numbers separated by spaces, colons or commas, in pairs, the seconds at
-// least 1 and the changes 0 or more. The pairs go into `out` (two ints each, `store.save_pairs()` of them at most, the rest of `out` zeroed). How many pairs: 0 or more, -1 if the text is
+// least 1 and the changes 0 or more. The pairs go into `out`, which the caller gives all zeros (two ints each, `store.save_pairs()` of them at most). How many pairs: 0 or more, -1 if the text is
 // not such pairs, -2 if there are more than this cache keeps.
 pub fn read_save[&t, &o](text: &t [byte], out: &!o [int]) -> [] int {
-    var i = 0;
-    while i < len(out) {
-        out[i] = 0;
-        i = i + 1;
-    }
     var numbers = 0;
     var at = 0;
     while at < len(text) {
@@ -325,16 +320,14 @@ pub fn read_save[&t, &o](text: &t [byte], out: &!o [int]) -> [] int {
             at = at + 1;
         } else {
             var n = 0;
-            var digits = 0;
             while at < len(text) && int_of(text[at]) >= '0' && int_of(text[at]) <= '9' {
                 if n > 100000000000 {
                     return 0 - 1;
                 }
                 n = n * 10 + int_of(text[at]) - '0';
-                digits = digits + 1;
                 at = at + 1;
             }
-            if digits == 0 || at < len(text) && int_of(text[at]) != ' ' && int_of(text[at]) != ':' && int_of(text[at]) != ',' && int_of(text[at]) != 9 && int_of(text[at]) != 10 && int_of(text[at]) != 13 {
+            if at < len(text) && int_of(text[at]) != ' ' && int_of(text[at]) != ':' && int_of(text[at]) != ',' && int_of(text[at]) != 9 && int_of(text[at]) != 10 && int_of(text[at]) != 13 {
                 return 0 - 1;
             }
             if numbers >= len(out) {

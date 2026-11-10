@@ -49,9 +49,7 @@ MUTANTS = [
     ("a policy of too many pairs is accepted", "session.cho", "                if found == 0 - 2 {\n                    return set_failed(sc, at, setting_name(idx), \"this cache keeps 8 save points (docs/design.md section 37)\");\n                }", "", S),
     ("an odd number of numbers is a policy", "persist.cho", "    if numbers % 2 == 1 {\n        return 0 - 1;\n    }", "", S),
     ("0 seconds is a policy", "persist.cho", "        if out[2 * pair] < 1 {\n            return 0 - 1;\n        }", "", S),
-    ("a word is a number", "persist.cho", "            if digits == 0 || at < len(text)", "            if at < len(text)", S),
-    ("a number glued to a letter is a number", "persist.cho", "            if digits == 0 || at < len(text) && int_of(text[at]) != ' ' && int_of(text[at]) != ':' && int_of(text[at]) != ',' && int_of(text[at]) != 9 && int_of(text[at]) != 10 && int_of(text[at]) != 13 {", "            if digits == 0 {", S),
-    ("a refused policy leaves the pairs it read", "persist.cho", "    var i = 0;\n    while i < len(out) {\n        out[i] = 0;\n        i = i + 1;\n    }\n    var numbers = 0;", "    var i = 0;\n    var numbers = 0;", S),
+    ("a number glued to a letter is a number", "persist.cho", "            if at < len(text) && int_of(text[at]) != ' ' && int_of(text[at]) != ':' && int_of(text[at]) != ',' && int_of(text[at]) != 9 && int_of(text[at]) != 10 && int_of(text[at]) != 13 {", "            if false {", S),
 ]
 
 run_mutants(MUTANTS, sys.argv[1] if len(sys.argv) > 1 else "")

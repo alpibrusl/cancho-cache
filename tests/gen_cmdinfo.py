@@ -429,6 +429,16 @@ def main():
             for sub in node[1][9][1]:
                 if flags_of(sub) & keyspace_flags:
                     touch_subs.setdefault(i, []).append(name_of(sub).decode().split("|")[1].upper())
+        write_top = [i for i, n in enumerate(order) if "write" in flags_of(entries[0][n][1])]
+        w("// Whether command `i` is one Redis flags `write`: a successful one counts as a change for the `save <seconds> <changes>` policy (`docs/design.md` section 37).")
+        w("pub fn is_write(i: int) -> [] bool {")
+        for i in write_top:
+            w("    if i == %d {" % i)
+            w("        return true;")
+            w("    }")
+        w("    return false;")
+        w("}")
+        w("")
         w("// Whether command `i` (with subcommand `sub`) reads or writes the keyspace, or may be replicated: a connection in `MONITOR` mode is a replica as far as Redis is concerned and may")
         w("// not run one (`docs/design.md` section 34).")
         w("pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {")

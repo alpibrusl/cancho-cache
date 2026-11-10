@@ -32,7 +32,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'T' {
             if reply.is_word(name, "TTL") {
-                return 80;
+                return 81;
             }
         }
     }
@@ -118,7 +118,7 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'T' {
             if reply.is_word(name, "TYPE") {
-                return 81;
+                return 82;
             }
         }
     }
@@ -168,12 +168,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'T' {
             if reply.is_word(name, "TOUCH") {
-                return 79;
+                return 80;
             }
         }
         if first == 'W' {
             if reply.is_word(name, "WATCH") {
-                return 84;
+                return 85;
             }
         }
     }
@@ -258,15 +258,15 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
                 return 71;
             }
             if reply.is_word(name, "STRLEN") {
-                return 77;
+                return 78;
             }
             if reply.is_word(name, "SUBSTR") {
-                return 78;
+                return 79;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNLINK") {
-                return 82;
+                return 83;
             }
         }
     }
@@ -323,12 +323,12 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         }
         if first == 'S' {
             if reply.is_word(name, "SLOWLOG") {
-                return 76;
+                return 77;
             }
         }
         if first == 'U' {
             if reply.is_word(name, "UNWATCH") {
-                return 83;
+                return 84;
             }
         }
     }
@@ -364,6 +364,9 @@ pub fn index_of[&w](name: &w [byte]) -> [] int {
         if first == 'S' {
             if reply.is_word(name, "SETRANGE") {
                 return 75;
+            }
+            if reply.is_word(name, "SHUTDOWN") {
+                return 76;
             }
         }
     }
@@ -635,30 +638,33 @@ pub fn name_at(i: int) -> [] &static [byte] {
         return "setrange";
     }
     if i == 76 {
-        return "slowlog";
+        return "shutdown";
     }
     if i == 77 {
-        return "strlen";
+        return "slowlog";
     }
     if i == 78 {
-        return "substr";
+        return "strlen";
     }
     if i == 79 {
-        return "touch";
+        return "substr";
     }
     if i == 80 {
-        return "ttl";
+        return "touch";
     }
     if i == 81 {
-        return "type";
+        return "ttl";
     }
     if i == 82 {
-        return "unlink";
+        return "type";
     }
     if i == 83 {
-        return "unwatch";
+        return "unlink";
     }
     if i == 84 {
+        return "unwatch";
+    }
+    if i == 85 {
         return "watch";
     }
     return "";
@@ -673,7 +679,108 @@ pub fn may_be_slow(i: int) -> [] bool {
     if i < 62 {
         return 25388261515512049 >> i & 1 == 1;
     }
-    return 5447984 >> i - 62 & 1 == 1;
+    return 10887472 >> i - 62 & 1 == 1;
+}
+
+// Whether command `i` is one Redis flags `write`: a successful one counts as a change for the `save <seconds> <changes>` policy (`docs/design.md` section 37).
+pub fn is_write(i: int) -> [] bool {
+    if i == 0 {
+        return true;
+    }
+    if i == 7 {
+        return true;
+    }
+    if i == 9 {
+        return true;
+    }
+    if i == 10 {
+        return true;
+    }
+    if i == 11 {
+        return true;
+    }
+    if i == 16 {
+        return true;
+    }
+    if i == 17 {
+        return true;
+    }
+    if i == 19 {
+        return true;
+    }
+    if i == 20 {
+        return true;
+    }
+    if i == 22 {
+        return true;
+    }
+    if i == 23 {
+        return true;
+    }
+    if i == 25 {
+        return true;
+    }
+    if i == 26 {
+        return true;
+    }
+    if i == 31 {
+        return true;
+    }
+    if i == 35 {
+        return true;
+    }
+    if i == 38 {
+        return true;
+    }
+    if i == 39 {
+        return true;
+    }
+    if i == 42 {
+        return true;
+    }
+    if i == 43 {
+        return true;
+    }
+    if i == 51 {
+        return true;
+    }
+    if i == 52 {
+        return true;
+    }
+    if i == 55 {
+        return true;
+    }
+    if i == 56 {
+        return true;
+    }
+    if i == 57 {
+        return true;
+    }
+    if i == 60 {
+        return true;
+    }
+    if i == 66 {
+        return true;
+    }
+    if i == 67 {
+        return true;
+    }
+    if i == 72 {
+        return true;
+    }
+    if i == 73 {
+        return true;
+    }
+    if i == 74 {
+        return true;
+    }
+    if i == 75 {
+        return true;
+    }
+    if i == 83 {
+        return true;
+    }
+    return false;
 }
 
 // Whether command `i` (with subcommand `sub`) reads or writes the keyspace, or may be replicated: a connection in `MONITOR` mode is a replica as far as Redis is concerned and may
@@ -835,9 +942,6 @@ pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 75 {
         return true;
     }
-    if i == 77 {
-        return true;
-    }
     if i == 78 {
         return true;
     }
@@ -851,6 +955,9 @@ pub fn touches_keyspace[&w](i: int, sub: &w [byte]) -> [] bool {
         return true;
     }
     if i == 82 {
+        return true;
+    }
+    if i == 83 {
         return true;
     }
     if i == 48 && reply.is_word(sub, "USAGE") {
@@ -874,6 +981,9 @@ pub fn skips_monitor[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 69 {
         return true;
     }
+    if i == 76 {
+        return true;
+    }
     if i == 3 && (reply.is_word(sub, "KILL") || reply.is_word(sub, "LIST") || reply.is_word(sub, "NO-EVICT") || reply.is_word(sub, "PAUSE") || reply.is_word(sub, "UNBLOCK") || reply.is_word(sub, "UNPAUSE")) {
         return true;
     }
@@ -886,7 +996,7 @@ pub fn skips_monitor[&w](i: int, sub: &w [byte]) -> [] bool {
     if i == 47 && (reply.is_word(sub, "DOCTOR") || reply.is_word(sub, "GRAPH") || reply.is_word(sub, "HISTOGRAM") || reply.is_word(sub, "HISTORY") || reply.is_word(sub, "LATEST") || reply.is_word(sub, "RESET")) {
         return true;
     }
-    if i == 76 && (reply.is_word(sub, "GET") || reply.is_word(sub, "LEN") || reply.is_word(sub, "RESET")) {
+    if i == 77 && (reply.is_word(sub, "GET") || reply.is_word(sub, "LEN") || reply.is_word(sub, "RESET")) {
         return true;
     }
     return false;

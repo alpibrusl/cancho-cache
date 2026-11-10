@@ -106,6 +106,10 @@ try:
     check("COMMAND COUNT equals the length of COMMAND LIST", c.ask("COMMAND", "COUNT") == len(names), "(%r vs %d)" % (c.ask("COMMAND", "COUNT"), len(names)))
     check("COMMAND LIST has no repeats", len(set(names)) == len(names))
     for n in names:
+        if n.upper() == "SHUTDOWN":
+            # A bare SHUTDOWN stops the cache, as it does Redis; `tests/policy.py` is where it is tested.
+            check("SHUTDOWN is listed", True)
+            continue
         probe = Client()
         try:
             r = probe.ask(n)

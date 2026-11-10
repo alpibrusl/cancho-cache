@@ -9,7 +9,7 @@ import reply;
 
 // How many commands the table holds.
 pub fn count() -> [] int {
-    return 85;
+    return 86;
 }
 
 // Write the entry of the command `name` (any case) from `at` and answer `(true, where it ends)`, or `(false, at)` if it is not in the table.
@@ -470,6 +470,12 @@ pub fn put_entry[&w, &b](name: &w [byte], sc: &!b [byte], at: int, resp3: bool) 
         }
         return (true, reply.put(sc, at, "*10\r\n$8\r\nsetrange\r\n:4\r\n*2\r\n+write\r\n+denyoom\r\n:1\r\n:1\r\n:1\r\n*3\r\n+@write\r\n+@string\r\n+@slow\r\n*0\r\n*1\r\n*6\r\n$5\r\nflags\r\n*2\r\n+RW\r\n+update\r\n$12\r\nbegin_search\r\n*4\r\n$4\r\ntype\r\n$5\r\nindex\r\n$4\r\nspec\r\n*2\r\n$5\r\nindex\r\n:1\r\n$9\r\nfind_keys\r\n*4\r\n$4\r\ntype\r\n$5\r\nrange\r\n$4\r\nspec\r\n*6\r\n$7\r\nlastkey\r\n:0\r\n$7\r\nkeystep\r\n:1\r\n$5\r\nlimit\r\n:0\r\n*0\r\n"));
     }
+    if reply.is_word(name, "SHUTDOWN") {
+        if resp3 {
+            return (true, reply.put(sc, at, "*10\r\n$8\r\nshutdown\r\n:-1\r\n~6\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n+no_multi\r\n+allow_busy\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~0\r\n~0\r\n~0\r\n"));
+        }
+        return (true, reply.put(sc, at, "*10\r\n$8\r\nshutdown\r\n:-1\r\n*6\r\n+admin\r\n+noscript\r\n+loading\r\n+stale\r\n+no_multi\r\n+allow_busy\r\n:0\r\n:0\r\n:0\r\n*3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n*0\r\n*0\r\n*0\r\n"));
+    }
     if reply.is_word(name, "SLOWLOG") {
         if resp3 {
             return (true, reply.put(sc, at, "*10\r\n$7\r\nslowlog\r\n:-2\r\n~0\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n*4\r\n*10\r\n$11\r\nslowlog|get\r\n:-2\r\n~3\r\n+admin\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~2\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nnondeterministic_output\r\n~0\r\n~0\r\n*10\r\n$12\r\nslowlog|help\r\n:2\r\n~2\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~1\r\n+@slow\r\n~0\r\n~0\r\n~0\r\n*10\r\n$11\r\nslowlog|len\r\n:2\r\n~3\r\n+admin\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~3\r\n$24\r\nrequest_policy:all_nodes\r\n$23\r\nresponse_policy:agg_sum\r\n$23\r\nnondeterministic_output\r\n~0\r\n~0\r\n*10\r\n$13\r\nslowlog|reset\r\n:2\r\n~3\r\n+admin\r\n+loading\r\n+stale\r\n:0\r\n:0\r\n:0\r\n~3\r\n+@admin\r\n+@slow\r\n+@dangerous\r\n~2\r\n$24\r\nrequest_policy:all_nodes\r\n$29\r\nresponse_policy:all_succeeded\r\n~0\r\n~0\r\n"));
@@ -755,6 +761,9 @@ pub fn known[&w](name: &w [byte]) -> [] bool {
         return true;
     }
     if reply.is_word(name, "SETRANGE") {
+        return true;
+    }
+    if reply.is_word(name, "SHUTDOWN") {
         return true;
     }
     if reply.is_word(name, "SLOWLOG") {
@@ -1378,6 +1387,7 @@ pub fn put_names[&b](sc: &!b [byte], at: int) -> [] int {
     o = reply.put_bulk(sc, o, "setex");
     o = reply.put_bulk(sc, o, "setnx");
     o = reply.put_bulk(sc, o, "setrange");
+    o = reply.put_bulk(sc, o, "shutdown");
     o = reply.put_bulk(sc, o, "slowlog");
     o = reply.put_bulk(sc, o, "strlen");
     o = reply.put_bulk(sc, o, "substr");
@@ -1469,6 +1479,7 @@ pub fn put_all[&b](sc: &!b [byte], at: int, resp3: bool) -> [] int {
     o = put_entry("SETEX", sc, o, resp3).1;
     o = put_entry("SETNX", sc, o, resp3).1;
     o = put_entry("SETRANGE", sc, o, resp3).1;
+    o = put_entry("SHUTDOWN", sc, o, resp3).1;
     o = put_entry("SLOWLOG", sc, o, resp3).1;
     o = put_entry("STRLEN", sc, o, resp3).1;
     o = put_entry("SUBSTR", sc, o, resp3).1;

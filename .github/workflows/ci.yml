@@ -116,6 +116,10 @@ jobs:
         working-directory: cache
         run: python3 tests/persist.py build/cache
 
+      - name: The save policy counts the writes, saves when it is due, and SHUTDOWN saves
+        working-directory: cache
+        run: python3 tests/policy.py build/cache
+
       - name: Cluster-lite against a real Redis Cluster (three nodes of each, compared line for line)
         working-directory: cache
         run: python3 tests/cluster.py build/cache

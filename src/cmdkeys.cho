@@ -457,6 +457,9 @@ pub fn key_spec[&w, &s](name: &w [byte], sub: &s [byte]) -> [] (bool, int, int, 
     if reply.is_word(name, "SETRANGE") {
         return (true, 4, 1, 1, 1);
     }
+    if reply.is_word(name, "SHUTDOWN") {
+        return (true, -1, 0, 0, 0);
+    }
     if reply.is_word(name, "SLOWLOG") {
         if reply.is_word(sub, "GET") {
             return (true, -2, 0, 0, 0);

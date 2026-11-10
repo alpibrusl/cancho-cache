@@ -298,6 +298,7 @@ pub fn save[&f, &p, &s](fs: &f Fs(""), path: &p [byte], st: &s store.Store, now_
 //     0 1 while a save is under way, 2 while the file it replaced is being given back (see `retire`)     1 the next entry to look at     2, 3 the halves of the running checksum     4 bytes written     5 records written
 //     6 when it began (Unix ms)         7 when the last save finished (Unix s)     8 how the last one ended (0, or an errno)     9 how long it took (ms)
 //     10 the entries it will look at (those that existed when it began)     11 saves finished
+//     12 the writes counted when it began (the save settles that many)     13 1 once a `SHUTDOWN` has been agreed     14 when a save was last started (Unix s)
 //
 // The file is opened afresh for each slice (appending to `dump.tmp`), so nothing but ints is kept between turns. A record is written whole in a slice, so every key in the file
 // is whole and was the key's value at some moment of the save; the file as a whole is not one moment (a key changed after its turn is saved as it was, one before it as it
@@ -305,6 +306,55 @@ pub fn save[&f, &p, &s](fs: &f Fs(""), path: &p [byte], st: &s store.Store, now_
 
 pub fn job_running() -> [] int {
     return 0;
+}
+
+// The policy `save <seconds> <changes> ...`, as `CONFIG SET save "900 1 300 10"` and `--save=900:1,300:10` give it: numbers separated by spaces, colons or commas, in pairs, the seconds at
+// least 1 and the changes 0 or more. The pairs go into `out` (two ints each, `store.save_pairs()` of them at most, the rest of `out` zeroed). How many pairs: 0 or more, -1 if the text is
+// not such pairs, -2 if there are more than this cache keeps.
+pub fn read_save[&t, &o](text: &t [byte], out: &!o [int]) -> [] int {
+    var i = 0;
+    while i < len(out) {
+        out[i] = 0;
+        i = i + 1;
+    }
+    var numbers = 0;
+    var at = 0;
+    while at < len(text) {
+        let c = int_of(text[at]);
+        if c == ' ' || c == ':' || c == ',' || c == 9 || c == 10 || c == 13 {
+            at = at + 1;
+        } else {
+            var n = 0;
+            var digits = 0;
+            while at < len(text) && int_of(text[at]) >= '0' && int_of(text[at]) <= '9' {
+                if n > 100000000000 {
+                    return 0 - 1;
+                }
+                n = n * 10 + int_of(text[at]) - '0';
+                digits = digits + 1;
+                at = at + 1;
+            }
+            if digits == 0 || at < len(text) && int_of(text[at]) != ' ' && int_of(text[at]) != ':' && int_of(text[at]) != ',' && int_of(text[at]) != 9 && int_of(text[at]) != 10 && int_of(text[at]) != 13 {
+                return 0 - 1;
+            }
+            if numbers >= len(out) {
+                return 0 - 2;
+            }
+            out[numbers] = n;
+            numbers = numbers + 1;
+        }
+    }
+    if numbers % 2 == 1 {
+        return 0 - 1;
+    }
+    var pair = 0;
+    while pair < numbers / 2 {
+        if out[2 * pair] < 1 {
+            return 0 - 1;
+        }
+        pair = pair + 1;
+    }
+    return numbers / 2;
 }
 
 // Begin a save: a fresh `dump.tmp` holding the header (the count not known yet). 0, or an errno; the job is running only if it answers 0.

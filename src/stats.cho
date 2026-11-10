@@ -16,7 +16,7 @@ import reply;
 //     [errors_at()] the errors by code, `codes()` of them (the last is every code not listed)
 //     [samples_at()] 16 samples: when (the store's milliseconds) and how many commands had been answered by then
 //     [commands_at()] 128 commands, three ints each: calls, calls whose reply was an error, and commands refused before they ran (`rejected_calls`)
-//     [persist_at()]  the snapshot's job: 12 ints
+//     [persist_at()]  the snapshot's job: 16 ints
 
 pub fn at() -> [] int {
     return cluster.world_size();
@@ -44,7 +44,7 @@ pub fn persist_at() -> [] int {
 }
 
 pub fn persist_ints() -> [] int {
-    return 12;
+    return 16;
 }
 
 // The ints `world` needs beyond the cluster's.

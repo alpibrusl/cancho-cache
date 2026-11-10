@@ -177,7 +177,7 @@ try:
     check("CONFIG GET maxmemory is the arena", c.ask("CONFIG", "GET", "maxmemory") == [b"maxmemory", b"67108864"])
     check("CONFIG GET maxmemory-policy", c.ask("CONFIG", "GET", "maxmemory-policy") == [b"maxmemory-policy", b"allkeys-lru"])
     allc = c.ask("CONFIG", "GET", "*")
-    check("CONFIG GET * lists the fourteen settings once each", len(allc) == 28 and len(set(allc[0::2])) == 14, repr(allc)[:200])
+    check("CONFIG GET * lists the fifteen settings once each", len(allc) == 30 and len(set(allc[0::2])) == 15, repr(allc)[:200])
     two = c.ask("CONFIG", "GET", "save", "appendonly")
     check("CONFIG GET of two settings (Redis's order is its hash seed's, so only the pairs are compared)", sorted(zip(two[0::2], two[1::2])) == [(b"appendonly", b"no"), (b"save", b"")], repr(two))
     check("CONFIG GET port", c.ask("CONFIG", "GET", "port") == [b"port", str(PORT).encode()])

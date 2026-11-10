@@ -4,8 +4,10 @@ import std.addr;
 import std.buffer;
 import std.conns;
 import std.io;
+import aof;
 import clients;
 import cluster;
+import cmdkeys;
 import cmdnames;
 import commands;
 import latency;
@@ -128,6 +130,8 @@ res struct Core {
     // The directory of the snapshot (`--dir=`, `docs/design.md` section 35): its path, and how long it is (0: no persistence).
     dir: Box[[byte]],
     dir_len: int,
+    // The records of the append-only log not yet written (`docs/design.md` section 38; `aof.buffer_size()` bytes).
+    aofbuf: Box[[byte]],
     // When the sweep for expired keys last ran, in the store's milliseconds.
     swept: int,
 }
@@ -420,9 +424,122 @@ fn monitor_feed[&t, &c, &v, &w, &b](tab: &!t conns.Table, core: &!c Core, k: int
 // (`DEL` of nothing, a `SETNX` that did not set). One for each command, not one for each key it touched as Redis counts (`MSET` of three keys is one here, three there).
 fn note_change[&c, &b](core: &!c Core, idx: int, sc: &b [byte], from: int, to: int) -> [] int {
     if idx >= 0 && cmdnames.is_write(idx) && to > from && !stats.did_not_run(sc, from, to) && int_of(sc[from]) != '-' {
-        if !(to - from == 4 && int_of(sc[from]) == ':' && int_of(sc[from + 1]) == '0') {
+        // `HSET` of a field that is there answers 0 and has changed it; for every other command 0 is "nothing happened".
+        if !(to - from == 4 && int_of(sc[from]) == ':' && int_of(sc[from + 1]) == '0') || idx == cmdnames.index_of("HSET") {
             store.add_dirty(core.store, 1);
         }
+    }
+    return 0;
+}
+
+// Whether the log is on, and the ints it keeps in `world`.
+fn log_on[&c](core: &c Core) -> [] bool {
+    return contents(core.info)[stats.aof_at()] != 0;
+}
+
+// The keys evicted since the last look go in the log as gone, before whatever the command that evicted them left (`docs/design.md` section 38: the order is what keeps a key that was
+// evicted and set again alive).
+fn log_evictions[&c, &z](core: &!c Core, fs: &z Fs("")) -> [fs_read(""), dir_write, file_write] int {
+    let ring = store.evlog_bytes(core.store);
+    if len(ring) == 0 {
+        return 0;
+    }
+    let ab = contents(core.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
+    var at = 0;
+    while at + 4 <= len(ring) {
+        let n = int_of(ring[at]) | int_of(ring[at + 1]) << 8 | int_of(ring[at + 2]) << 16 | int_of(ring[at + 3]) << 24;
+        aof.log_bare(fs, contents(core.dir)[0..core.dir_len], core.store, ab, contents(core.aofbuf), aof.kind_gone(), ring[at + 4..at + 4 + n], 0);
+        at = at + 4 + n;
+    }
+    store.evlog_clear(core.store);
+    ab[10] = store.evlog_lost_of(core.store);
+    return 0;
+}
+
+// The commands whose whole effect on a key is a new deadline: their record is the deadline, not the value.
+fn changes_only_expiry[&n](name: &n [byte]) -> [] bool {
+    return reply.is_word(name, "EXPIRE") || reply.is_word(name, "PEXPIRE") || reply.is_word(name, "EXPIREAT") || reply.is_word(name, "PEXPIREAT") || reply.is_word(name, "PERSIST");
+}
+
+// A write that ran leaves the state of each key it named in the log (`docs/design.md` section 38). A write that did nothing (an error, a refusal) leaves nothing. One that ran but
+// changed nothing (`SETNX` of a key that is there) logs the key as it is, which is harmless: a record says what a key is, and saying it again is the same.
+fn log_write[&c, &v, &w, &b, &z](core: &!c Core, fs: &z Fs(""), view: &v [byte], tb: &w [int], idx: int, sc: &b [byte], from: int, to: int) -> [fs_read(""), dir_write, file_write] int {
+    if !log_on(core) || idx < 0 || !cmdnames.is_write(idx) || to <= from || stats.did_not_run(sc, from, to) || int_of(sc[from]) == '-' {
+        return 0;
+    }
+    log_evictions(core, fs);
+    let ab = contents(core.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
+    let path = contents(core.dir)[0..core.dir_len];
+    let name = reply.arg_of(view, tb, 0);
+    if reply.is_word(name, "FLUSHALL") || reply.is_word(name, "FLUSHDB") {
+        aof.log_bare(fs, path, core.store, ab, contents(core.aofbuf), aof.kind_flush(), name[0..0], 0);
+        return 0;
+    }
+    var sub = name[0..0];
+    if tb[0] >= 2 {
+        sub = reply.arg_of(view, tb, 1);
+    }
+    let (known, arity, first, last, step) = cmdkeys.key_spec(name, sub);
+    if !known || first < 1 || step < 1 {
+        return 0;
+    }
+    var end = last;
+    if end < 0 {
+        end = tb[0] + end;
+    }
+    var i = first;
+    while i <= end && i < tb[0] {
+        let key = reply.arg_of(view, tb, i);
+        let e = store.peek(core.store, key, store.hash_of(core.store, key));
+        if e < 0 {
+            aof.log_bare(fs, path, core.store, ab, contents(core.aofbuf), aof.kind_gone(), key, 0);
+        } else if changes_only_expiry(name) {
+            var ends = 0;
+            if store.expiry_of(core.store, e) != 0 {
+                ends = store.wall_of(core.store) + store.expiry_of(core.store, e);
+            }
+            aof.log_bare(fs, path, core.store, ab, contents(core.aofbuf), aof.kind_expiry(), key, ends);
+        } else {
+            aof.log_entry(fs, path, core.store, ab, contents(core.aofbuf), e);
+        }
+        i = i + step;
+    }
+    return 0;
+}
+
+// A value that arrived in pieces and is now whole: `SET`, `SETEX` or `PSETEX` of one key, entry `e`. It counts as a change and, if the log is on, is logged.
+fn log_streamed[&c, &b, &z](core: &!c Core, fs: &z Fs(""), e: int, sc: &b [byte], from: int, to: int) -> [fs_read(""), dir_write, file_write] int {
+    if to <= from || int_of(sc[from]) == '-' {
+        return 0;
+    }
+    store.add_dirty(core.store, 1);
+    if !log_on(core) {
+        return 0;
+    }
+    log_evictions(core, fs);
+    let ab = contents(core.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
+    aof.log_entry(fs, contents(core.dir)[0..core.dir_len], core.store, ab, contents(core.aofbuf), e);
+    return 0;
+}
+
+// What the step has staged is written before its answers leave: for `always` it is synced too, so that nobody is told "OK" about what a crash could take back. A log that cannot be
+// written under `always` stops the cache and the answers that were to leave are dropped (they are untrue); under the other policies the error is kept for `INFO` and the cache goes on,
+// as Redis does.
+fn log_barrier[&c, &z](core: &!c Core, fs: &z Fs("")) -> [fs_read(""), dir_write, file_write] int {
+    if !log_on(core) {
+        return 0;
+    }
+    log_evictions(core, fs);
+    let ab = contents(core.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
+    if ab[2] == 0 {
+        return 0;
+    }
+    let always = store.fsync_of(core.store) == aof.policy_always();
+    let status = aof.flush(fs, contents(core.dir)[0..core.dir_len], core.store, ab, contents(core.aofbuf), always);
+    if status != 0 && always {
+        // 1: the answers about to leave are not true. The caller drops them and closes the connection, and the cache stops.
+        contents(core.info)[stats.persist_at() + 13] = 2;
+        return 1;
     }
     return 0;
 }
@@ -517,6 +634,10 @@ fn execute_in[&t, &c, &v, &w, &b, &z](tab: &!t conns.Table, core: &!c Core, k: i
             store.set_dirty(core.store, 0);
         } else if save {
             return reply.put(sc, at, "-ERR Errors trying to SHUTDOWN. Check logs.\r\n");
+        }
+        if log_on(core) {
+            log_barrier(core, fs);
+            aof.sync(fs, contents(core.dir)[0..core.dir_len]);
         }
         job[13] = 1;
         st[p + 7] = 1;
@@ -623,6 +744,10 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
         // A value that is being sent goes first, and the commands after it wait for it.
         if st[p + 13] == 4 && st[p + 2] == 0 && st[p + 3] == 0 {
             if at > 0 {
+                if log_barrier(core, fs) != 0 {
+                    at = 0;
+                    st[p + 3] = 1;
+                }
                 st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                 at = 0;
             }
@@ -667,7 +792,9 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                 used = used + 2;
                 if st[p + 14] >= 0 {
                     if st[p + 17] == store.epoch_of(core.store) {
+                        let began = at;
                         at = stream.finish(sc, at, core.store, st[p + 14], st[p + 16]);
+                        log_streamed(core, fs, st[p + 14], sc, began, at);
                     } else {
                         at = reply.put(sc, at, "-ERR the keys were flushed while the value was arriving\r\n");
                     }
@@ -675,6 +802,10 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                 st[p + 13] = 0;
                 contents(core.info)[2] = contents(core.info)[2] + 1;
                 if at >= flush_at() || at + commands.reserve() > len(sc) {
+                    if log_barrier(core, fs) != 0 {
+                        at = 0;
+                        st[p + 3] = 1;
+                    }
                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                     at = 0;
                 }
@@ -799,6 +930,10 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                     // A command that answers in pieces (`MGET`) wrote one and has more to say. What it wrote goes out now; the command stays
                     // where it is in the input, and when the answers have gone (this turn, or the one the socket can take more in) it is parsed
                     // again and goes on from where `st[p + 9]` says.
+                    if log_barrier(core, fs) != 0 {
+                        at = 0;
+                        st[p + 3] = 1;
+                    }
                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                     at = 0;
                     n = 0;
@@ -808,6 +943,7 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                     if tb[0] > 0 {
                         stats.record(contents(core.info), cmd_idx, sc, reply_from, at);
                         note_change(core, cmd_idx, sc, reply_from, at);
+                        log_write(core, fs, view, tb, cmd_idx, sc, reply_from, at);
                         if st[p + 9] == 0 && status != 2 && !stats.did_not_run(sc, reply_from, at) {
                             at = monitor_feed(tab, core, k, view, tb, sc, at);
                         }
@@ -844,10 +980,15 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                                 }
                                 if st[p + 9] == 0 && !stats.did_not_run(sc, exec_from, at) {
                                     note_change(core, cmdnames.index_of(reply.arg_of(qview, tb, 0)), sc, exec_from, at);
+                                    log_write(core, fs, qview, tb, cmdnames.index_of(reply.arg_of(qview, tb, 0)), sc, exec_from, at);
                                     at = monitor_feed(tab, core, k, qview, tb, sc, at);
                                 }
                                 if st[p + 9] != 0 {
                                     // Part way through a command that answers in pieces: what it wrote goes out, and it is called again.
+                                    if log_barrier(core, fs) != 0 {
+                                        at = 0;
+                                        st[p + 3] = 1;
+                                    }
                                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                                     at = 0;
                                     done = false;
@@ -859,6 +1000,10 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                             if done {
                                 qi = qi + qn;
                                 if at >= flush_at() || at + commands.reserve() > len(sc) {
+                                    if log_barrier(core, fs) != 0 {
+                                        at = 0;
+                                        st[p + 3] = 1;
+                                    }
                                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                                     at = 0;
                                     if st[p + 2] != 0 {
@@ -888,6 +1033,10 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
                 // Room for the biggest answer one command can make, and no more than the queue for a slow client can take at once: once
                 // that much is waiting the loop stops, leaving the commands after it in the input until the client has read.
                 if at >= flush_at() || at + commands.reserve() > len(sc) {
+                    if log_barrier(core, fs) != 0 {
+                        at = 0;
+                        st[p + 3] = 1;
+                    }
                     st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
                     at = 0;
                 }
@@ -895,6 +1044,10 @@ fn process[&t, &c, &q, &z](tab: &!t conns.Table, core: &!c Core, k: int, clock: 
         }
     }
     if at > 0 && st[p + 2] >= 0 {
+        if log_barrier(core, fs) != 0 {
+            at = 0;
+            st[p + 3] = 1;
+        }
         st[p + 2] = emit(tab, k, sc[0..at], pd[ops..ope], st[p + 2]);
     }
     if st[p + 2] < 0 {
@@ -1091,7 +1244,7 @@ fn accept_all[&h, &l, &c](heap: &!h Heap, conn: conns.Table, listener: &!l Liste
 // The loop
 // ---------------------------------------------------------------------
 
-fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, fs: &z Fs(""), dirpath: &d [byte], savetext: &d [byte], port: int, memory: int, max_keys: int, policy: int, seed: int, clustered: bool, map: &c [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, fs_read(""), dir_read, dir_write, file_read, file_write] int {
+fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k Clock, fs: &z Fs(""), dirpath: &d [byte], savetext: &d [byte], aof_on: int, aof_policy: int, port: int, memory: int, max_keys: int, policy: int, seed: int, clustered: bool, map: &c [byte]) -> [heap, conn_accept, conn_read, conn_write, poll, clock, fs_read(""), dir_read, dir_write, file_read, file_write] int {
     match poller_new() {
         Polling::Ok(p) => {
             var poller = p;
@@ -1099,7 +1252,7 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                 poller_add_listener(pw, listener, 0);
             }
             let limit = max_connections();
-            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size() + stats.size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), dir: box_slice(heap, 4096, byte_of(0)), dir_len: 0, swept: 0 };
+            var core = Core { poller: poller, events: box_slice(heap, 128, 0), state: box_slice(heap, stride() * limit, 0), bufs: box_slice(heap, (input_blocks() + 1) * input_size(), byte_of(0)), pends: box_slice(heap, pend_blocks() * output_size(), byte_of(0)), inpool: box_slice(heap, input_blocks() + 1, 0), pendpool: box_slice(heap, pend_blocks() + 1, 0), qpool: box_slice(heap, queue_blocks() + 1, 0), table: box_slice(heap, resp.slots(), 0), scratch: box_slice(heap, 3 * commands.reserve(), byte_of(0)), tmp: box_slice(heap, 64, byte_of(0)), names: box_slice(heap, limit * 64, byte_of(0)), info: box_slice(heap, cluster.world_size() + stats.size(), 0), txns: box_slice(heap, txn.stride() * limit, 0), queues: box_slice(heap, queue_blocks() * input_size(), byte_of(0)), store: store.open(heap, memory, max_keys, seed, policy), dir: box_slice(heap, 4096, byte_of(0)), dir_len: 0, aofbuf: box_slice(heap, aof.buffer_size(), byte_of(0)), swept: 0 };
             var tab = conns.empty(heap, 64);
             var bad_map = false;
             var bad_dump = 0;
@@ -1128,6 +1281,23 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                     let (loaded, kept) = persist.load(fs, dirpath, heap, cw.store);
                     if loaded > persist.absent() {
                         bad_dump = loaded;
+                    }
+                }
+                store.set_fsync(cw.store, aof_policy);
+                // `--appendonly=yes`: the log is made if there is none, and written from here on. Whatever the snapshot loaded is what the log builds on (`docs/design.md` section 38).
+                if aof_on != 0 && !bad_map && bad_dump == 0 {
+                    if len(dirpath) == 0 {
+                        bad_map = true;
+                    } else {
+                        let opened = aof.open_log(fs, dirpath, store.wall_of(cw.store) + store.now_of(cw.store));
+                        if opened != 0 {
+                            bad_dump = 20;
+                        } else {
+                            let ab = contents(cw.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
+                            ab[0] = 1;
+                            ab[3] = store.now_of(cw.store);
+                            store.evlog_start(cw.store);
+                        }
                     }
                 }
                 // `--save=900:1,300:10`: the policy to start with (`CONFIG SET save` changes it).
@@ -1225,7 +1395,20 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                             }
                         }
                     }
-                    if job[13] == 1 {
+                    // `appendfsync everysec`: the log is synced when a second has gone by since it last was and something has been written since.
+                    let ab = contents(cw.info)[stats.aof_at()..stats.aof_at() + stats.aof_ints()];
+                    if ab[0] != 0 && store.fsync_of(cw.store) == aof.policy_everysec() && ab[7] > 0 && store.now_of(cw.store) - ab[3] >= 1000 {
+                        let synced = aof.sync(fs, contents(cw.dir)[0..cw.dir_len]);
+                        ab[6] = synced;
+                        ab[3] = store.now_of(cw.store);
+                        if synced == 0 {
+                            ab[7] = 0;
+                            ab[8] = ab[8] + 1;
+                        } else {
+                            ab[9] = ab[9] + 1;
+                        }
+                    }
+                    if job[13] != 0 {
                         stopping = true;
                     }
                     // Take the keys whose time has passed that nobody asked for again: at most a hundred times a second,
@@ -1246,8 +1429,12 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
                     }
                 }
             }
+            var stopped_by = 0;
+            borrow core as &cr in {
+                stopped_by = contents(cr.info)[stats.persist_at() + 13];
+            }
             conns.drop(heap, tab);
-            let Core { poller, events, state, bufs, pends, inpool, pendpool, qpool, table, scratch, tmp, names, info, txns, queues, store, dir, dir_len, swept } = core;
+            let Core { poller, events, state, bufs, pends, inpool, pendpool, qpool, table, scratch, tmp, names, info, txns, queues, store, dir, dir_len, aofbuf, swept } = core;
             poller_close(poller);
             unbox_slice(heap, events);
             unbox_slice(heap, state);
@@ -1264,12 +1451,16 @@ fn run[&h, &l, &k, &c, &z, &d](heap: &!h Heap, listener: &!l Listener, clock: &k
             unbox_slice(heap, txns);
             unbox_slice(heap, queues);
             unbox_slice(heap, dir);
+            unbox_slice(heap, aofbuf);
             store.close(heap, store);
             if bad_map {
                 return 2;
             }
             if bad_dump != 0 {
                 return 100 + bad_dump;
+            }
+            if stopped_by == 2 {
+                return 6;
             }
             return 0;
         }
@@ -1346,6 +1537,9 @@ fn main(world: World) -> [] int {
     var cluster_at = 0;
     var dir_at = 0;
     var save_at = 0;
+    var aof_on = 0;
+    var aof_policy = 1;
+    var aof_bad = false;
     borrow args as &g in {
         if arg_count(g) > 4 {
             let named = store.policy_named(arg(g, 4));
@@ -1378,6 +1572,21 @@ fn main(world: World) -> [] int {
             if has_prefix(arg(g, k), "--save=") {
                 save_at = k;
             }
+            // `--appendonly=yes` and `--appendfsync=always|everysec|no`: the append-only log (`docs/design.md` section 38).
+            if has_prefix(arg(g, k), "--appendonly=") {
+                let word = arg(g, k)[13..len(arg(g, k))];
+                if len(word) == 3 && int_of(word[0]) == 'y' && int_of(word[1]) == 'e' && int_of(word[2]) == 's' {
+                    aof_on = 1;
+                } else if !(len(word) == 2 && int_of(word[0]) == 'n' && int_of(word[1]) == 'o') {
+                    aof_bad = true;
+                }
+            }
+            if has_prefix(arg(g, k), "--appendfsync=") {
+                aof_policy = store.fsync_named(arg(g, k)[14..len(arg(g, k))]);
+                if aof_policy < 0 {
+                    aof_bad = true;
+                }
+            }
             k = k + 1;
         }
     }
@@ -1387,7 +1596,7 @@ fn main(world: World) -> [] int {
         }
     }
     var status = 2;
-    if port > 0 && port < 65536 && megabytes > 0 && megabytes <= 4096 && max_keys > 0 && max_keys <= 100000000 {
+    if !aof_bad && port > 0 && port < 65536 && megabytes > 0 && megabytes <= 4096 && max_keys > 0 && max_keys <= 100000000 {
         status = 3;
         borrow net as &nn in {
             match tcp_listen(nn, port, 1024, 0) {
@@ -1416,7 +1625,7 @@ fn main(world: World) -> [] int {
                                         if dir_at > 0 {
                                             dirpath = arg(ga, dir_at)[6..len(arg(ga, dir_at))];
                                         }
-                                        status = run(h, lh, c, fr, dirpath, savetext, port, megabytes * 1048576, max_keys, policy, seed, cluster_at > 0, arg(ga, cluster_at));
+                                        status = run(h, lh, c, fr, dirpath, savetext, aof_on, aof_policy, port, megabytes * 1048576, max_keys, policy, seed, cluster_at > 0, arg(ga, cluster_at));
                                         if status >= 100 {
                                             borrow mut io as &!i in {
                                                 var refusal = buffer.append(h, buffer.empty(h, 64), "refusing to start: ");
@@ -1428,6 +1637,10 @@ fn main(world: World) -> [] int {
                                                 buffer.drop(h, refusal);
                                             }
                                             status = 4;
+                                        } else if status == 6 {
+                                            borrow mut io as &!i in {
+                                                io.error_all(i, "stopping: the append-only log could not be written, and appendfsync is always (docs/design.md section 38)\n");
+                                            }
                                         }
                                     }
                                 }

@@ -196,6 +196,14 @@ pub res struct Store {
     // The snapshot's policy (`docs/design.md` section 37): up to `save_pairs()` pairs (seconds, changes), 0 seconds being an unused pair, and the writes since the last save.
     save: Box[[int]],
     dirty: int,
+    // The keys evicted since the log last looked (`docs/design.md` section 38): a length (4 bytes) and the key, one after the other; only kept while `evlog_on` is 1. `evlog_lost` counts
+    // the ones that did not fit.
+    evlog: Box[[byte]],
+    evlog_len: int,
+    evlog_on: int,
+    evlog_lost: int,
+    // `appendfsync`: 0 no, 1 everysec, 2 always (`docs/design.md` section 38).
+    fsync: int,
     now: int,
     // How many uses of keys have been stamped in the current millisecond (`use_stamp`).
     seq: int,
@@ -236,17 +244,18 @@ pub fn open[&h](heap: &!h Heap, memory: int, max_keys: int, seed: int, policy: i
     while slots < 2 * max_keys {
         slots = slots * 2;
     }
-    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, slow: box_slice(heap, slow_cap() * slow_fields(), 0), slowtext: box_slice(heap, slow_cap() * slow_room(), byte_of(0)), slow_next: 0, slow_count: 0, slow_threshold: 10000, slow_max: 128, lat: box_slice(heap, lat_events() * lat_block(), 0), lat_threshold: 0, save: box_slice(heap, 2 * save_pairs(), 0), dirty: 0, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
+    return Store { index: box_slice(heap, slots, 0), meta: box_slice(heap, stride() * max_keys, 0), data: box_slice(heap, memory, byte_of(0)), mask: slots - 1, max_keys: max_keys, live: 0, fresh: 0, free_head: 0 - 1, top: 0, dead: 0, seed: seed, policy: policy, samples: 5, hits: 0, misses: 0, peak: 0, slow: box_slice(heap, slow_cap() * slow_fields(), 0), slowtext: box_slice(heap, slow_cap() * slow_room(), byte_of(0)), slow_next: 0, slow_count: 0, slow_threshold: 10000, slow_max: 128, lat: box_slice(heap, lat_events() * lat_block(), 0), lat_threshold: 0, save: box_slice(heap, 2 * save_pairs(), 0), dirty: 0, evlog: box_slice(heap, evlog_room(), byte_of(0)), evlog_len: 0, evlog_on: 0, evlog_lost: 0, fsync: 1, now: 0, seq: 0, cursor: 0, rng: 88172645463325252, protect: 0 - 1, ttl_keys: 0, evicted: 0, expired: 0, compactions: 0, forced: 0, cfrom: 0 - 1, cto: 0, last: 0 - 1, versions: box_slice(heap, watch_buckets(), 0), epoch: 0, staged: 0, clock: 0, wall: 0 };
 }
 
 pub fn close[&h](heap: &!h Heap, st: Store) -> [heap] int {
-    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, slow, slowtext, slow_next, slow_count, slow_threshold, slow_max, lat, lat_threshold, save, dirty, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
+    let Store { index, meta, data, mask, max_keys, live, fresh, free_head, top, dead, seed, policy, samples, hits, misses, peak, slow, slowtext, slow_next, slow_count, slow_threshold, slow_max, lat, lat_threshold, save, dirty, evlog, evlog_len, evlog_on, evlog_lost, fsync, now, seq, cursor, rng, protect, ttl_keys, evicted, expired, compactions, forced, cfrom, cto, last, versions, epoch, staged, clock, wall } = st;
     unbox_slice(heap, index);
     unbox_slice(heap, versions);
     unbox_slice(heap, slow);
     unbox_slice(heap, slowtext);
     unbox_slice(heap, lat);
     unbox_slice(heap, save);
+    unbox_slice(heap, evlog);
     unbox_slice(heap, meta);
     unbox_slice(heap, data);
     return live;
@@ -696,6 +705,9 @@ fn evict_one[&s](st: &!s Store) -> [] int {
     let e = victim(st);
     if e < 0 {
         return 0;
+    }
+    if st.evlog_on != 0 {
+        evlog_push(st, e);
     }
     remove_entry(st, e);
     st.evicted = st.evicted + 1;
@@ -1562,6 +1574,85 @@ pub fn save_points[&s](st: &!s Store) -> [] &!s [int] {
 
 pub fn save_at[&s](st: &s Store, i: int) -> [] int {
     return contents(st.save)[i];
+}
+
+// The room for the keys evicted between two looks of the log (a look is after every command, so a few keys; a key is at most 4 KiB here, longer ones are `lost`).
+pub fn evlog_room() -> [] int {
+    return 65536;
+}
+
+fn evlog_push[&s](st: &!s Store, e: int) -> [] int {
+    let n = len(key_at(st, e));
+    let room = contents(st.evlog);
+    if st.evlog_len + 4 + n > len(room) {
+        st.evlog_lost = st.evlog_lost + 1;
+        return 0;
+    }
+    let at = st.evlog_len;
+    room[at] = byte_of(n & 255);
+    room[at + 1] = byte_of((n >> 8) & 255);
+    room[at + 2] = byte_of((n >> 16) & 255);
+    room[at + 3] = byte_of((n >> 24) & 255);
+    let key = key_at(st, e);
+    var i = 0;
+    while i < n {
+        room[at + 4 + i] = key[i];
+        i = i + 1;
+    }
+    st.evlog_len = at + 4 + n;
+    return 0;
+}
+
+pub fn fsync_of[&s](st: &s Store) -> [] int {
+    return st.fsync;
+}
+
+pub fn set_fsync[&s](st: &!s Store, n: int) -> [] int {
+    st.fsync = n;
+    return 0;
+}
+
+pub fn fsync_name(n: int) -> [] &static [byte] {
+    if n == 2 {
+        return "always";
+    }
+    if n == 1 {
+        return "everysec";
+    }
+    return "no";
+}
+
+// The policy a word names: 0, 1 or 2, or -1.
+pub fn fsync_named[&w](word: &w [byte]) -> [] int {
+    if len(word) == 6 && (int_of(word[0]) == 'a' || int_of(word[0]) == 'A') {
+        return 2;
+    }
+    if len(word) == 8 && (int_of(word[0]) == 'e' || int_of(word[0]) == 'E') {
+        return 1;
+    }
+    if len(word) == 2 && (int_of(word[0]) == 'n' || int_of(word[0]) == 'N') {
+        return 0;
+    }
+    return 0 - 1;
+}
+
+pub fn evlog_start[&s](st: &!s Store) -> [] int {
+    st.evlog_on = 1;
+    return 0;
+}
+
+// The evicted keys not yet looked at, as `evlog_push` wrote them.
+pub fn evlog_bytes[&s](st: &s Store) -> [] &s [byte] {
+    return contents(st.evlog)[0..st.evlog_len];
+}
+
+pub fn evlog_clear[&s](st: &!s Store) -> [] int {
+    st.evlog_len = 0;
+    return 0;
+}
+
+pub fn evlog_lost_of[&s](st: &s Store) -> [] int {
+    return st.evlog_lost;
 }
 
 pub fn dirty_of[&s](st: &s Store) -> [] int {

@@ -31,6 +31,7 @@ on:
       - src/latency.cho
       - src/memory.cho
       - src/persist.cho
+      - src/aof.cho
       - tests/info.py
       - tests/slowlog.py
       - tests/client_commands.py
@@ -38,6 +39,7 @@ on:
       - tests/monitor.py
       - tests/persist.py
       - tests/policy.py
+      - tests/aof.py
       - tests/cluster.py
       - tests/gen_cmdinfo.py
       - src/commands.cho
@@ -54,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        harness: [txn, pieces, keyspace, string, slowlog, clients, latency, monitor, persist, policy]
+        harness: [txn, pieces, keyspace, string, slowlog, clients, latency, monitor, persist, policy, aof]
     runs-on: ubuntu-latest
     # A step that hangs (a package mirror that does not answer, once, held a job for GitHub's six hours) fails instead.
     timeout-minutes: 60
@@ -96,7 +98,7 @@ jobs:
       - name: Every mutant still applies to the source, exactly once (fast)
         working-directory: cache
         run: |
-          for f in txn string keyspace pieces slowlog clients latency monitor persist policy; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
+          for f in txn string keyspace pieces slowlog clients latency monitor persist policy aof; do MUTANTS_LINT=1 CANCHO=x python3 tests/${f}_mutants.py; done
 
       - name: Every mutant of this file is caught
         working-directory: cache

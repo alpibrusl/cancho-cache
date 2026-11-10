@@ -75,12 +75,12 @@ jobs:
 
       - name: Build
         working-directory: cache
-        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho -o build/cache
+        run: mkdir -p build && ../cancho/target/release/cancho build --std src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho src/aof.cho -o build/cache
 
       - name: Authority has no ffi and no fs_write; the one directory it writes is opened by --dir (docs/design.md section 35)
         working-directory: cache
         run: |
-          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho --std > /tmp/authority.txt
+          ../cancho/target/release/cancho authority src/cache.cho src/resp.cho src/store.cho src/commands.cho src/reply.cho src/session.cho src/txn.cho src/glob.cho src/pool.cho src/stream.cho src/cmdinfo.cho src/cmddocs.cho src/cmdkeys.cho src/cluster.cho src/cmdnames.cho src/stats.cho src/slowlog.cho src/clients.cho src/latency.cho src/memory.cho src/persist.cho src/aof.cho --std > /tmp/authority.txt
           cat /tmp/authority.txt
           sed -n '/^performs/,/^never touches/p' /tmp/authority.txt | grep -q 'fs_read("")'
           sed -n '/^performs/,/^never touches/p' /tmp/authority.txt | grep -q 'dir_write'
@@ -119,6 +119,10 @@ jobs:
       - name: The save policy counts the writes, saves when it is due, and SHUTDOWN saves
         working-directory: cache
         run: python3 tests/policy.py build/cache
+
+      - name: The append-only log is written whole, says what the cache holds, and syncs when it should
+        working-directory: cache
+        run: python3 tests/aof.py build/cache
 
       - name: Cluster-lite against a real Redis Cluster (three nodes of each, compared line for line)
         working-directory: cache

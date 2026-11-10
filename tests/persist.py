@@ -263,6 +263,20 @@ try:
     p, c = start(dd)
     check("the same value fits a 64 MiB arena", c.ask("STRLEN", "k"), 3 << 20)
     stop(p)
+    # a save that stopped between its two renames left a whole dump.old and no dump.cho: that is what a start loads; and with both, dump.cho wins
+    dd = os.path.join(work, "between")
+    os.mkdir(dd)
+    open(os.path.join(dd, "dump.old"), "wb").write(seal(header(1) + record(b"old", b"from dump.old")))
+    p, c = start(dd)
+    check("a start with only dump.old loads it", c.ask("GET", "old"), b"from dump.old")
+    stop(p)
+    dd = os.path.join(work, "both")
+    os.mkdir(dd)
+    open(os.path.join(dd, "dump.old"), "wb").write(seal(header(1) + record(b"old", b"from dump.old")))
+    open(os.path.join(dd, "dump.cho"), "wb").write(seal(header(1) + record(b"new", b"from dump.cho")))
+    p, c = start(dd)
+    check("with both, dump.cho is loaded", (c.ask("GET", "new"), c.ask("GET", "old")), (b"from dump.cho", None))
+    stop(p)
     # a key that has already ended is not loaded at all: this one would not fit a 1 MiB arena, and the start does not notice it
     dd = os.path.join(work, "ended")
     os.mkdir(dd)
@@ -318,6 +332,31 @@ try:
             elif body.startswith("rename") and "dump.tmp" in body and "dump.cho" in body:
                 events.append("rename")
         check("create, sync the file, rename, sync the directory (in that order)", events, ["create", "sync-file", "rename", "sync-dir"])
+        # a second save, in slices: the old snapshot is moved aside and not replaced (a rename over a big file frees its blocks inside the call)
+        tp2 = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        processes.append(tp2)
+        c = None
+        for _ in range(100):
+            try:
+                c = Client()
+                break
+            except OSError:
+                time.sleep(0.05)
+        c.ask("BGSAVE")
+        end = time.time() + 30
+        while "rdb_bgsave_in_progress:1" in c.ask("INFO", "persistence").decode() and time.time() < end:
+            time.sleep(0.02)
+        subprocess.run(["pkill", "-TERM", "-P", str(tp2.pid)])
+        tp2.wait(timeout=20)
+        moves = []
+        for l in open(trace).read().split("\n"):
+            body = l.split(None, 1)[1] if len(l.split(None, 1)) > 1 else l
+            if body.startswith("rename"):
+                if "dump.cho" in body and "dump.old" in body:
+                    moves.append("cho->old")
+                elif "dump.tmp" in body and "dump.cho" in body:
+                    moves.append("tmp->cho")
+        check("a BGSAVE moves the old snapshot aside, and then the new one into its place (the first SAVE renamed over it)", moves[-2:], ["cho->old", "tmp->cho"])
     else:
         print("SKIPPED the order of the calls (no strace)")
     # a SAVE that cannot be written says so, and leaves the old snapshot as it was
@@ -431,6 +470,17 @@ try:
     check("and has what the SAVE had", c.ask("GET", "k5000") is not None, True)
     check("the next BGSAVE removes the left-over temporary file and finishes", (c.ask("BGSAVE"), "rdb_last_bgsave_status:ok" in wait_saved(c)), (("+", "Background saving started"), True))
     check("and leaves only the snapshot", sorted(os.listdir(big)), ["dump.cho"])
+    # a save whose temporary file is taken from under it fails, says so, and leaves the snapshot as it was
+    whole = open(os.path.join(big, "dump.cho"), "rb").read()
+    check("BGSAVE to be broken", c.ask("BGSAVE"), ("+", "Background saving started"))
+    tmp = os.path.join(big, "dump.tmp")
+    os.remove(tmp)
+    os.mkdir(tmp)
+    info = wait_saved(c)
+    check("a save that was broken says it failed, and is over", ("rdb_last_bgsave_status:err" in info, "rdb_bgsave_in_progress:0" in info), (True, True))
+    check("the snapshot is as it was", open(os.path.join(big, "dump.cho"), "rb").read(), whole)
+    os.rmdir(tmp)
+    check("the next save works, and the status is ok again", (c.ask("BGSAVE"), "rdb_last_bgsave_status:ok" in wait_saved(c)), (("+", "Background saving started"), True))
     stop(p)
     # a BGSAVE that cannot start says so, and nothing is running
     blocked = os.path.join(work, "bgblocked")

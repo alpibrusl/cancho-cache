@@ -336,7 +336,12 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
     }
     if wants(view, table, "PERSISTENCE") {
         o = reply.put(sc, o, "# Persistence\r\nloading:0\r\nasync_loading:0\r\nrdb_changes_since_last_save:0\r\n");
-        o = kv(sc, o, "rdb_bgsave_in_progress", world[stats.persist_at()]);
+        // 1 until the file the save replaced has been given back too (`persist.cho`, `retire`).
+        var running = 0;
+        if world[stats.persist_at()] != 0 {
+            running = 1;
+        }
+        o = kv(sc, o, "rdb_bgsave_in_progress", running);
         o = kv(sc, o, "rdb_last_save_time", world[stats.persist_at() + 7]);
         if world[stats.persist_at() + 8] == 0 {
             o = reply.put(sc, o, "rdb_last_bgsave_status:ok\r\n");
@@ -349,7 +354,7 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
         }
         o = kv(sc, o, "rdb_last_bgsave_time_sec", last);
         var current = 0 - 1;
-        if world[stats.persist_at()] == 1 {
+        if world[stats.persist_at()] != 0 {
             current = (store.wall_of(st) + store.now_of(st) - world[stats.persist_at() + 6]) / 1000;
         }
         o = kv(sc, o, "rdb_current_bgsave_time_sec", current);

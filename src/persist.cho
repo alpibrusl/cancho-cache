@@ -295,7 +295,7 @@ pub fn save[&f, &p, &s](fs: &f Fs(""), path: &p [byte], st: &s store.Store, now_
 //
 // The job is `stats.persist_ints()` ints of the loop's `world`:
 //
-//     0 1 while a save is under way     1 the next entry to look at     2, 3 the halves of the running checksum     4 bytes written     5 records written
+//     0 1 while a save is under way, 2 while the file it replaced is being given back (see `retire`)     1 the next entry to look at     2, 3 the halves of the running checksum     4 bytes written     5 records written
 //     6 when it began (Unix ms)         7 when the last save finished (Unix s)     8 how the last one ended (0, or an errno)     9 how long it took (ms)
 //     10 the entries it will look at (those that existed when it began)     11 saves finished
 //
@@ -421,8 +421,83 @@ fn finish_in[&w, &j](file: &!w File, job: &!j [int]) -> [file_write] int {
     }
 }
 
+// The bytes of the old snapshot that `retire` frees in one turn.
+fn retire_bytes() -> [] int {
+    return 4194304;
+}
+
+// One turn of giving back the old snapshot (`dump.old`, left by a save that finished): its size is cut by `retire_bytes()`, and when nothing is left the name goes. -1: more to do.
+// 0: it is gone. An errno: it could not be (the file is left, and the next save removes it).
+fn retire[&f, &p, &j](fs: &f Fs(""), path: &p [byte], job: &!j [int]) -> [fs_read(""), dir_write, file_read, file_write] int {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var answer = 0 - 1;
+            borrow dir as &d in {
+                match dir_open_append(d, "dump.old") {
+                    Opened::Ok(of) => {
+                        var file = of;
+                        var size = 0;
+                        borrow mut file as &!w in {
+                            match file_size(w) {
+                                Done::Ok(n) => {
+                                    size = n;
+                                }
+                                Done::Failed(e) => {
+                                    answer = e;
+                                }
+                            }
+                            if answer == 0 - 1 {
+                                var left = size - retire_bytes();
+                                if left < 0 {
+                                    left = 0;
+                                }
+                                match file_truncate(w, left) {
+                                    Done::Ok(n) => {
+                                    }
+                                    Done::Failed(e) => {
+                                        answer = e;
+                                    }
+                                }
+                                if answer == 0 - 1 && left == 0 {
+                                    answer = 0;
+                                }
+                            }
+                        }
+                        file_close(file);
+                    }
+                    Opened::Failed(e) => {
+                        answer = e;
+                    }
+                }
+                if answer == 0 {
+                    match dir_remove(d, "dump.old") {
+                        Done::Ok(n) => {
+                        }
+                        Done::Failed(e) => {
+                            answer = e;
+                        }
+                    }
+                }
+            }
+            dir_close(dir);
+            if answer != 0 - 1 {
+                job[0] = 0;
+            }
+            return answer;
+        }
+        DirOpened::Failed(e) => {
+            job[0] = 0;
+            return e;
+        }
+    }
+}
+
 // One slice of a save under way, of about `budget` bytes. -1: more to do. 0: finished (`dump.cho` is replaced). An errno: it failed (the old `dump.cho` is as it was).
-pub fn step[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, job: &!j [int], budget: int, now_ms: int) -> [fs_read(""), dir_write, file_write] int {
+pub fn step[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, job: &!j [int], budget: int, now_ms: int) -> [fs_read(""), dir_write, file_read, file_write] int {
+    if job[0] == 2 {
+        return retire(fs, path, job);
+    }
     match open_dir(fs, path) {
         DirOpened::Ok(opened) => {
             var dir = opened;
@@ -437,6 +512,15 @@ pub fn step[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, 
                             if status == 0 && (job[1] >= job[10] || job[1] >= store.entries(st)) {
                                 status = finish_in(w, job);
                                 finished = status == 0;
+                            } else if status == 0 {
+                                // Each slice is synced as it is written: a sync of the whole file at the end would be one stall as long as the disk takes to take the whole of it.
+                                match file_sync(w) {
+                                    Done::Ok(n) => {
+                                    }
+                                    Done::Failed(e) => {
+                                        status = e;
+                                    }
+                                }
                             }
                         }
                         file_close(file);
@@ -446,6 +530,20 @@ pub fn step[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, 
                     }
                 }
                 if finished {
+                    // The old snapshot is moved aside, not replaced: `rename` over a file frees the old one's blocks before it returns, which for a snapshot of the whole arena
+                    // is a stall as long as the arena is big (about 50 ms for 100 MiB, measured). It is given back a slice a turn by `retire`. Between the two renames there
+                    // is no `dump.cho`, and a start then finds `dump.old`: `load` knows.
+                    var retiring = false;
+                    match dir_rename(d, "dump.cho", "dump.old") {
+                        Done::Ok(n) => {
+                            retiring = true;
+                        }
+                        Done::Failed(e) => {
+                        }
+                    }
+                    if retiring {
+                        job[0] = 2;
+                    }
                     match dir_rename(d, "dump.tmp", "dump.cho") {
                         Done::Ok(n) => {
                         }
@@ -472,7 +570,9 @@ pub fn step[&f, &p, &s, &j](fs: &f Fs(""), path: &p [byte], st: &s store.Store, 
                 return status;
             }
             if finished {
-                job[0] = 0;
+                if job[0] == 1 {
+                    job[0] = 0;
+                }
                 job[7] = now_ms / 1000;
                 job[8] = 0;
                 job[9] = now_ms - job[6];
@@ -570,7 +670,19 @@ fn read_snapshot[&b, &s](bytes: &b [byte], st: &!s store.Store) -> [] (int, int)
 
 // Load `dump.cho` from the directory `dir` is a handle on into the store: the status and the number of keys (see `tag`). `heap` holds the file while it is checked.
 fn load_in[&d, &h, &s](dir: &d Dir, heap: &!h Heap, st: &!s store.Store) -> [heap, dir_read, file_read] (int, int) {
+    var name = "dump.cho";
+    // A save that stopped between its two renames left no `dump.cho` and a whole `dump.old`.
     match dir_open_read(dir, "dump.cho") {
+        Opened::Ok(probe) => {
+            file_close(probe);
+        }
+        Opened::Failed(e) => {
+            if e == 2 {
+                name = "dump.old";
+            }
+        }
+    }
+    match dir_open_read(dir, name) {
         Opened::Ok(opened) => {
             var file = opened;
             var status = 0;

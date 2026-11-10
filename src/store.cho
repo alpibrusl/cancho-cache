@@ -1590,9 +1590,9 @@ fn evlog_push[&s](st: &!s Store, e: int) -> [] int {
     }
     let at = st.evlog_len;
     room[at] = byte_of(n & 255);
-    room[at + 1] = byte_of((n >> 8) & 255);
-    room[at + 2] = byte_of((n >> 16) & 255);
-    room[at + 3] = byte_of((n >> 24) & 255);
+    room[at + 1] = byte_of(n >> 8 & 255);
+    room[at + 2] = byte_of(n >> 16 & 255);
+    room[at + 3] = byte_of(n >> 24 & 255);
     let key = key_at(st, e);
     var i = 0;
     while i < n {

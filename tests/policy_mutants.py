@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mutlib import run_mutants
 
 S = ("py", "policy.py")
-NOTE = "    if idx >= 0 && cmdnames.is_write(idx) && to > from && !stats.did_not_run(sc, from, to) && int_of(sc[from]) != '-' {\n        if !(to - from == 4 && int_of(sc[from]) == ':' && int_of(sc[from + 1]) == '0') {"
+NOTE = "    if idx >= 0 && cmdnames.is_write(idx) && to > from && !stats.did_not_run(sc, from, to) && int_of(sc[from]) != '-' {\n        // `HSET` of a field that is there answers 0 and has changed it; for every other command 0 is \"nothing happened\".\n        if !(to - from == 4 && int_of(sc[from]) == ':' && int_of(sc[from + 1]) == '0') || idx == cmdnames.index_of(\"HSET\") {"
 DUE = "if seconds > 0 && store.dirty_of(cw.store) >= store.save_at(cw.store, 2 * pair + 1) && now_s - job[7] >= seconds && (job[8] == 0 || now_s - job[14] >= 5) {"
 SETTLE = "                        if job[0] == 0 && job[8] == 0 {\n                            var left = store.dirty_of(cw.store) - job[12];"
 SHUT = "        let policy = store.save_at(core.store, 0) > 0;\n        if (save || policy && !nosave) && core.dir_len > 0 {"
@@ -19,7 +19,7 @@ SHUT = "        let policy = store.save_at(core.store, 0) > 0;\n        if (save
 MUTANTS = [
     ("a read counts as a change", "cache.cho", NOTE, NOTE.replace("cmdnames.is_write(idx)", "true"), S),
     ("an error counts as a change", "cache.cho", NOTE, NOTE.replace(" && int_of(sc[from]) != '-'", ""), S),
-    ("a DEL of nothing counts as a change", "cache.cho", NOTE, NOTE.replace("if !(to - from == 4 && int_of(sc[from]) == ':' && int_of(sc[from + 1]) == '0') {", "if true {"), S),
+    ("a DEL of nothing counts as a change", "cache.cho", NOTE, NOTE.replace("if !(to - from == 4 && int_of(sc[from]) == ':' && int_of(sc[from + 1]) == '0') || idx == cmdnames.index_of(\"HSET\") {", "if true {"), S),
     ("EXEC counts nothing", "cache.cho", "                                    note_change(core, cmdnames.index_of(reply.arg_of(qview, tb, 0)), sc, exec_from, at);\n", "", S),
     ("a command is counted twice", "cache.cho", "            store.add_dirty(core.store, 1);", "            store.add_dirty(core.store, 2);", S),
     ("a policy pair needs one more change than it says", "cache.cho", DUE, DUE.replace(">= store.save_at(cw.store, 2 * pair + 1)", "> store.save_at(cw.store, 2 * pair + 1)"), S),

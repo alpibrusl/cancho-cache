@@ -77,6 +77,9 @@ pub fn tag(status: int) -> [] &static [byte] {
     if status == 18 {
         return "persist.bad-kind";
     }
+    if status == 20 {
+        return "aof.open";
+    }
     return "persist.io";
 }
 

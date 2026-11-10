@@ -1,0 +1,350 @@
+edition 9;
+
+module aof;
+
+import std.crc;
+import store;
+
+// `aof` -- the append-only log (`docs/design.md` section 38): the state a write left, one record for each key it named, appended to `appendonly.cho` beside the snapshot. This module writes
+// it; reading it back is the next slice. Everything goes through a handle on the directory, one component at a time, as in `persist`.
+//
+// The file, all numbers little-endian:
+//
+//     header   32 bytes   "CANCHOLG", the version (1), when the log began (Unix ms), 0
+//     batch    the records one step of the loop appended, then a 32-byte trailer
+//     record   32 bytes   key length, value length, kind, when the key ends (Unix ms, 0: never)         then the key's bytes, then the value's
+//                         kinds: 0 string, 1 hash (the key as it now is) · 2 the key is gone (no value) · 3 only its expiry changed (no value; the 4th number is the new one)
+//                         · 4 every key is gone (no key, no value)
+//     trailer  32 bytes   the bytes of records in the batch, the Unix ms of the step, the kind 9, the CRC-64/XZ of those bytes (all 64 bits)
+//
+// The ints of the log in the loop's `world` (`stats.aof_at()`, `stats.aof_ints()`):
+//
+//     0 1 if the log is on     1 the policy: 0 `no`, 1 `everysec`, 2 `always`     2 bytes staged in the buffer, not yet written     3 the store's milliseconds at the last sync
+//     4 batches written        5 bytes written (the file's size, as far as this run knows)      6 how the last write ended (0, or an errno)      7 bytes written since the last sync
+//     8 syncs                  9 writes that failed       10 evictions that did not fit the store's ring and so are not in the log
+
+pub fn version() -> [] int {
+    return 1;
+}
+
+fn name() -> [] &static [byte] {
+    return "appendonly.cho";
+}
+
+pub fn kind_gone() -> [] int {
+    return 2;
+}
+
+pub fn kind_expiry() -> [] int {
+    return 3;
+}
+
+pub fn kind_flush() -> [] int {
+    return 4;
+}
+
+pub fn kind_end() -> [] int {
+    return 9;
+}
+
+pub fn policy_no() -> [] int {
+    return 0;
+}
+
+pub fn policy_everysec() -> [] int {
+    return 1;
+}
+
+pub fn policy_always() -> [] int {
+    return 2;
+}
+
+// The staging buffer's size: a record bigger than what is left in it makes it be written first, and one bigger than all of it is written on its own.
+pub fn buffer_size() -> [] int {
+    return 262144;
+}
+
+fn put_u64[&b](buf: &!b [byte], at: int, n: int) -> [] int {
+    var i = 0;
+    var rest = n;
+    while i < 8 {
+        buf[at + i] = byte_of(rest & 255);
+        rest = rest >> 8;
+        i = i + 1;
+    }
+    return at + 8;
+}
+
+fn put_u32[&b](buf: &!b [byte], at: int, n: int) -> [] int {
+    var i = 0;
+    var rest = n;
+    while i < 4 {
+        buf[at + i] = byte_of(rest & 255);
+        rest = rest >> 8;
+        i = i + 1;
+    }
+    return at + 4;
+}
+
+fn put_head[&b](buf: &!b [byte], at: int, klen: int, vlen: int, kind: int, ends: int) -> [] int {
+    put_u64(buf, at, klen);
+    put_u64(buf, at + 8, vlen);
+    put_u64(buf, at + 16, kind);
+    put_u64(buf, at + 24, ends);
+    return at + 32;
+}
+
+fn write_all[&w, &b](file: &!w File, bytes: &b [byte]) -> [file_write] int {
+    var at = 0;
+    while at < len(bytes) {
+        match file_write(file, bytes[at..len(bytes)]) {
+            Done::Ok(n) => {
+                at = at + n;
+            }
+            Done::Failed(e) => {
+                return e;
+            }
+        }
+    }
+    return 0;
+}
+
+// Create the log if there is none (a header, synced, and the directory synced): 0, or an errno. A log that is there is left as it is.
+pub fn open_log[&f, &p](fs: &f Fs(""), path: &p [byte], now_ms: int) -> [fs_read(""), dir_write, file_write] int {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var status = 0;
+            borrow dir as &d in {
+                match dir_open_new_mode(d, name(), 420) {
+                    Opened::Ok(of) => {
+                        var file = of;
+                        region r {
+                            let head = alloc_slice[r](32, byte_of(0));
+                            var i = 0;
+                            while i < 8 {
+                                head[i] = byte_of(int_of("CANCHOLG"[i]));
+                                i = i + 1;
+                            }
+                            put_u64(head, 8, version());
+                            put_u64(head, 16, now_ms);
+                            borrow mut file as &!w in {
+                                status = write_all(w, head);
+                                if status == 0 {
+                                    match file_sync(w) {
+                                        Done::Ok(n) => {
+                                        }
+                                        Done::Failed(e) => {
+                                            status = e;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        file_close(file);
+                        if status == 0 {
+                            match dir_sync(d) {
+                                Done::Ok(n) => {
+                                }
+                                Done::Failed(e) => {
+                                    status = e;
+                                }
+                            }
+                        }
+                    }
+                    Opened::Failed(e) => {
+                        // 17: it is there already; then it has to be a file this cache can append to.
+                        if e != 17 {
+                            status = e;
+                        } else {
+                            match dir_open_append(d, name()) {
+                                Opened::Ok(af) => {
+                                    var existing = af;
+                                    file_close(existing);
+                                }
+                                Opened::Failed(e2) => {
+                                    status = e2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            dir_close(dir);
+            return status;
+        }
+        DirOpened::Failed(e) => {
+            return e;
+        }
+    }
+}
+
+// Append `first`, `second` and `third`, then `trailer`, to the log, and sync it if `sync`. 0, or an errno (what is written stays: a batch cut short is a torn tail, which a reader drops).
+fn append[&f, &p, &x, &y, &z, &t](fs: &f Fs(""), path: &p [byte], first: &x [byte], second: &y [byte], third: &z [byte], trailer: &t [byte], sync: bool) -> [fs_read(""), dir_write, file_write] int {
+    match open_dir(fs, path) {
+        DirOpened::Ok(opened) => {
+            var dir = opened;
+            var status = 0;
+            borrow dir as &d in {
+                match dir_open_append(d, name()) {
+                    Opened::Ok(of) => {
+                        var file = of;
+                        borrow mut file as &!w in {
+                            status = write_all(w, first);
+                            if status == 0 {
+                                status = write_all(w, second);
+                            }
+                            if status == 0 {
+                                status = write_all(w, third);
+                            }
+                            if status == 0 {
+                                status = write_all(w, trailer);
+                            }
+                            if status == 0 && sync {
+                                match file_sync(w) {
+                                    Done::Ok(n) => {
+                                    }
+                                    Done::Failed(e) => {
+                                        status = e;
+                                    }
+                                }
+                            }
+                        }
+                        file_close(file);
+                    }
+                    Opened::Failed(e) => {
+                        status = e;
+                    }
+                }
+            }
+            dir_close(dir);
+            return status;
+        }
+        DirOpened::Failed(e) => {
+            return e;
+        }
+    }
+}
+
+// Sync the log without writing: 0, or an errno.
+pub fn sync[&f, &p](fs: &f Fs(""), path: &p [byte]) -> [fs_read(""), dir_write, file_write] int {
+    region r {
+        let none = alloc_slice[r](0, byte_of(0));
+        return append(fs, path, none, none, none, none, true);
+    }
+}
+
+fn account[&a](ab: &!a [int], status: int, written: int, synced: bool, now: int) -> [] int {
+    ab[6] = status;
+    if status != 0 {
+        ab[9] = ab[9] + 1;
+        return status;
+    }
+    ab[4] = ab[4] + 1;
+    ab[5] = ab[5] + written;
+    ab[7] = ab[7] + written;
+    if synced {
+        ab[7] = 0;
+        ab[8] = ab[8] + 1;
+        ab[3] = now;
+    }
+    return 0;
+}
+
+// Write what is staged as one batch (and sync it if `sync`). 0, or an errno.
+pub fn flush[&f, &p, &s, &a, &b](fs: &f Fs(""), path: &p [byte], st: &s store.Store, ab: &!a [int], buf: &!b [byte], sync: bool) -> [fs_read(""), dir_write, file_write] int {
+    let used = ab[2];
+    if used == 0 {
+        return 0;
+    }
+    ab[2] = 0;
+    region r {
+        let trailer = alloc_slice[r](32, byte_of(0));
+        let sum = crc.crc64_finish(crc.crc64_update(crc.crc64_start(), buf[0..used]));
+        put_u64(trailer, 0, used);
+        put_u64(trailer, 8, store.wall_of(st) + store.now_of(st));
+        put_u64(trailer, 16, kind_end());
+        put_u32(trailer, 24, sum.1);
+        put_u32(trailer, 28, sum.0);
+        let none = buf[0..0];
+        let status = append(fs, path, buf[0..used], none, none, trailer, sync);
+        return account(ab, status, used + 32, sync, store.now_of(st));
+    }
+}
+
+// Stage `n` bytes: write what is staged first if they would not fit. 0, or an errno.
+fn make_room[&f, &p, &s, &a, &b](fs: &f Fs(""), path: &p [byte], st: &s store.Store, ab: &!a [int], buf: &!b [byte], n: int) -> [fs_read(""), dir_write, file_write] int {
+    if ab[2] + n > len(buf) {
+        return flush(fs, path, st, ab, buf, false);
+    }
+    return 0;
+}
+
+fn copy_in[&b, &c](buf: &!b [byte], at: int, bytes: &c [byte]) -> [] int {
+    var i = 0;
+    while i < len(bytes) {
+        buf[at + i] = bytes[i];
+        i = i + 1;
+    }
+    return at + len(bytes);
+}
+
+// The key of entry `e` as it now is. A record bigger than the buffer is written as a batch of its own.
+pub fn log_entry[&f, &p, &s, &a, &b](fs: &f Fs(""), path: &p [byte], st: &s store.Store, ab: &!a [int], buf: &!b [byte], e: int) -> [fs_read(""), dir_write, file_write] int {
+    let key = store.key_at(st, e);
+    let value = store.value(st, e);
+    var ends = 0;
+    if store.expiry_of(st, e) != 0 {
+        ends = store.wall_of(st) + store.expiry_of(st, e);
+    }
+    let need = 32 + len(key) + len(value);
+    if need > len(buf) {
+        var status = flush(fs, path, st, ab, buf, false);
+        if status != 0 {
+            return status;
+        }
+        region r {
+            let head = alloc_slice[r](32, byte_of(0));
+            let trailer = alloc_slice[r](32, byte_of(0));
+            put_head(head, 0, len(key), len(value), store.kind_of(st, e), ends);
+            var state = crc.crc64_update(crc.crc64_start(), head);
+            state = crc.crc64_update(state, key);
+            state = crc.crc64_update(state, value);
+            let sum = crc.crc64_finish(state);
+            put_u64(trailer, 0, need);
+            put_u64(trailer, 8, store.wall_of(st) + store.now_of(st));
+            put_u64(trailer, 16, kind_end());
+            put_u32(trailer, 24, sum.1);
+            put_u32(trailer, 28, sum.0);
+            status = append(fs, path, head, key, value, trailer, false);
+            return account(ab, status, need + 32, false, store.now_of(st));
+        }
+    }
+    let status = make_room(fs, path, st, ab, buf, need);
+    if status != 0 {
+        return status;
+    }
+    var at = ab[2];
+    put_head(buf, at, len(key), len(value), store.kind_of(st, e), ends);
+    at = copy_in(buf, at + 32, key);
+    at = copy_in(buf, at, value);
+    ab[2] = at;
+    return 0;
+}
+
+// A record with no value: the key is gone (`kind_gone`), or only its expiry changed (`kind_expiry`, to `ends`), or every key is gone (`kind_flush`, with no key).
+pub fn log_bare[&f, &p, &s, &a, &b, &k](fs: &f Fs(""), path: &p [byte], st: &s store.Store, ab: &!a [int], buf: &!b [byte], kind: int, key: &k [byte], ends: int) -> [fs_read(""), dir_write, file_write] int {
+    let need = 32 + len(key);
+    if need > len(buf) {
+        return 0;
+    }
+    let status = make_room(fs, path, st, ab, buf, need);
+    if status != 0 {
+        return status;
+    }
+    var at = ab[2];
+    put_head(buf, at, len(key), 0, kind, ends);
+    at = copy_in(buf, at + 32, key);
+    ab[2] = at;
+    return 0;
+}

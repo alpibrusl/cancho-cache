@@ -360,7 +360,22 @@ fn info_text[&v, &t, &b, &s, &w](view: &v [byte], table: &t [int], sc: &!b [byte
             current = (store.wall_of(st) + store.now_of(st) - world[stats.persist_at() + 6]) / 1000;
         }
         o = kv(sc, o, "rdb_current_bgsave_time_sec", current);
-        o = reply.put(sc, o, "aof_enabled:0\r\naof_rewrite_in_progress:0\r\naof_last_write_status:ok\r\n\r\n");
+        o = kv(sc, o, "aof_enabled", world[stats.aof_at()]);
+        o = reply.put(sc, o, "aof_rewrite_in_progress:0\r\n");
+        if world[stats.aof_at() + 6] == 0 {
+            o = reply.put(sc, o, "aof_last_write_status:ok\r\n");
+        } else {
+            o = reply.put(sc, o, "aof_last_write_status:err\r\n");
+        }
+        if world[stats.aof_at()] != 0 {
+            o = kv(sc, o, "aof_current_size", world[stats.aof_at() + 5] + 32);
+            o = kv(sc, o, "aof_buffer_length", world[stats.aof_at() + 2]);
+            o = kv(sc, o, "aof_batches", world[stats.aof_at() + 4]);
+            o = kv(sc, o, "aof_fsyncs", world[stats.aof_at() + 8]);
+            o = kv(sc, o, "aof_write_errors", world[stats.aof_at() + 9]);
+            o = kv(sc, o, "aof_evictions_not_logged", world[stats.aof_at() + 10]);
+        }
+        o = reply.put(sc, o, "\r\n");
     }
     if wants(view, table, "STATS") {
         o = reply.put(sc, o, "# Stats\r\n");
@@ -514,7 +529,10 @@ fn setting_name(i: int) -> [] &static [byte] {
     if i == 12 {
         return "slowlog-max-len";
     }
-    return "latency-monitor-threshold";
+    if i == 13 {
+        return "latency-monitor-threshold";
+    }
+    return "appendfsync";
 }
 
 // 2^i, for i below 14: the mark a setting has been answered.
@@ -529,7 +547,7 @@ fn bit(i: int) -> [] int {
 }
 
 fn settings() -> [] int {
-    return 14;
+    return 15;
 }
 
 // `$<digits>\r\n<number>\r\n`: a number as a bulk string, which is how `CONFIG GET` answers one.
@@ -586,7 +604,13 @@ fn put_setting_value[&b, &s, &w](sc: &!b [byte], at: int, i: int, st: &s store.S
         return reply.put(sc, o, "\r\n");
     }
     if i == 3 {
+        if world[stats.aof_at()] != 0 {
+            return reply.put_bulk(sc, at, "yes");
+        }
         return reply.put_bulk(sc, at, "no");
+    }
+    if i == 14 {
+        return reply.put_bulk(sc, at, store.fsync_name(store.fsync_of(st)));
     }
     if i == 4 {
         return put_number_bulk(sc, at, 1);
@@ -694,6 +718,9 @@ fn config_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], 
         if idx == 4 {
             return set_failed(sc, at, name, "can't set immutable config");
         }
+        if idx == 3 {
+            return set_failed(sc, at, name, "appendonly is chosen at start (--appendonly=yes): turning the log on while the cache runs needs a rewrite first (docs/design.md section 38)");
+        }
         var j = 2;
         while j < i {
             if setting_index(reply.arg_of(view, table, j)) == idx {
@@ -727,6 +754,10 @@ fn config_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], 
                 if found == 0 - 2 {
                     return set_failed(sc, at, setting_name(idx), "this cache keeps 8 save points (docs/design.md section 37)");
                 }
+            }
+        } else if idx == 14 {
+            if store.fsync_named(value) < 0 {
+                return set_failed(sc, at, setting_name(idx), "argument(s) must be one of the following: always, everysec, no");
             }
         } else if idx == 13 {
             let (status, n) = reply.parse_int(value);
@@ -780,6 +811,8 @@ fn config_set[&v, &t, &b, &s](view: &v [byte], table: &t [int], sc: &!b [byte], 
                     k = k + 1;
                 }
             }
+        } else if idx == 14 {
+            store.set_fsync(st, store.fsync_named(value));
         } else if idx == 13 {
             let (status, n) = reply.parse_int(value);
             store.set_lat_threshold(st, n);

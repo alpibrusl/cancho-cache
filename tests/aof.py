@@ -317,37 +317,40 @@ try:
                 c.ask("GET", k)
             else:
                 c.ask("FLUSHDB")
-        # a last stretch of fresh, big keys that nothing writes again: what it evicts is gone for good, so the log must say so or the replay keeps it
+        def compare(when):
+            batches, rest = parse_log(log(dd))
+            check("%s, %s: the log ends on a batch" % (label, when), rest, 0)
+            model = replay(batches)
+            have = c.ask("KEYS", "*")
+            check("%s, %s: the same keys" % (label, when), sorted(model.keys()), sorted(have))
+            bad = 0
+            for key in have:
+                kind, value, ends = model.get(key, (None, None, None))
+                if c.ask("TYPE", key) != ("+", "string" if kind == 0 else "hash"):
+                    bad += 1
+                    continue
+                if kind == 0 and c.ask("GET", key) != value:
+                    bad += 1
+                elif kind == 1:
+                    pairs = c.ask("HGETALL", key)
+                    got = dict(zip(pairs[0::2], pairs[1::2]))
+                    # the hash's own layout is the store's; compare the field set and values by looking for each in the bytes
+                    for f, val in got.items():
+                        if f not in value or val not in value:
+                            bad += 1
+                have_ends = c.ask("PEXPIRETIME", key)
+                if (ends == 0) != (have_ends == -1) or (ends and abs(have_ends - ends) > 2):
+                    bad += 1
+            check("%s, %s: every key's type, value and deadline" % (label, when), bad, 0)
+            return batches
+
+        # twice: after the random stretch, where what the log said about evictions is what the keys that were not written again show (a record about a key that was evicted and
+        # is there again is wrong if the log keeps saying it), and after a last stretch of fresh, big keys that nothing writes again, which evict for good (a record that is missing
+        # shows there)
+        compare("after the random stretch")
         for i in range(40):
             c.ask("SET", "z%d" % i, "q" * 50000)
-        batches, rest = parse_log(log(dd))
-        check("%s: the log ends on a batch" % label, rest, 0)
-        model = replay(batches)
-        have = c.ask("KEYS", "*")
-        check("%s: the same keys" % label, sorted(model.keys()), sorted(have))
-        bad = 0
-        for key in have:
-            kind, value, ends = model.get(key, (None, None, None))
-            if c.ask("TYPE", key) != ("+", "string" if kind == 0 else "hash"):
-                bad += 1
-                continue
-            if kind == 0 and c.ask("GET", key) != value:
-                bad += 1
-            elif kind == 1:
-                pairs = c.ask("HGETALL", key)
-                got = dict(zip(pairs[0::2], pairs[1::2]))
-                want = {}
-                n = struct.unpack_from("<I", value, 0)[0]
-                at = 8
-                # the hash's own layout is the store's; compare the field set and values by looking for each in the bytes
-                for f, val in got.items():
-                    if f not in value or val not in value:
-                        bad += 1
-            want_ends = ends
-            have_ends = c.ask("PEXPIRETIME", key)
-            if (want_ends == 0) != (have_ends == -1) or (want_ends and abs(have_ends - want_ends) > 2):
-                bad += 1
-        check("%s: every key's type, value and deadline" % label, bad, 0)
+        batches = compare("after the big keys")
         if label == "under eviction":
             info = c.ask("INFO", "stats").decode()
             ev = [l for l in info.split("\r\n") if l.startswith("evicted_keys:")]
